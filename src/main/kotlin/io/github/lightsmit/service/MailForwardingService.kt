@@ -5,15 +5,20 @@ import io.github.lightsmit.mail.EmailSummary
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.storage.MailStateRepository
 import io.github.lightsmit.telegram.TelegramClient
-import org.slf4j.LoggerFactory
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import jakarta.mail.MessagingException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.Duration
+import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
+import org.eclipse.angus.mail.imap.IMAPFolder
 
 class MailForwardingService(
-    private val accounts: List<MailAccountConfig>,
     private val imapClient: ImapMailClient,
     private val telegramClient: TelegramClient,
     private val telegramChatId: Long,
@@ -23,22 +28,48 @@ class MailForwardingService(
     private val logger =
         LoggerFactory.getLogger(MailForwardingService::class.java)
 
+    private val forwardingMutex = Mutex()
+
+    private val accountMutexes =
+        ConcurrentHashMap<String, Mutex>()
+
     private val dateFormatter = DateTimeFormatter
         .ofPattern("dd.MM.yyyy HH:mm:ss")
         .withZone(ZoneId.systemDefault())
 
-    suspend fun pollOnce() {
-        for (account in accounts) {
-            try {
-                processAccountWithRetry(account)
-            } catch (exception: Exception) {
-                logger.error(
-                    "Failed to process mailbox {} ({})",
-                    account.name,
-                    account.username,
-                    exception,
-                )
+    suspend fun processAccount(
+        account: MailAccountConfig,
+    ) {
+        withAccountLock(account) {
+            processAccountWithRetry(account)
+        }
+    }
+
+    suspend fun processIdleAccount(
+        account: MailAccountConfig,
+        inbox: IMAPFolder,
+    ) {
+        withAccountLock(account) {
+            processAccountInternal(
+                account = account,
+                idleInbox = inbox,
+            )
+        }
+    }
+
+    private suspend fun withAccountLock(
+        account: MailAccountConfig,
+        block: suspend () -> Unit,
+    ) {
+        val accountKey = buildAccountKey(account)
+
+        val accountMutex = accountMutexes
+            .computeIfAbsent(accountKey) {
+                Mutex()
             }
+
+        accountMutex.withLock {
+            block()
         }
     }
 
@@ -49,7 +80,10 @@ class MailForwardingService(
 
         for (attempt in 1..maximumAttempts) {
             try {
-                processAccount(account)
+                processAccountInternal(
+                    account = account,
+                    idleInbox = null,
+                )
                 return
             } catch (exception: MessagingException) {
                 if (attempt == maximumAttempts) {
@@ -74,22 +108,37 @@ class MailForwardingService(
         }
     }
 
-    private suspend fun processAccount(
+    private suspend fun processAccountInternal(
         account: MailAccountConfig,
+        idleInbox: IMAPFolder?,
     ) {
         val accountKey = buildAccountKey(account)
         val state = stateRepository.find(accountKey)
 
         if (state == null) {
-            initializeAccount(account, accountKey)
+            initializeAccount(
+                account = account,
+                accountKey = accountKey,
+                idleInbox = idleInbox,
+            )
+
             return
         }
 
-        val batch = imapClient.fetchAfterUid(
-            account = account,
-            afterUid = state.lastUid,
-            limit = 50,
-        )
+        val batch = if (idleInbox != null) {
+            imapClient.fetchAfterUid(
+                account = account,
+                inbox = idleInbox,
+                afterUid = state.lastUid,
+                limit = 50,
+            )
+        } else {
+            imapClient.fetchAfterUid(
+                account = account,
+                afterUid = state.lastUid,
+                limit = 50,
+            )
+        }
 
         if (batch.uidValidity != state.uidValidity) {
             stateRepository.save(
@@ -117,49 +166,53 @@ class MailForwardingService(
         }
 
         for (message in batch.messages) {
-            try {
-                telegramClient.sendLongMessage(
-                    chatId = telegramChatId,
-                    text = formatMessage(
+            forwardingMutex.withLock {
+                try {
+                    logDeliveryTiming(
                         account = account,
                         message = message,
-                    ),
-                )
-
-                for (attachment in message.attachments) {
-                    telegramClient.sendDocument(
-                        chatId = telegramChatId,
-                        attachment = attachment,
                     )
-                }
-
-                if (message.skippedAttachments.isNotEmpty()) {
                     telegramClient.sendLongMessage(
                         chatId = telegramChatId,
-                        text = formatSkippedAttachments(
+                        text = formatMessage(
                             account = account,
                             message = message,
                         ),
                     )
+
+                    for (attachment in message.attachments) {
+                        telegramClient.sendDocument(
+                            chatId = telegramChatId,
+                            attachment = attachment,
+                        )
+                    }
+
+                    if (message.skippedAttachments.isNotEmpty()) {
+                        telegramClient.sendLongMessage(
+                            chatId = telegramChatId,
+                            text = formatSkippedAttachments(
+                                account = account,
+                                message = message,
+                            ),
+                        )
+                    }
+
+                    stateRepository.save(
+                        accountKey = accountKey,
+                        uidValidity = batch.uidValidity,
+                        lastUid = message.uid,
+                    )
+
+                    logger.info(
+                        "Forwarded email UID {} from mailbox {} " +
+                                "with {} attachment(s)",
+                        message.uid,
+                        account.username,
+                        message.attachments.size,
+                    )
+                } finally {
+                    deleteTemporaryAttachments(message)
                 }
-
-                stateRepository.save(
-                    accountKey = accountKey,
-                    uidValidity = batch.uidValidity,
-                    lastUid = message.uid,
-                )
-
-                logger.git status
-                        git check-ignore -v .env
-                git check-ignore -v data/attachmentsinfo(
-                    "Forwarded email UID {} from mailbox {} " +
-                            "with {} attachment(s)",
-                    message.uid,
-                    account.username,
-                    message.attachments.size,
-                )
-            } finally {
-                deleteTemporaryAttachments(message)
             }
         }
     }
@@ -167,8 +220,13 @@ class MailForwardingService(
     private suspend fun initializeAccount(
         account: MailAccountConfig,
         accountKey: String,
+        idleInbox: IMAPFolder?,
     ) {
-        val cursor = imapClient.fetchCursor(account)
+        val cursor = if (idleInbox != null) {
+            imapClient.fetchCursor(idleInbox)
+        } else {
+            imapClient.fetchCursor(account)
+        }
 
         stateRepository.save(
             accountKey = accountKey,
@@ -282,6 +340,47 @@ class MailForwardingService(
                 )
             }
         }
+    }
+
+    private fun logDeliveryTiming(
+        account: MailAccountConfig,
+        message: EmailSummary,
+    ) {
+        val detectedAt = Instant.now()
+
+        val mailTransportSeconds = when {
+            message.sentAt == null ||
+                    message.receivedAt == null -> null
+
+            else -> Duration
+                .between(
+                    message.sentAt,
+                    message.receivedAt,
+                )
+                .seconds
+                .coerceAtLeast(0)
+        }
+
+        val botDetectionSeconds = message.receivedAt
+            ?.let { receivedAt ->
+                Duration
+                    .between(
+                        receivedAt,
+                        detectedAt,
+                    )
+                    .seconds
+                    .coerceAtLeast(0)
+            }
+
+        logger.info(
+            "Email UID {} from mailbox {}: " +
+                    "mail transport delay={} s, " +
+                    "bot detection delay={} s",
+            message.uid,
+            account.username,
+            mailTransportSeconds?.toString() ?: "unknown",
+            botDetectionSeconds?.toString() ?: "unknown",
+        )
     }
 
     private fun buildAccountKey(

@@ -7,6 +7,7 @@ data class EmailSummary(
     val from: String,
     val subject: String,
     val sentAt: Instant?,
+    val receivedAt: Instant?,
     val body: String?,
     val attachments: List<EmailAttachment>,
     val skippedAttachments: List<SkippedAttachment>,

@@ -40,6 +40,7 @@ class MailStateRepository(
         }
     }
 
+    @Synchronized
     fun find(accountKey: String): MailAccountState? {
         val sql =
             """
@@ -66,6 +67,7 @@ class MailStateRepository(
         }
     }
 
+    @Synchronized
     fun save(
         accountKey: String,
         uidValidity: Long,
