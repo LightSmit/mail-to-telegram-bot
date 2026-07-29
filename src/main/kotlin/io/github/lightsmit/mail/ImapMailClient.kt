@@ -12,14 +12,109 @@ import java.util.Properties
 
 class ImapMailClient {
 
-    suspend fun fetchLatest(
+    suspend fun fetchCursor(
         account: MailAccountConfig,
+    ): MailboxCursor = withContext(Dispatchers.IO) {
+        withInbox(account) { inbox, uidFolder ->
+            MailboxCursor(
+                uidValidity = uidFolder.uidValidity,
+                latestUid = findLatestUid(inbox, uidFolder),
+            )
+        }
+    }
+
+    suspend fun fetchAfterUid(
+        account: MailAccountConfig,
+        afterUid: Long,
         limit: Int,
-    ): List<EmailSummary> = withContext(Dispatchers.IO) {
+    ): MailboxBatch = withContext(Dispatchers.IO) {
+        require(afterUid >= 0) {
+            "UID must not be negative"
+        }
+
         require(limit > 0) {
             "Message limit must be greater than zero"
         }
 
+        withInbox(account) { inbox, uidFolder ->
+            val uidValidity = uidFolder.uidValidity
+            val latestUid = findLatestUid(inbox, uidFolder)
+
+            if (latestUid == 0L || latestUid <= afterUid) {
+                return@withInbox MailboxBatch(
+                    uidValidity = uidValidity,
+                    latestUid = latestUid,
+                    messages = emptyList(),
+                )
+            }
+
+            val messages = uidFolder.getMessagesByUID(
+                afterUid + 1,
+                UIDFolder.LASTUID,
+            )
+
+            if (messages.isEmpty()) {
+                return@withInbox MailboxBatch(
+                    uidValidity = uidValidity,
+                    latestUid = latestUid,
+                    messages = emptyList(),
+                )
+            }
+
+            val fetchProfile = FetchProfile().apply {
+                add(FetchProfile.Item.ENVELOPE)
+                add(UIDFolder.FetchProfileItem.UID)
+            }
+
+            inbox.fetch(messages, fetchProfile)
+
+            val summaries = messages
+                .sortedBy(uidFolder::getUID)
+                .take(limit)
+                .map { message ->
+                    EmailSummary(
+                        uid = uidFolder.getUID(message),
+
+                        from = message.from
+                            ?.joinToString(", ") { address ->
+                                (address as? InternetAddress)
+                                    ?.toUnicodeString()
+                                    ?: address.toString()
+                            }
+                            ?: "(sender unknown)",
+
+                        subject = message.subject
+                            ?.takeIf(String::isNotBlank)
+                            ?: "(no subject)",
+
+                        sentAt = message.sentDate?.toInstant(),
+                    )
+                }
+
+            MailboxBatch(
+                uidValidity = uidValidity,
+                latestUid = latestUid,
+                messages = summaries,
+            )
+        }
+    }
+
+    private fun findLatestUid(
+        inbox: Folder,
+        uidFolder: UIDFolder,
+    ): Long {
+        if (inbox.messageCount == 0) {
+            return 0
+        }
+
+        val lastMessage = inbox.getMessage(inbox.messageCount)
+        return uidFolder.getUID(lastMessage)
+    }
+
+    private fun <T> withInbox(
+        account: MailAccountConfig,
+        block: (Folder, UIDFolder) -> T,
+    ): T {
         val properties = Properties().apply {
             setProperty("mail.store.protocol", "imaps")
             setProperty("mail.imaps.host", account.host)
@@ -48,52 +143,12 @@ class ImapMailClient {
             try {
                 inbox.open(Folder.READ_ONLY)
 
-                val messageCount = inbox.messageCount
+                val uidFolder = inbox as? UIDFolder
+                    ?: error(
+                        "Mailbox ${account.name} does not support IMAP UID",
+                    )
 
-                if (messageCount == 0) {
-                    return@withContext emptyList()
-                }
-
-                val firstMessageNumber = maxOf(
-                    1,
-                    messageCount - limit + 1,
-                )
-
-                val messages = inbox.getMessages(
-                    firstMessageNumber,
-                    messageCount,
-                )
-
-                val fetchProfile = FetchProfile().apply {
-                    add(FetchProfile.Item.ENVELOPE)
-                    add(UIDFolder.FetchProfileItem.UID)
-                }
-
-                inbox.fetch(messages, fetchProfile)
-
-                val uidFolder = inbox as UIDFolder
-
-                messages
-                    .reversed()
-                    .map { message ->
-                        EmailSummary(
-                            uid = uidFolder.getUID(message),
-
-                            from = message.from
-                                ?.joinToString(", ") { address ->
-                                    (address as? InternetAddress)
-                                        ?.toUnicodeString()
-                                        ?: address.toString()
-                                }
-                                ?: "(sender unknown)",
-
-                            subject = message.subject
-                                ?.takeIf { it.isNotBlank() }
-                                ?: "(no subject)",
-
-                            sentAt = message.sentDate?.toInstant(),
-                        )
-                    }
+                return block(inbox, uidFolder)
             } finally {
                 if (inbox.isOpen) {
                     inbox.close(false)

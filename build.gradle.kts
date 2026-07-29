@@ -18,8 +18,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     implementation("ch.qos.logback:logback-classic:1.5.34")
-
     implementation("org.eclipse.angus:jakarta.mail:2.0.4")
+    implementation("org.xerial:sqlite-jdbc:3.53.1.0")
 
     testImplementation(kotlin("test"))
 }
