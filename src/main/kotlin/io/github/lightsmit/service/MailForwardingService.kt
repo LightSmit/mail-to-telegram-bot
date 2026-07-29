@@ -8,6 +8,9 @@ import io.github.lightsmit.telegram.TelegramClient
 import org.slf4j.LoggerFactory
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import jakarta.mail.MessagingException
+import kotlinx.coroutines.delay
+import java.nio.file.Files
 
 class MailForwardingService(
     private val accounts: List<MailAccountConfig>,
@@ -27,7 +30,7 @@ class MailForwardingService(
     suspend fun pollOnce() {
         for (account in accounts) {
             try {
-                processAccount(account)
+                processAccountWithRetry(account)
             } catch (exception: Exception) {
                 logger.error(
                     "Failed to process mailbox {} ({})",
@@ -35,6 +38,38 @@ class MailForwardingService(
                     account.username,
                     exception,
                 )
+            }
+        }
+    }
+
+    private suspend fun processAccountWithRetry(
+        account: MailAccountConfig,
+    ) {
+        val maximumAttempts = 3
+
+        for (attempt in 1..maximumAttempts) {
+            try {
+                processAccount(account)
+                return
+            } catch (exception: MessagingException) {
+                if (attempt == maximumAttempts) {
+                    throw exception
+                }
+
+                val retryDelayMillis =
+                    attempt * 2_000L
+
+                logger.warn(
+                    "IMAP operation failed for {}. " +
+                            "Retry {}/{} in {} ms",
+                    account.username,
+                    attempt + 1,
+                    maximumAttempts,
+                    retryDelayMillis,
+                    exception,
+                )
+
+                delay(retryDelayMillis)
             }
         }
     }
@@ -82,22 +117,50 @@ class MailForwardingService(
         }
 
         for (message in batch.messages) {
-            telegramClient.sendLongMessage(
-                chatId = telegramChatId,
-                text = formatMessage(account, message),
-            )
+            try {
+                telegramClient.sendLongMessage(
+                    chatId = telegramChatId,
+                    text = formatMessage(
+                        account = account,
+                        message = message,
+                    ),
+                )
 
-            stateRepository.save(
-                accountKey = accountKey,
-                uidValidity = batch.uidValidity,
-                lastUid = message.uid,
-            )
+                for (attachment in message.attachments) {
+                    telegramClient.sendDocument(
+                        chatId = telegramChatId,
+                        attachment = attachment,
+                    )
+                }
 
-            logger.info(
-                "Forwarded email UID {} from mailbox {}",
-                message.uid,
-                account.username,
-            )
+                if (message.skippedAttachments.isNotEmpty()) {
+                    telegramClient.sendLongMessage(
+                        chatId = telegramChatId,
+                        text = formatSkippedAttachments(
+                            account = account,
+                            message = message,
+                        ),
+                    )
+                }
+
+                stateRepository.save(
+                    accountKey = accountKey,
+                    uidValidity = batch.uidValidity,
+                    lastUid = message.uid,
+                )
+
+                logger.git status
+                        git check-ignore -v .env
+                git check-ignore -v data/attachmentsinfo(
+                    "Forwarded email UID {} from mailbox {} " +
+                            "with {} attachment(s)",
+                    message.uid,
+                    account.username,
+                    message.attachments.size,
+                )
+            } finally {
+                deleteTemporaryAttachments(message)
+            }
         }
     }
 
@@ -154,6 +217,70 @@ class MailForwardingService(
             appendLine()
             appendLine("Текст:")
             append(body)
+
+            if (message.attachments.isNotEmpty()) {
+                appendLine()
+                appendLine()
+                append(
+                    "Вложения: ${message.attachments.size}",
+                )
+            }
+
+            if (message.skippedAttachments.isNotEmpty()) {
+                appendLine()
+                appendLine()
+                append(
+                    "Пропущено вложений: " +
+                            message.skippedAttachments.size,
+                )
+            }
+        }
+    }
+
+    private fun formatSkippedAttachments(
+        account: MailAccountConfig,
+        message: EmailSummary,
+    ): String {
+        return buildString {
+            appendLine("⚠️ Некоторые вложения не были отправлены")
+            appendLine()
+            appendLine("Ящик: ${account.name}")
+            appendLine("Тема: ${message.subject}")
+            appendLine()
+
+            message.skippedAttachments
+                .forEachIndexed { index, attachment ->
+                    append(
+                        "${index + 1}. " +
+                                "${attachment.fileName}: " +
+                                attachment.reason,
+                    )
+
+                    if (
+                        index <
+                        message.skippedAttachments.lastIndex
+                    ) {
+                        appendLine()
+                    }
+                }
+        }
+    }
+
+    private fun deleteTemporaryAttachments(
+        message: EmailSummary,
+    ) {
+        message.attachments.forEach { attachment ->
+            try {
+                Files.deleteIfExists(
+                    attachment.tempFile,
+                )
+            } catch (exception: Exception) {
+                logger.warn(
+                    "Failed to delete temporary attachment {}",
+                    attachment.tempFile,
+                    exception,
+                )
+            }
         }
     }
 

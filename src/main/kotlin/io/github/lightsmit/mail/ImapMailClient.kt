@@ -9,13 +9,12 @@ import jakarta.mail.internet.InternetAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Properties
-import org.slf4j.LoggerFactory
+import java.nio.file.Path
 
-class ImapMailClient {
-
-    private val logger =
-        LoggerFactory.getLogger(ImapMailClient::class.java)
-
+class ImapMailClient(
+    private val attachmentTempDirectory: Path,
+    private val maxAttachmentSizeBytes: Long,
+) {
     suspend fun fetchCursor(
         account: MailAccountConfig,
     ): MailboxCursor = withContext(Dispatchers.IO) {
@@ -79,18 +78,11 @@ class ImapMailClient {
                 .map { message ->
                     val uid = uidFolder.getUID(message)
 
-                    val body = try {
-                        EmailBodyExtractor.extract(message)
-                    } catch (exception: Exception) {
-                        logger.warn(
-                            "Failed to extract body of email UID {} from {}",
-                            uid,
-                            account.username,
-                            exception,
-                        )
-
-                        null
-                    }
+                    val content = EmailContentExtractor.extract(
+                        part = message,
+                        tempDirectory = attachmentTempDirectory,
+                        maxAttachmentSizeBytes = maxAttachmentSizeBytes,
+                    )
 
                     EmailSummary(
                         uid = uid,
@@ -109,7 +101,9 @@ class ImapMailClient {
 
                         sentAt = message.sentDate?.toInstant(),
 
-                        body = body,
+                        body = content.body,
+                        attachments = content.attachments,
+                        skippedAttachments = content.skippedAttachments,
                     )
                 }
 

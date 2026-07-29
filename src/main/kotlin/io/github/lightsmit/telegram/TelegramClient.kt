@@ -14,6 +14,16 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import io.github.lightsmit.mail.EmailAttachment
+import io.ktor.client.request.forms.InputProvider
+import io.ktor.client.request.forms.MultiPartFormDataContent
+import io.ktor.client.request.forms.formData
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
+import io.ktor.utils.io.streams.asInput
+import kotlinx.io.buffered
 
 class TelegramClient(
     token: String,
@@ -88,6 +98,62 @@ class TelegramClient(
                 text = part,
             )
         }
+    }
+
+    suspend fun sendDocument(
+        chatId: Long,
+        attachment: EmailAttachment,
+    ) {
+        val safeFileName = attachment.fileName
+            .replace('\\', '_')
+            .replace('"', '_')
+            .replace('\r', '_')
+            .replace('\n', '_')
+
+        val response = httpClient.post(
+            "$baseUrl/sendDocument",
+        ) {
+            setBody(
+                MultiPartFormDataContent(
+                    formData {
+                        append(
+                            "chat_id",
+                            chatId.toString(),
+                        )
+
+                        append(
+                            key = "document",
+
+                            value = InputProvider(
+                                size = attachment.sizeBytes,
+                            ) {
+                                attachment.tempFile
+                                    .toFile()
+                                    .inputStream()
+                                    .asInput()
+                                    .buffered()
+                            },
+
+                            headers = Headers.build {
+                                append(
+                                    HttpHeaders.ContentType,
+                                    attachment.contentType,
+                                )
+
+                                append(
+                                    HttpHeaders.ContentDisposition,
+                                    "filename=\"$safeFileName\"",
+                                )
+                            },
+                        )
+                    },
+                ),
+            )
+        }
+
+        parseSuccessfulResponse(
+            response.bodyAsText(),
+        )
     }
 
     private fun splitText(

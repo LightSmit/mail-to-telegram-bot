@@ -37,13 +37,36 @@ fun main() = runBlocking {
             ?: "data/mail-bot.db",
     )
 
+    val attachmentTempDirectory = Path.of(
+        Environment.get("ATTACHMENT_TEMP_DIR")
+            ?: "data/attachments",
+    )
+
+    val maxAttachmentSizeMb = Environment
+        .get("MAX_ATTACHMENT_SIZE_MB")
+        ?.toLongOrNull()
+        ?: 45L
+
+    require(maxAttachmentSizeMb in 1L..45L) {
+        "MAX_ATTACHMENT_SIZE_MB must be between 1 and 45"
+    }
+
+    val maxAttachmentSizeBytes =
+        maxAttachmentSizeMb * 1024L * 1024L
+
     val accounts = MailAccountConfigLoader.load()
     val telegramClient = TelegramClient(telegramToken)
 
     try {
         val forwardingService = MailForwardingService(
             accounts = accounts,
-            imapClient = ImapMailClient(),
+            imapClient = ImapMailClient(
+                attachmentTempDirectory =
+                    attachmentTempDirectory,
+
+                maxAttachmentSizeBytes =
+                    maxAttachmentSizeBytes,
+            ),
             telegramClient = telegramClient,
             telegramChatId = telegramChatId,
             stateRepository = MailStateRepository(databasePath),
@@ -52,6 +75,10 @@ fun main() = runBlocking {
         println("Configured mailboxes: ${accounts.size}")
         println("Polling interval: $pollIntervalSeconds seconds")
         println("Waiting for new emails...")
+        println(
+            "Maximum attachment size: " +
+                    "$maxAttachmentSizeMb MB",
+        )
 
         while (currentCoroutineContext().isActive) {
             forwardingService.pollOnce()
