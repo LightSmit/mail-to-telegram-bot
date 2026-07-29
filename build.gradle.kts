@@ -19,6 +19,8 @@ dependencies {
 
     implementation("ch.qos.logback:logback-classic:1.5.34")
 
+    implementation("org.eclipse.angus:jakarta.mail:2.0.4")
+
     testImplementation(kotlin("test"))
 }
 
@@ -28,6 +30,12 @@ kotlin {
 
 application {
     mainClass.set("io.github.lightsmit.MainKt")
+
+    applicationDefaultJvmArgs = listOf(
+        "-Dfile.encoding=UTF-8",
+        "-Dstdout.encoding=UTF-8",
+        "-Dstderr.encoding=UTF-8",
+    )
 }
 
 tasks.test {

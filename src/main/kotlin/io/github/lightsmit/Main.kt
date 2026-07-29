@@ -1,36 +1,50 @@
 package io.github.lightsmit
 
-import io.github.lightsmit.config.Environment
-import io.github.lightsmit.telegram.TelegramClient
+import io.github.lightsmit.config.MailAccountConfigLoader
+import io.github.lightsmit.mail.ImapMailClient
 import kotlinx.coroutines.runBlocking
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 fun main() = runBlocking {
     println("Mail to Telegram Bot started")
 
-    val botToken = Environment.require("TELEGRAM_BOT_TOKEN")
+    val accounts = MailAccountConfigLoader.load()
+    val imapClient = ImapMailClient()
 
-    val configuredChatId = Environment
-        .get("TELEGRAM_CHAT_ID")
-        ?.toLongOrNull()
+    val dateFormatter = DateTimeFormatter
+        .ofPattern("dd.MM.yyyy HH:mm:ss")
+        .withZone(ZoneId.systemDefault())
 
-    val telegramClient = TelegramClient(botToken)
+    for (account in accounts) {
+        println()
+        println("Mailbox: ${account.name}")
+        println("Address: ${account.username}")
 
-    try {
-        val chatId = configuredChatId
-            ?: telegramClient.findLatestPrivateChatId()
-            ?: error(
-                "Telegram chat was not found. " +
-                        "Send /start to the bot and run the application again.",
-            )
-
-        telegramClient.sendMessage(
-            chatId = chatId,
-            text = "Mail to Telegram Bot успешно подключен",
+        val messages = imapClient.fetchLatest(
+            account = account,
+            limit = 5,
         )
 
-        println("Telegram connection is working")
-        println("TELEGRAM_CHAT_ID=$chatId")
-    } finally {
-        telegramClient.close()
+        if (messages.isEmpty()) {
+            println("The mailbox is empty")
+            continue
+        }
+
+        messages.forEachIndexed { index, message ->
+            val sentAt = message.sentAt
+                ?.let(dateFormatter::format)
+                ?: "(date unknown)"
+
+            println()
+            println("Message ${index + 1}")
+            println("UID: ${message.uid}")
+            println("From: ${message.from}")
+            println("Subject: ${message.subject}")
+            println("Date: $sentAt")
+        }
     }
+
+    println()
+    println("Mail connection is working")
 }
