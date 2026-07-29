@@ -82,7 +82,7 @@ class MailForwardingService(
         }
 
         for (message in batch.messages) {
-            telegramClient.sendMessage(
+            telegramClient.sendLongMessage(
                 chatId = telegramChatId,
                 text = formatMessage(account, message),
             )
@@ -139,6 +139,10 @@ class MailForwardingService(
             ?.let(dateFormatter::format)
             ?: "(дата неизвестна)"
 
+        val body = message.body
+            ?.takeIf(String::isNotBlank)
+            ?: "(текст письма отсутствует или не удалось распознать)"
+
         return buildString {
             appendLine("📨 Новое письмо")
             appendLine()
@@ -146,7 +150,10 @@ class MailForwardingService(
             appendLine("Адрес: ${account.username}")
             appendLine("От: ${message.from}")
             appendLine("Тема: ${message.subject}")
-            append("Дата: $sentAt")
+            appendLine("Дата: $sentAt")
+            appendLine()
+            appendLine("Текст:")
+            append(body)
         }
     }
 

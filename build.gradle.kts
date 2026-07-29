@@ -20,6 +20,7 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.5.34")
     implementation("org.eclipse.angus:jakarta.mail:2.0.4")
     implementation("org.xerial:sqlite-jdbc:3.53.1.0")
+    implementation("org.jsoup:jsoup:1.22.2")
 
     testImplementation(kotlin("test"))
 }

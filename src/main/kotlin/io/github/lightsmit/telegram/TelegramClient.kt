@@ -78,6 +78,94 @@ class TelegramClient(
         parseSuccessfulResponse(response.bodyAsText())
     }
 
+    suspend fun sendLongMessage(
+        chatId: Long,
+        text: String,
+    ) {
+        splitText(text).forEach { part ->
+            sendMessage(
+                chatId = chatId,
+                text = part,
+            )
+        }
+    }
+
+    private fun splitText(
+        text: String,
+        maxLength: Int = 3_500,
+    ): List<String> {
+        require(maxLength > 0) {
+            "Maximum message length must be greater than zero"
+        }
+
+        val normalizedText = text.trim()
+
+        if (normalizedText.isEmpty()) {
+            return emptyList()
+        }
+
+        if (normalizedText.length <= maxLength) {
+            return listOf(normalizedText)
+        }
+
+        val parts = mutableListOf<String>()
+        var startIndex = 0
+
+        while (startIndex < normalizedText.length) {
+            var endIndex = minOf(
+                startIndex + maxLength,
+                normalizedText.length,
+            )
+
+            if (endIndex < normalizedText.length) {
+                val newlineIndex = normalizedText.lastIndexOf(
+                    char = '\n',
+                    startIndex = endIndex - 1,
+                )
+
+                val spaceIndex = normalizedText.lastIndexOf(
+                    char = ' ',
+                    startIndex = endIndex - 1,
+                )
+
+                val preferredIndex = maxOf(
+                    newlineIndex,
+                    spaceIndex,
+                )
+
+                if (preferredIndex >= startIndex + maxLength / 2) {
+                    endIndex = preferredIndex
+                }
+
+                if (
+                    endIndex > startIndex &&
+                    normalizedText[endIndex - 1].isHighSurrogate()
+                ) {
+                    endIndex--
+                }
+            }
+
+            val part = normalizedText
+                .substring(startIndex, endIndex)
+                .trim()
+
+            if (part.isNotEmpty()) {
+                parts += part
+            }
+
+            startIndex = endIndex
+
+            while (
+                startIndex < normalizedText.length &&
+                normalizedText[startIndex].isWhitespace()
+            ) {
+                startIndex++
+            }
+        }
+
+        return parts
+    }
+
     private fun parseSuccessfulResponse(body: String): JsonObject {
         val root = json
             .parseToJsonElement(body)

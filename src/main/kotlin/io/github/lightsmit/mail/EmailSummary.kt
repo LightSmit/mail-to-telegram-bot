@@ -7,4 +7,5 @@ data class EmailSummary(
     val from: String,
     val subject: String,
     val sentAt: Instant?,
+    val body: String?,
 )

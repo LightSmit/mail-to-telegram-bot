@@ -9,8 +9,12 @@ import jakarta.mail.internet.InternetAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Properties
+import org.slf4j.LoggerFactory
 
 class ImapMailClient {
+
+    private val logger =
+        LoggerFactory.getLogger(ImapMailClient::class.java)
 
     suspend fun fetchCursor(
         account: MailAccountConfig,
@@ -63,6 +67,7 @@ class ImapMailClient {
 
             val fetchProfile = FetchProfile().apply {
                 add(FetchProfile.Item.ENVELOPE)
+                add(FetchProfile.Item.CONTENT_INFO)
                 add(UIDFolder.FetchProfileItem.UID)
             }
 
@@ -72,8 +77,23 @@ class ImapMailClient {
                 .sortedBy(uidFolder::getUID)
                 .take(limit)
                 .map { message ->
+                    val uid = uidFolder.getUID(message)
+
+                    val body = try {
+                        EmailBodyExtractor.extract(message)
+                    } catch (exception: Exception) {
+                        logger.warn(
+                            "Failed to extract body of email UID {} from {}",
+                            uid,
+                            account.username,
+                            exception,
+                        )
+
+                        null
+                    }
+
                     EmailSummary(
-                        uid = uidFolder.getUID(message),
+                        uid = uid,
 
                         from = message.from
                             ?.joinToString(", ") { address ->
@@ -88,6 +108,8 @@ class ImapMailClient {
                             ?: "(no subject)",
 
                         sentAt = message.sentDate?.toInstant(),
+
+                        body = body,
                     )
                 }
 
@@ -121,6 +143,7 @@ class ImapMailClient {
             setProperty("mail.imaps.port", account.port.toString())
             setProperty("mail.imaps.ssl.enable", "true")
             setProperty("mail.imaps.ssl.checkserveridentity", "true")
+            setProperty("mail.imaps.peek", "true")
 
             setProperty("mail.imaps.connectiontimeout", "10000")
             setProperty("mail.imaps.timeout", "10000")
