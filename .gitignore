@@ -1,0 +1,28 @@
+# Gradle
+.gradle/
+build/
+.kotlin/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+out/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+local.properties
+
+# Runtime data
+data/
+logs/
+*.log
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Operating systems
+.DS_Store
+Thumbs.db
