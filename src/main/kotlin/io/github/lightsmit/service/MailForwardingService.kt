@@ -69,7 +69,7 @@ class MailForwardingService(
         ConcurrentHashMap<String, List<Long>>()
 
     private val dateFormatter = DateTimeFormatter
-        .ofPattern("dd.MM.yyyy HH:mm:ss")
+        .ofPattern("dd.MM.yyyy, HH:mm")
         .withZone(ZoneId.systemDefault())
 
     suspend fun deliverOutboxNotification(
@@ -112,10 +112,10 @@ class MailForwardingService(
                 text = formatNotification(
                     account = account,
                     message = message,
-                    attachmentsKnown = true,
                 ),
                 buttons = summaryButtons(
                     account = account,
+                    message = message,
                     uidValidity = item.uidValidity,
                     uid = item.uid,
                 ),
@@ -163,29 +163,49 @@ class MailForwardingService(
             uid = uid,
         ) ?: return
 
+        val fullText = formatFullMessage(
+            account = account,
+            message = message,
+        )
+
+        val buttons = textViewButtons(
+            account = account,
+            message = message,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
+        val emailKey = interactiveEmailKey(
+            account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
         navigationMutex.withLock {
-            val newMessageIds = telegramControlClient
-                .sendLongMessageWithButtons(
+            if (
+                telegramControlClient.fitsSingleTextMessage(
+                    fullText,
+                )
+            ) {
+                telegramControlClient.editMessageWithButtons(
                     chatId = telegramChatId,
-                    text = formatFullMessage(
-                        account = account,
-                        message = message,
-                    ),
-                    buttons = textViewButtons(
-                        account = account,
-                        uidValidity = expectedUidValidity,
-                        uid = uid,
-                    ),
+                    messageId = sourceMessageId,
+                    text = fullText,
+                    buttons = buttons,
                 )
 
-            val emailKey = interactiveEmailKey(
-                account = account,
-                uidValidity = expectedUidValidity,
-                uid = uid,
-            )
+                textViewMessageIds.remove(emailKey)
+            } else {
+                val newMessageIds =
+                    telegramControlClient.sendLongMessageWithButtons(
+                        chatId = telegramChatId,
+                        text = fullText,
+                        buttons = buttons,
+                    )
 
-            textViewMessageIds[emailKey] = newMessageIds
-            deleteMessageSafely(sourceMessageId)
+                textViewMessageIds[emailKey] = newMessageIds
+                deleteMessageSafely(sourceMessageId)
+            }
         }
 
         logger.info(
@@ -207,37 +227,48 @@ class MailForwardingService(
             uid = uid,
         ) ?: return
 
+        val summaryText = formatNotification(
+            account = account,
+            message = message,
+        )
+
+        val buttons = summaryButtons(
+            account = account,
+            message = message,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
+        val emailKey = interactiveEmailKey(
+            account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
         navigationMutex.withLock {
-            telegramControlClient.sendMessageWithButtons(
-                chatId = telegramChatId,
-                text = formatNotification(
-                    account = account,
-                    message = message,
-                    attachmentsKnown = true,
-                ),
-                buttons = summaryButtons(
-                    account = account,
-                    uidValidity = expectedUidValidity,
-                    uid = uid,
-                ),
-            )
+            val longViewMessageIds =
+                textViewMessageIds.remove(emailKey)
 
-            val emailKey = interactiveEmailKey(
-                account = account,
-                uidValidity = expectedUidValidity,
-                uid = uid,
-            )
-
-            val messageIdsToDelete = buildSet {
-                add(sourceMessageId)
-                addAll(
-                    textViewMessageIds.remove(emailKey)
-                        .orEmpty(),
+            if (longViewMessageIds == null) {
+                telegramControlClient.editMessageWithButtons(
+                    chatId = telegramChatId,
+                    messageId = sourceMessageId,
+                    text = summaryText,
+                    buttons = buttons,
                 )
-            }
+            } else {
+                telegramControlClient.sendMessageWithButtons(
+                    chatId = telegramChatId,
+                    text = summaryText,
+                    buttons = buttons,
+                )
 
-            messageIdsToDelete.forEach { messageId ->
-                deleteMessageSafely(messageId)
+                buildSet {
+                    add(sourceMessageId)
+                    addAll(longViewMessageIds)
+                }.forEach { messageId ->
+                    deleteMessageSafely(messageId)
+                }
             }
         }
 
@@ -270,38 +301,91 @@ class MailForwardingService(
             return
         }
 
-        for (attachment in message.attachments) {
-            val startedAt = System.currentTimeMillis()
+        val attachmentTotal = message.attachments.size
 
-            telegramMediaClient.sendAttachment(
-                chatId = telegramChatId,
-                attachment = attachment,
-            )
+        val statusMessageId = if (attachmentTotal > 0) {
+            try {
+                telegramControlClient.sendMessage(
+                    chatId = telegramChatId,
+                    text = "⏳ Отправляю вложения: 0/$attachmentTotal",
+                )
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                logger.debug(
+                    "Failed to display attachment progress for email UID {}",
+                    uid,
+                )
+                null
+            }
+        } else {
+            null
+        }
+
+        try {
+            message.attachments.forEachIndexed { index, attachment ->
+                val startedAt = System.currentTimeMillis()
+
+                telegramMediaClient.sendAttachment(
+                    chatId = telegramChatId,
+                    attachment = attachment,
+                )
+
+                statusMessageId?.let { messageId ->
+                    editMessageSafely(
+                        messageId = messageId,
+                        text = "⏳ Отправляю вложения: " +
+                                "${index + 1}/$attachmentTotal",
+                    )
+                }
+
+                logger.info(
+                    "Sent attachment {} of email UID {} in {} ms",
+                    attachment.fileName,
+                    uid,
+                    System.currentTimeMillis() - startedAt,
+                )
+            }
+
+            if (message.skippedAttachments.isNotEmpty()) {
+                telegramControlClient.sendLongMessage(
+                    chatId = telegramChatId,
+                    text = formatSkippedAttachments(
+                        account = account,
+                        message = message,
+                    ),
+                )
+            }
+
+            statusMessageId?.let { messageId ->
+                editMessageSafely(
+                    messageId = messageId,
+                    text = "✅ Вложения отправлены: $attachmentTotal",
+                )
+
+                delay(1_500)
+                deleteMessageSafely(messageId)
+            }
 
             logger.info(
-                "Sent attachment {} of email UID {} in {} ms",
-                attachment.fileName,
+                "Displayed attachments for email UID {} from mailbox {}: {} file(s)",
                 uid,
-                System.currentTimeMillis() - startedAt,
+                account.username,
+                message.attachments.size,
             )
-        }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            statusMessageId?.let { messageId ->
+                editMessageSafely(
+                    messageId = messageId,
+                    text = "⚠️ Не удалось отправить вложения. " +
+                            "Повторите попытку.",
+                )
+            }
 
-        if (message.skippedAttachments.isNotEmpty()) {
-            telegramControlClient.sendLongMessage(
-                chatId = telegramChatId,
-                text = formatSkippedAttachments(
-                    account = account,
-                    message = message,
-                ),
-            )
+            throw exception
         }
-
-        logger.info(
-            "Displayed attachments for email UID {} from mailbox {}: {} file(s)",
-            uid,
-            account.username,
-            message.attachments.size,
-        )
     }
 
     private suspend fun loadEmailOrNotify(
@@ -517,130 +601,146 @@ class MailForwardingService(
 
     private fun summaryButtons(
         account: MailAccountConfig,
+        message: EmailSummary,
         uidValidity: Long,
         uid: Long,
     ): List<TelegramInlineButton> {
-        return listOf(
-            TelegramInlineButton(
-                text = "Текст",
-                callbackData = MailViewCallbackCodec.encode(
-                    action = MailViewAction.TEXT,
-                    account = account,
-                    uidValidity = uidValidity,
-                    uid = uid,
+        return buildList {
+            add(
+                TelegramInlineButton(
+                    text = "📄 Текст",
+                    callbackData = MailViewCallbackCodec.encode(
+                        action = MailViewAction.TEXT,
+                        account = account,
+                        uidValidity = uidValidity,
+                        uid = uid,
+                    ),
                 ),
-            ),
-            TelegramInlineButton(
-                text = "Вложения",
-                callbackData = MailViewCallbackCodec.encode(
-                    action = MailViewAction.ATTACHMENTS,
-                    account = account,
-                    uidValidity = uidValidity,
-                    uid = uid,
-                ),
-            ),
-        )
+            )
+
+            val attachmentCount = attachmentCount(message)
+
+            if (attachmentCount > 0) {
+                add(
+                    TelegramInlineButton(
+                        text = "📎 Вложения · $attachmentCount",
+                        callbackData = MailViewCallbackCodec.encode(
+                            action = MailViewAction.ATTACHMENTS,
+                            account = account,
+                            uidValidity = uidValidity,
+                            uid = uid,
+                        ),
+                    ),
+                )
+            }
+        }
     }
 
     private fun textViewButtons(
         account: MailAccountConfig,
+        message: EmailSummary,
         uidValidity: Long,
         uid: Long,
     ): List<TelegramInlineButton> {
-        return listOf(
-            TelegramInlineButton(
-                text = "назад",
-                callbackData = MailViewCallbackCodec.encode(
-                    action = MailViewAction.BACK,
-                    account = account,
-                    uidValidity = uidValidity,
-                    uid = uid,
+        return buildList {
+            add(
+                TelegramInlineButton(
+                    text = "← Назад",
+                    callbackData = MailViewCallbackCodec.encode(
+                        action = MailViewAction.BACK,
+                        account = account,
+                        uidValidity = uidValidity,
+                        uid = uid,
+                    ),
                 ),
-            ),
-            TelegramInlineButton(
-                text = "Вложения",
-                callbackData = MailViewCallbackCodec.encode(
-                    action = MailViewAction.ATTACHMENTS,
-                    account = account,
-                    uidValidity = uidValidity,
-                    uid = uid,
-                ),
-            ),
-        )
+            )
+
+            val attachmentCount = attachmentCount(message)
+
+            if (attachmentCount > 0) {
+                add(
+                    TelegramInlineButton(
+                        text = "📎 Вложения · $attachmentCount",
+                        callbackData = MailViewCallbackCodec.encode(
+                            action = MailViewAction.ATTACHMENTS,
+                            account = account,
+                            uidValidity = uidValidity,
+                            uid = uid,
+                        ),
+                    ),
+                )
+            }
+        }
     }
 
     private fun formatNotification(
         account: MailAccountConfig,
         message: EmailSummary,
-        attachmentsKnown: Boolean,
     ): String {
+        val messageDate = formatMessageDate(message)
+        val attachmentSummary =
+            formatAttachmentCount(attachmentCount(message))
+
         return buildString {
             appendLine("📨 Новое письмо")
             appendLine()
-            appendLine("Кому: ${account.name} (${account.username})")
-            appendLine("От: ${message.from}")
-            appendLine("Тема: ${message.subject}")
-            appendAttachmentOverview(
-                message = message,
-                attachmentsKnown = attachmentsKnown,
-            )
-        }.trimEnd()
+            appendLine("📬 Ящик: ${account.name}")
+            appendLine("📧 Кому: ${account.username}")
+            appendLine("👤 От: ${message.from}")
+            appendLine("📝 Тема: ${message.subject}")
+            appendLine("🕒 Дата: $messageDate")
+            append("📎 Вложения: $attachmentSummary")
+        }
     }
 
     private fun formatFullMessage(
         account: MailAccountConfig,
         message: EmailSummary,
     ): String {
-        val sentAt = message.sentAt
-            ?.let(dateFormatter::format)
-            ?: "(дата неизвестна)"
+        val messageDate = formatMessageDate(message)
         val body = message.body
             ?.takeIf { text -> text.isNotBlank() }
             ?: "(текст письма отсутствует или не удалось распознать)"
 
         return buildString {
-            appendLine("📄 Содержимое письма")
+            appendLine("📄 Письмо")
             appendLine()
-            appendLine("Ящик: ${account.name}")
-            appendLine("Адрес: ${account.username}")
-            appendLine("От: ${message.from}")
-            appendLine("Тема: ${message.subject}")
-            appendLine("Дата: $sentAt")
+            appendLine("📬 Ящик: ${account.name}")
+            appendLine("📧 Кому: ${account.username}")
+            appendLine("👤 От: ${message.from}")
+            appendLine("📝 Тема: ${message.subject}")
+            appendLine("🕒 Дата: $messageDate")
             appendLine()
-            appendLine("Текст:")
+            appendLine("──────────")
             appendLine(body)
+            appendLine("──────────")
             appendLine()
-            appendAttachmentOverview(
-                message = message,
-                attachmentsKnown = true,
-            )
+            appendAttachmentOverview(message)
         }.trimEnd()
     }
 
     private fun StringBuilder.appendAttachmentOverview(
         message: EmailSummary,
-        attachmentsKnown: Boolean,
     ) {
-        if (!attachmentsKnown) {
-            append("Вложения: не удалось определить")
-            return
-        }
-
         val attachmentNames = buildList {
             message.attachments.forEach { attachment ->
                 add(attachment.fileName)
             }
+
             message.skippedAttachments.forEach { attachment ->
                 add(attachment.fileName)
             }
         }
 
         if (attachmentNames.isEmpty()) {
-            append("Вложения: нет")
+            append("📎 Вложения: нет")
             return
         }
 
-        appendLine("Вложения:")
+        appendLine(
+            "📎 Вложения: ${formatAttachmentCount(attachmentNames.size)}",
+        )
+
         attachmentNames.forEachIndexed { index, fileName ->
             append(index + 1)
             append(". ")
@@ -653,6 +753,41 @@ class MailForwardingService(
                 appendLine()
             }
         }
+    }
+
+    private fun attachmentCount(
+        message: EmailSummary,
+    ): Int {
+        return message.attachments.size +
+                message.skippedAttachments.size
+    }
+
+    private fun formatMessageDate(
+        message: EmailSummary,
+    ): String {
+        return (message.sentAt ?: message.receivedAt)
+            ?.let(dateFormatter::format)
+            ?: "неизвестна"
+    }
+
+    private fun formatAttachmentCount(
+        count: Int,
+    ): String {
+        if (count == 0) {
+            return "нет"
+        }
+
+        val lastTwoDigits = count % 100
+        val lastDigit = count % 10
+
+        val noun = when {
+            lastTwoDigits in 11..14 -> "файлов"
+            lastDigit == 1 -> "файл"
+            lastDigit in 2..4 -> "файла"
+            else -> "файлов"
+        }
+
+        return "$count $noun"
     }
 
     private fun fileExtensionLabel(
@@ -693,6 +828,27 @@ class MailForwardingService(
                     appendLine()
                 }
             }
+        }
+    }
+
+    private suspend fun editMessageSafely(
+        messageId: Long,
+        text: String,
+    ) {
+        try {
+            telegramControlClient.editMessage(
+                chatId = telegramChatId,
+                messageId = messageId,
+                text = text,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.debug(
+                "Failed to edit Telegram status message {}: {}",
+                messageId,
+                exception.javaClass.simpleName,
+            )
         }
     }
 

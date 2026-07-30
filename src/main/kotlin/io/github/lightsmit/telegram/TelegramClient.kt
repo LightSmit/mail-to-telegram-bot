@@ -150,6 +150,62 @@ class TelegramClient(
         return extractMessageId(root)
     }
 
+    fun fitsSingleTextMessage(
+        text: String,
+    ): Boolean {
+        return text.length <= TELEGRAM_MESSAGE_TEXT_LIMIT
+    }
+
+    suspend fun editMessage(
+        chatId: Long,
+        messageId: Long,
+        text: String,
+    ) {
+        require(fitsSingleTextMessage(text)) {
+            "Telegram message text exceeds the edit limit"
+        }
+
+        executeWithRetry("editMessageText") {
+            httpClient.submitForm(
+                url = "$baseUrl/editMessageText",
+                formParameters = Parameters.build {
+                    append("chat_id", chatId.toString())
+                    append("message_id", messageId.toString())
+                    append("text", text)
+                },
+            )
+        }
+    }
+
+    suspend fun editMessageWithButtons(
+        chatId: Long,
+        messageId: Long,
+        text: String,
+        buttons: List<TelegramInlineButton>,
+    ) {
+        require(buttons.isNotEmpty()) {
+            "At least one Telegram button is required"
+        }
+
+        require(fitsSingleTextMessage(text)) {
+            "Telegram message text exceeds the edit limit"
+        }
+
+        val replyMarkup = createReplyMarkup(buttons)
+
+        executeWithRetry("editMessageText") {
+            httpClient.submitForm(
+                url = "$baseUrl/editMessageText",
+                formParameters = Parameters.build {
+                    append("chat_id", chatId.toString())
+                    append("message_id", messageId.toString())
+                    append("text", text)
+                    append("reply_markup", replyMarkup.toString())
+                },
+            )
+        }
+    }
+
     suspend fun sendLongMessage(
         chatId: Long,
         text: String,
@@ -613,6 +669,7 @@ class TelegramClient(
         const val DEFAULT_REQUEST_TIMEOUT_MILLIS = 90_000L
         const val SHORT_POLL_REQUEST_TIMEOUT_MILLIS = 10_000L
         const val MEDIA_TIMEOUT_MILLIS = 300_000L
+        const val TELEGRAM_MESSAGE_TEXT_LIMIT = 4_096
 
         fun retryDelayMillis(attempt: Int): Long {
             return when (attempt) {

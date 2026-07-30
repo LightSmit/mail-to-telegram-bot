@@ -39,7 +39,7 @@ class TelegramUpdatePoller(
             try {
                 val batch = pollingClient.getCallbackQueryUpdates(
                     offset = nextOffset,
-                    timeoutSeconds = 0,
+                    timeoutSeconds = LONG_POLL_TIMEOUT_SECONDS,
                 )
 
                 batch.nextOffset?.let { offset ->
@@ -52,8 +52,6 @@ class TelegramUpdatePoller(
                         handleCallbackQuery(callbackQuery)
                     }
                 }
-
-                delay(SHORT_POLL_INTERVAL_MILLIS)
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
@@ -61,7 +59,7 @@ class TelegramUpdatePoller(
                     "Telegram update polling failed: {}",
                     exception.javaClass.simpleName,
                 )
-                delay(SHORT_POLL_INTERVAL_MILLIS)
+                delay(POLL_RETRY_DELAY_MILLIS)
             }
         }
     }
@@ -95,7 +93,7 @@ class TelegramUpdatePoller(
 
         val account = accounts.firstOrNull { configuredAccount ->
             MailViewCallbackCodec.accountCode(configuredAccount) ==
-                request.accountCode
+                    request.accountCode
         }
 
         if (account == null) {
@@ -142,51 +140,48 @@ class TelegramUpdatePoller(
         try {
             when (request.action) {
                 MailViewAction.TEXT -> {
-                    answerSafely(
+                    performActionWithAcknowledgement(
                         callbackQueryId = update.callbackQueryId,
                         text = "Открываю текст…",
-                        showAlert = false,
-                    )
-
-                    forwardingService.openTextView(
-                        account = account,
-                        expectedUidValidity = request.uidValidity,
-                        uid = request.uid,
-                        sourceMessageId = requireNotNull(
-                            update.messageId,
-                        ),
-                    )
+                    ) {
+                        forwardingService.openTextView(
+                            account = account,
+                            expectedUidValidity = request.uidValidity,
+                            uid = request.uid,
+                            sourceMessageId = requireNotNull(
+                                update.messageId,
+                            ),
+                        )
+                    }
                 }
 
                 MailViewAction.ATTACHMENTS -> {
-                    answerSafely(
+                    performActionWithAcknowledgement(
                         callbackQueryId = update.callbackQueryId,
                         text = "Отправляю вложения…",
-                        showAlert = false,
-                    )
-
-                    forwardingService.sendAttachments(
-                        account = account,
-                        expectedUidValidity = request.uidValidity,
-                        uid = request.uid,
-                    )
+                    ) {
+                        forwardingService.sendAttachments(
+                            account = account,
+                            expectedUidValidity = request.uidValidity,
+                            uid = request.uid,
+                        )
+                    }
                 }
 
                 MailViewAction.BACK -> {
-                    answerSafely(
+                    performActionWithAcknowledgement(
                         callbackQueryId = update.callbackQueryId,
                         text = null,
-                        showAlert = false,
-                    )
-
-                    forwardingService.returnToSummary(
-                        account = account,
-                        expectedUidValidity = request.uidValidity,
-                        uid = request.uid,
-                        sourceMessageId = requireNotNull(
-                            update.messageId,
-                        ),
-                    )
+                    ) {
+                        forwardingService.returnToSummary(
+                            account = account,
+                            expectedUidValidity = request.uidValidity,
+                            uid = request.uid,
+                            sourceMessageId = requireNotNull(
+                                update.messageId,
+                            ),
+                        )
+                    }
                 }
             }
         } catch (exception: CancellationException) {
@@ -211,13 +206,29 @@ class TelegramUpdatePoller(
         }
     }
 
+    private suspend fun performActionWithAcknowledgement(
+        callbackQueryId: String,
+        text: String?,
+        action: suspend () -> Unit,
+    ) = supervisorScope {
+        launch {
+            answerSafely(
+                callbackQueryId = callbackQueryId,
+                text = text,
+                showAlert = false,
+            )
+        }
+
+        action()
+    }
+
     private suspend fun answerSafely(
         callbackQueryId: String,
         text: String?,
         showAlert: Boolean,
     ) {
         try {
-            withTimeoutOrNull(8_000) {
+            withTimeoutOrNull(CALLBACK_ANSWER_TIMEOUT_MILLIS) {
                 controlClient.answerCallbackQuery(
                     callbackQueryId = callbackQueryId,
                     text = text,
@@ -244,6 +255,8 @@ class TelegramUpdatePoller(
     }
 
     private companion object {
-        const val SHORT_POLL_INTERVAL_MILLIS = 1_000L
+        const val LONG_POLL_TIMEOUT_SECONDS = 25
+        const val POLL_RETRY_DELAY_MILLIS = 1_000L
+        const val CALLBACK_ANSWER_TIMEOUT_MILLIS = 5_000L
     }
 }
