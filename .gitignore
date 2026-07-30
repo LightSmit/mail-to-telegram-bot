@@ -26,3 +26,8 @@ logs/
 # Operating systems
 .DS_Store
 Thumbs.db
+
+# Local diagnostics
+diagnostic-logs.txt
+mail-bot-diagnostic/
+mail-bot-diagnostic.zip
