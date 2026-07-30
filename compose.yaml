@@ -1,0 +1,24 @@
+services:
+  mail-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: mail-to-telegram-bot
+    restart: unless-stopped
+    init: true
+
+    env_file:
+      - .env
+
+    environment:
+      DATABASE_PATH: /app/data/mail-bot.db
+      ATTACHMENT_TEMP_DIR: /app/data/attachments
+
+      TZ: Europe/Moscow
+
+    volumes:
+      - mail-bot-data:/app/data
+
+volumes:
+  mail-bot-data:

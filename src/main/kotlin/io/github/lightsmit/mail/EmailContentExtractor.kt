@@ -13,6 +13,7 @@ object EmailContentExtractor {
         part: Part,
         tempDirectory: Path,
         maxAttachmentSizeBytes: Long,
+        includeAttachments: Boolean = true,
     ): EmailContent {
         require(maxAttachmentSizeBytes > 0) {
             "Maximum attachment size must be greater than zero"
@@ -23,22 +24,29 @@ object EmailContentExtractor {
         val plainTextBodies = mutableListOf<String>()
         val htmlBodies = mutableListOf<String>()
         val attachments = mutableListOf<EmailAttachment>()
-        val skippedAttachments = mutableListOf<SkippedAttachment>()
+        val skippedAttachments =
+            mutableListOf<SkippedAttachment>()
 
         try {
             collectParts(
                 part = part,
                 tempDirectory = tempDirectory,
-                maxAttachmentSizeBytes = maxAttachmentSizeBytes,
+                maxAttachmentSizeBytes =
+                    maxAttachmentSizeBytes,
+                includeAttachments =
+                    includeAttachments,
                 plainTextBodies = plainTextBodies,
                 htmlBodies = htmlBodies,
                 attachments = attachments,
-                skippedAttachments = skippedAttachments,
+                skippedAttachments =
+                    skippedAttachments,
             )
         } catch (exception: Exception) {
             attachments.forEach { attachment ->
                 runCatching {
-                    Files.deleteIfExists(attachment.tempFile)
+                    Files.deleteIfExists(
+                        attachment.tempFile,
+                    )
                 }
             }
 
@@ -46,16 +54,24 @@ object EmailContentExtractor {
         }
 
         val body = plainTextBodies
-            .firstOrNull(String::isNotBlank)
-            ?: htmlBodies.firstOrNull(String::isNotBlank)
+            .firstOrNull { text ->
+                text.isNotBlank()
+            }
+            ?: htmlBodies.firstOrNull { text ->
+                text.isNotBlank()
+            }
 
         return EmailContent(
             body = body
                 ?.let(::normalize)
-                ?.takeIf(String::isNotBlank),
+                ?.takeIf { text ->
+                    text.isNotBlank()
+                },
 
             attachments = attachments,
-            skippedAttachments = skippedAttachments,
+
+            skippedAttachments =
+                skippedAttachments,
         )
     }
 
@@ -63,19 +79,25 @@ object EmailContentExtractor {
         part: Part,
         tempDirectory: Path,
         maxAttachmentSizeBytes: Long,
+        includeAttachments: Boolean,
         plainTextBodies: MutableList<String>,
         htmlBodies: MutableList<String>,
         attachments: MutableList<EmailAttachment>,
-        skippedAttachments: MutableList<SkippedAttachment>,
+        skippedAttachments:
+        MutableList<SkippedAttachment>,
     ) {
         if (isAttachment(part)) {
-            saveAttachment(
-                part = part,
-                tempDirectory = tempDirectory,
-                maxAttachmentSizeBytes = maxAttachmentSizeBytes,
-                attachments = attachments,
-                skippedAttachments = skippedAttachments,
-            )
+            if (includeAttachments) {
+                saveAttachment(
+                    part = part,
+                    tempDirectory = tempDirectory,
+                    maxAttachmentSizeBytes =
+                        maxAttachmentSizeBytes,
+                    attachments = attachments,
+                    skippedAttachments =
+                        skippedAttachments,
+                )
+            }
 
             return
         }
@@ -102,12 +124,27 @@ object EmailContentExtractor {
                 for (index in 0 until multipart.count) {
                     collectParts(
                         part = multipart.getBodyPart(index),
-                        tempDirectory = tempDirectory,
-                        maxAttachmentSizeBytes = maxAttachmentSizeBytes,
-                        plainTextBodies = plainTextBodies,
-                        htmlBodies = htmlBodies,
-                        attachments = attachments,
-                        skippedAttachments = skippedAttachments,
+
+                        tempDirectory =
+                            tempDirectory,
+
+                        maxAttachmentSizeBytes =
+                            maxAttachmentSizeBytes,
+
+                        includeAttachments =
+                            includeAttachments,
+
+                        plainTextBodies =
+                            plainTextBodies,
+
+                        htmlBodies =
+                            htmlBodies,
+
+                        attachments =
+                            attachments,
+
+                        skippedAttachments =
+                            skippedAttachments,
                     )
                 }
             }
@@ -118,12 +155,27 @@ object EmailContentExtractor {
 
                 collectParts(
                     part = nestedPart,
-                    tempDirectory = tempDirectory,
-                    maxAttachmentSizeBytes = maxAttachmentSizeBytes,
-                    plainTextBodies = plainTextBodies,
-                    htmlBodies = htmlBodies,
-                    attachments = attachments,
-                    skippedAttachments = skippedAttachments,
+
+                    tempDirectory =
+                        tempDirectory,
+
+                    maxAttachmentSizeBytes =
+                        maxAttachmentSizeBytes,
+
+                    includeAttachments =
+                        includeAttachments,
+
+                    plainTextBodies =
+                        plainTextBodies,
+
+                    htmlBodies =
+                        htmlBodies,
+
+                    attachments =
+                        attachments,
+
+                    skippedAttachments =
+                        skippedAttachments,
                 )
             }
         }
@@ -134,10 +186,13 @@ object EmailContentExtractor {
         tempDirectory: Path,
         maxAttachmentSizeBytes: Long,
         attachments: MutableList<EmailAttachment>,
-        skippedAttachments: MutableList<SkippedAttachment>,
+        skippedAttachments:
+        MutableList<SkippedAttachment>,
     ) {
         val attachmentNumber =
-            attachments.size + skippedAttachments.size + 1
+            attachments.size +
+                    skippedAttachments.size +
+                    1
 
         val fileName = extractFileName(
             part = part,
@@ -146,10 +201,14 @@ object EmailContentExtractor {
 
         val declaredSize = part.size.toLong()
 
-        if (declaredSize > maxAttachmentSizeBytes) {
+        if (
+            declaredSize >= 0 &&
+            declaredSize > maxAttachmentSizeBytes
+        ) {
             skippedAttachments += SkippedAttachment(
                 fileName = fileName,
-                reason = "размер превышает установленный предел",
+                reason =
+                    "размер превышает установленный предел",
             )
 
             return
@@ -166,7 +225,8 @@ object EmailContentExtractor {
         try {
             part.inputStream.use { input ->
                 Files.newOutputStream(tempFile).use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    val buffer =
+                        ByteArray(DEFAULT_BUFFER_SIZE)
 
                     while (true) {
                         val readBytes = input.read(buffer)
@@ -177,7 +237,10 @@ object EmailContentExtractor {
 
                         totalBytes += readBytes
 
-                        if (totalBytes > maxAttachmentSizeBytes) {
+                        if (
+                            totalBytes >
+                            maxAttachmentSizeBytes
+                        ) {
                             throw AttachmentTooLargeException()
                         }
 
@@ -194,7 +257,8 @@ object EmailContentExtractor {
 
             skippedAttachments += SkippedAttachment(
                 fileName = fileName,
-                reason = "размер превышает установленный предел",
+                reason =
+                    "размер превышает установленный предел",
             )
 
             return
@@ -218,7 +282,9 @@ object EmailContentExtractor {
         )
     }
 
-    private fun isAttachment(part: Part): Boolean {
+    private fun isAttachment(
+        part: Part,
+    ): Boolean {
         val disposition = part.disposition
 
         return disposition.equals(
@@ -235,7 +301,9 @@ object EmailContentExtractor {
         attachmentNumber: Int,
     ): String {
         val rawName = part.fileName
-            ?.takeIf(String::isNotBlank)
+            ?.takeIf { fileName ->
+                fileName.isNotBlank()
+            }
 
         val decodedName = rawName?.let { name ->
             runCatching {
@@ -247,7 +315,9 @@ object EmailContentExtractor {
             ?.replace('\\', '/')
             ?.substringAfterLast('/')
             ?.trim()
-            ?.takeIf(String::isNotBlank)
+            ?.takeIf { fileName ->
+                fileName.isNotBlank()
+            }
             ?: "attachment-$attachmentNumber"
 
         val sanitizedName = baseName
@@ -264,14 +334,19 @@ object EmailContentExtractor {
         }
     }
 
-    private fun convertHtmlToText(html: String): String {
+    private fun convertHtmlToText(
+        html: String,
+    ): String {
         val document = Jsoup.parse(html)
 
-        document.select("br").after("\n")
+        document
+            .select("br")
+            .after("\n")
 
         document
             .select(
-                "p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote",
+                "p, div, li, tr, h1, h2, h3, " +
+                        "h4, h5, h6, blockquote",
             )
             .before("\n")
 
@@ -280,7 +355,9 @@ object EmailContentExtractor {
             .wholeText()
     }
 
-    private fun normalize(text: String): String {
+    private fun normalize(
+        text: String,
+    ): String {
         return text
             .replace("\r\n", "\n")
             .replace('\r', '\n')
@@ -300,5 +377,6 @@ object EmailContentExtractor {
             .trim()
     }
 
-    private class AttachmentTooLargeException : RuntimeException()
+    private class AttachmentTooLargeException :
+        RuntimeException()
 }
