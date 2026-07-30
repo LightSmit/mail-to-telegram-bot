@@ -163,29 +163,48 @@ class MailForwardingService(
             uid = uid,
         ) ?: return
 
+        val fullText = formatFullMessage(
+            account = account,
+            message = message,
+        )
+
+        val buttons = textViewButtons(
+            account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
+        val emailKey = interactiveEmailKey(
+            account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
         navigationMutex.withLock {
-            val newMessageIds = telegramControlClient
-                .sendLongMessageWithButtons(
+            if (
+                telegramControlClient.fitsSingleTextMessage(
+                    fullText,
+                )
+            ) {
+                telegramControlClient.editMessageWithButtons(
                     chatId = telegramChatId,
-                    text = formatFullMessage(
-                        account = account,
-                        message = message,
-                    ),
-                    buttons = textViewButtons(
-                        account = account,
-                        uidValidity = expectedUidValidity,
-                        uid = uid,
-                    ),
+                    messageId = sourceMessageId,
+                    text = fullText,
+                    buttons = buttons,
                 )
 
-            val emailKey = interactiveEmailKey(
-                account = account,
-                uidValidity = expectedUidValidity,
-                uid = uid,
-            )
+                textViewMessageIds.remove(emailKey)
+            } else {
+                val newMessageIds =
+                    telegramControlClient.sendLongMessageWithButtons(
+                        chatId = telegramChatId,
+                        text = fullText,
+                        buttons = buttons,
+                    )
 
-            textViewMessageIds[emailKey] = newMessageIds
-            deleteMessageSafely(sourceMessageId)
+                textViewMessageIds[emailKey] = newMessageIds
+                deleteMessageSafely(sourceMessageId)
+            }
         }
 
         logger.info(
@@ -207,37 +226,48 @@ class MailForwardingService(
             uid = uid,
         ) ?: return
 
+        val summaryText = formatNotification(
+            account = account,
+            message = message,
+            attachmentsKnown = true,
+        )
+
+        val buttons = summaryButtons(
+            account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
+        val emailKey = interactiveEmailKey(
+            account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
         navigationMutex.withLock {
-            telegramControlClient.sendMessageWithButtons(
-                chatId = telegramChatId,
-                text = formatNotification(
-                    account = account,
-                    message = message,
-                    attachmentsKnown = true,
-                ),
-                buttons = summaryButtons(
-                    account = account,
-                    uidValidity = expectedUidValidity,
-                    uid = uid,
-                ),
-            )
+            val longViewMessageIds =
+                textViewMessageIds.remove(emailKey)
 
-            val emailKey = interactiveEmailKey(
-                account = account,
-                uidValidity = expectedUidValidity,
-                uid = uid,
-            )
-
-            val messageIdsToDelete = buildSet {
-                add(sourceMessageId)
-                addAll(
-                    textViewMessageIds.remove(emailKey)
-                        .orEmpty(),
+            if (longViewMessageIds == null) {
+                telegramControlClient.editMessageWithButtons(
+                    chatId = telegramChatId,
+                    messageId = sourceMessageId,
+                    text = summaryText,
+                    buttons = buttons,
                 )
-            }
+            } else {
+                telegramControlClient.sendMessageWithButtons(
+                    chatId = telegramChatId,
+                    text = summaryText,
+                    buttons = buttons,
+                )
 
-            messageIdsToDelete.forEach { messageId ->
-                deleteMessageSafely(messageId)
+                buildSet {
+                    add(sourceMessageId)
+                    addAll(longViewMessageIds)
+                }.forEach { messageId ->
+                    deleteMessageSafely(messageId)
+                }
             }
         }
 
