@@ -91,7 +91,6 @@ class MailNotificationOutboxWorker(
                 item.accountKey,
             )
         } catch (exception: CancellationException) {
-
             throw exception
         } catch (exception: Exception) {
             handleDeliveryFailure(
@@ -127,8 +126,7 @@ class MailNotificationOutboxWorker(
                 )
 
                 logger.warn(
-                    "Outbox item {} for email UID {} failed on attempt {}. " +
-                            "Retry scheduled in {} seconds",
+                    "Outbox item {} for email UID {} failed on attempt {}. " + "Retry scheduled in {} seconds",
                     item.id,
                     item.uid,
                     failedAttempts,

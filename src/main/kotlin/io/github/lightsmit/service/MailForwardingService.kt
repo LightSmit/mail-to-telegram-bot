@@ -7,9 +7,19 @@ import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailOutboxItem
 import io.github.lightsmit.storage.MailOutboxOperation
 import io.github.lightsmit.storage.MailStateRepository
-import io.github.lightsmit.telegram.*
+import io.github.lightsmit.telegram.MailViewAction
+import io.github.lightsmit.telegram.MailViewCallbackCodec
+import io.github.lightsmit.telegram.TelegramApiException
+import io.github.lightsmit.telegram.TelegramClient
+import io.github.lightsmit.telegram.TelegramInlineButton
 import jakarta.mail.MessagingException
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.eclipse.angus.mail.imap.IMAPFolder
@@ -76,8 +86,7 @@ class MailForwardingService(
 
         val account = accountsByKey[item.accountKey]
             ?: throw PermanentMailDeliveryException(
-                "Configured mail account no longer exists: " +
-                        item.accountKey,
+                "Configured mail account no longer exists: " + item.accountKey,
             )
 
         val actualAccountCode =
@@ -94,8 +103,7 @@ class MailForwardingService(
             uidValidity = item.uidValidity,
             uid = item.uid,
         ) ?: throw PermanentMailDeliveryException(
-            "Email UID ${item.uid} is no longer available " +
-                    "in mailbox ${account.username}",
+            "Email UID ${item.uid} is no longer available " + "in mailbox ${account.username}",
         )
 
         val telegramMessageId =
@@ -317,8 +325,7 @@ class MailForwardingService(
                 appendLine("⚠️ Не удалось открыть письмо")
                 appendLine()
                 append(
-                    "Письмо могло быть удалено или перемещено " +
-                            "из папки «Входящие».",
+                    "Письмо могло быть удалено или перемещено " + "из папки «Входящие».",
                 )
             },
         )
@@ -447,8 +454,7 @@ class MailForwardingService(
                 )
             } else {
                 logger.debug(
-                    "Notification for email UID {} from mailbox {} " +
-                            "already exists in outbox",
+                    "Notification for email UID {} from mailbox {} " + "already exists in outbox",
                     message.uid,
                     account.username,
                 )
@@ -657,8 +663,7 @@ class MailForwardingService(
             .trim()
             .takeIf { value ->
                 value.isNotBlank() &&
-                        value.length <= 15 &&
-                        value.none(Char::isWhitespace)
+                        value.length <= 15 && value.none(Char::isWhitespace)
             }
 
         return extension
@@ -747,8 +752,7 @@ class MailForwardingService(
             }
 
         logger.info(
-            "Email UID {} from mailbox {}: mail transport delay={} s, " +
-                    "bot detection delay={} s",
+            "Email UID {} from mailbox {}: mail transport delay={} s, " + "bot detection delay={} s",
             message.uid,
             account.username,
             transportSeconds?.toString() ?: "unknown",

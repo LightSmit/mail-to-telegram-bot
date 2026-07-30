@@ -4,7 +4,11 @@ import io.github.lightsmit.config.Environment
 import io.github.lightsmit.config.MailAccountConfigLoader
 import io.github.lightsmit.mail.ImapIdleWatcher
 import io.github.lightsmit.mail.ImapMailClient
-import io.github.lightsmit.service.*
+import io.github.lightsmit.service.EmailContentLoader
+import io.github.lightsmit.service.MailForwardingService
+import io.github.lightsmit.service.MailNotificationOutboxWorker
+import io.github.lightsmit.service.TelegramDeliveryFailureClassifier
+import io.github.lightsmit.service.TelegramUpdatePoller
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailStateRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
@@ -111,14 +115,11 @@ fun main() = runBlocking {
         contentLoader = contentLoader,
     )
 
-    val mailOutboxWorker =
-        MailNotificationOutboxWorker(
-            repository = mailOutboxRepository,
-            failureClassifier =
-                TelegramDeliveryFailureClassifier(),
-            deliver =
-                forwardingService::deliverOutboxNotification,
-        )
+    val mailOutboxWorker = MailNotificationOutboxWorker(
+        repository = mailOutboxRepository,
+        failureClassifier = TelegramDeliveryFailureClassifier(),
+        deliver = forwardingService::deliverOutboxNotification,
+    )
 
     try {
         val idleWatcher = ImapIdleWatcher(
@@ -165,10 +166,8 @@ fun main() = runBlocking {
 
             (
                     mailWatcherJobs +
-                            listOf(
-                                telegramUpdateJob,
-                                mailOutboxJob,
-                            )
+                            telegramUpdateJob +
+                            mailOutboxJob
                     ).joinAll()
         }
     } finally {
