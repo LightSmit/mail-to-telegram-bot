@@ -301,38 +301,91 @@ class MailForwardingService(
             return
         }
 
-        for (attachment in message.attachments) {
-            val startedAt = System.currentTimeMillis()
+        val attachmentTotal = message.attachments.size
 
-            telegramMediaClient.sendAttachment(
-                chatId = telegramChatId,
-                attachment = attachment,
-            )
+        val statusMessageId = if (attachmentTotal > 0) {
+            try {
+                telegramControlClient.sendMessage(
+                    chatId = telegramChatId,
+                    text = "⏳ Отправляю вложения: 0/$attachmentTotal",
+                )
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                logger.debug(
+                    "Failed to display attachment progress for email UID {}",
+                    uid,
+                )
+                null
+            }
+        } else {
+            null
+        }
+
+        try {
+            message.attachments.forEachIndexed { index, attachment ->
+                val startedAt = System.currentTimeMillis()
+
+                telegramMediaClient.sendAttachment(
+                    chatId = telegramChatId,
+                    attachment = attachment,
+                )
+
+                statusMessageId?.let { messageId ->
+                    editMessageSafely(
+                        messageId = messageId,
+                        text = "⏳ Отправляю вложения: " +
+                                "${index + 1}/$attachmentTotal",
+                    )
+                }
+
+                logger.info(
+                    "Sent attachment {} of email UID {} in {} ms",
+                    attachment.fileName,
+                    uid,
+                    System.currentTimeMillis() - startedAt,
+                )
+            }
+
+            if (message.skippedAttachments.isNotEmpty()) {
+                telegramControlClient.sendLongMessage(
+                    chatId = telegramChatId,
+                    text = formatSkippedAttachments(
+                        account = account,
+                        message = message,
+                    ),
+                )
+            }
+
+            statusMessageId?.let { messageId ->
+                editMessageSafely(
+                    messageId = messageId,
+                    text = "✅ Вложения отправлены: $attachmentTotal",
+                )
+
+                delay(1_500)
+                deleteMessageSafely(messageId)
+            }
 
             logger.info(
-                "Sent attachment {} of email UID {} in {} ms",
-                attachment.fileName,
+                "Displayed attachments for email UID {} from mailbox {}: {} file(s)",
                 uid,
-                System.currentTimeMillis() - startedAt,
+                account.username,
+                message.attachments.size,
             )
-        }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            statusMessageId?.let { messageId ->
+                editMessageSafely(
+                    messageId = messageId,
+                    text = "⚠️ Не удалось отправить вложения. " +
+                            "Повторите попытку.",
+                )
+            }
 
-        if (message.skippedAttachments.isNotEmpty()) {
-            telegramControlClient.sendLongMessage(
-                chatId = telegramChatId,
-                text = formatSkippedAttachments(
-                    account = account,
-                    message = message,
-                ),
-            )
+            throw exception
         }
-
-        logger.info(
-            "Displayed attachments for email UID {} from mailbox {}: {} file(s)",
-            uid,
-            account.username,
-            message.attachments.size,
-        )
     }
 
     private suspend fun loadEmailOrNotify(
@@ -775,6 +828,27 @@ class MailForwardingService(
                     appendLine()
                 }
             }
+        }
+    }
+
+    private suspend fun editMessageSafely(
+        messageId: Long,
+        text: String,
+    ) {
+        try {
+            telegramControlClient.editMessage(
+                chatId = telegramChatId,
+                messageId = messageId,
+                text = text,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.debug(
+                "Failed to edit Telegram status message {}: {}",
+                messageId,
+                exception.javaClass.simpleName,
+            )
         }
     }
 

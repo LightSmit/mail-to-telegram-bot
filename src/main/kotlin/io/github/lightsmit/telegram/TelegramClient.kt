@@ -156,6 +156,27 @@ class TelegramClient(
         return text.length <= TELEGRAM_MESSAGE_TEXT_LIMIT
     }
 
+    suspend fun editMessage(
+        chatId: Long,
+        messageId: Long,
+        text: String,
+    ) {
+        require(fitsSingleTextMessage(text)) {
+            "Telegram message text exceeds the edit limit"
+        }
+
+        executeWithRetry("editMessageText") {
+            httpClient.submitForm(
+                url = "$baseUrl/editMessageText",
+                formParameters = Parameters.build {
+                    append("chat_id", chatId.toString())
+                    append("message_id", messageId.toString())
+                    append("text", text)
+                },
+            )
+        }
+    }
+
     suspend fun editMessageWithButtons(
         chatId: Long,
         messageId: Long,
