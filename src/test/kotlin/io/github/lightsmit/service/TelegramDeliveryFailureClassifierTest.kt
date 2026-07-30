@@ -2,10 +2,10 @@ package io.github.lightsmit.service
 
 import io.github.lightsmit.telegram.TelegramApiException
 import io.github.lightsmit.telegram.TelegramTransportException
+import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import java.time.Duration
 
 class TelegramDeliveryFailureClassifierTest {
 
@@ -82,6 +82,7 @@ class TelegramDeliveryFailureClassifierTest {
             retry.delay,
         )
     }
+
     @Test
     fun `permanent mail delivery failure is dead`() {
         val decision = classifier.classify(

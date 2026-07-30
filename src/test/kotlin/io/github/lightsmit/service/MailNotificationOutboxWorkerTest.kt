@@ -5,12 +5,12 @@ import io.github.lightsmit.storage.MailOutboxStatus
 import io.github.lightsmit.telegram.TelegramApiException
 import io.github.lightsmit.telegram.TelegramTransportException
 import kotlinx.coroutines.runBlocking
+import java.time.Instant
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import java.time.Instant
 
 class MailNotificationOutboxWorkerTest {
 

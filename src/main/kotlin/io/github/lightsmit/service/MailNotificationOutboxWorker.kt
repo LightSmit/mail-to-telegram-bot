@@ -30,11 +30,6 @@ class MailNotificationOutboxWorker(
         }
     }
 
-    /**
-     * Starts the permanent outbox-processing loop.
-     *
-     * The function runs until its coroutine is cancelled.
-     */
     suspend fun run() {
         recoverInterrupted()
 
@@ -60,10 +55,6 @@ class MailNotificationOutboxWorker(
         }
     }
 
-    /**
-     * Restores tasks that were left in PROCESSING state after an
-     * application shutdown or crash.
-     */
     fun recoverInterrupted(): Int {
         val recoveredCount = repository.recoverInterrupted(
             now = nowProvider(),
@@ -79,13 +70,6 @@ class MailNotificationOutboxWorker(
         return recoveredCount
     }
 
-    /**
-     * Processes one due item.
-     *
-     * Returns true when an item was claimed, regardless of whether
-     * its delivery succeeded, was scheduled for retry, or became DEAD.
-     * Returns false when there were no due items.
-     */
     internal suspend fun processNextDue(): Boolean {
         val item = repository.claimNextDue(
             now = nowProvider(),
@@ -107,10 +91,7 @@ class MailNotificationOutboxWorker(
                 item.accountKey,
             )
         } catch (exception: CancellationException) {
-            /*
-             * The item intentionally remains PROCESSING.
-             * recoverInterrupted() will return it to RETRY after restart.
-             */
+
             throw exception
         } catch (exception: Exception) {
             handleDeliveryFailure(
