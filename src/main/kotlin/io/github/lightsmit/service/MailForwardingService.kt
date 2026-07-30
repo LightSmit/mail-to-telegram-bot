@@ -15,7 +15,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -29,13 +28,7 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
 import io.github.lightsmit.storage.MailOutboxItem
 import io.github.lightsmit.storage.MailOutboxOperation
-
-private data class MailNotificationTask(
-    val account: MailAccountConfig,
-    val accountKey: String,
-    val uidValidity: Long,
-    val message: EmailSummary,
-)
+import io.github.lightsmit.storage.MailNotificationOutboxRepository
 
 class MailForwardingService(
     accounts: List<MailAccountConfig>,
@@ -44,6 +37,7 @@ class MailForwardingService(
     private val telegramMediaClient: TelegramClient,
     private val telegramChatId: Long,
     private val stateRepository: MailStateRepository,
+    private val outboxRepository: MailNotificationOutboxRepository,
     private val contentLoader: EmailContentLoader,
 ) : AutoCloseable {
 
@@ -70,19 +64,7 @@ class MailForwardingService(
     private val navigationMutex = Mutex()
     private val accountProcessingLocks =
         ConcurrentHashMap<String, Mutex>()
-    private val claimedUids =
-        ConcurrentHashMap<String, Long>()
-    private val notificationChannels =
-        ConcurrentHashMap<String, Channel<MailNotificationTask>>()
-    private val pendingNotifications =
-        ConcurrentHashMap.newKeySet<String>()
 
-    /**
-     * For long letters Telegram can create several text messages.
-     * The callback button is attached to the last one. This map lets
-     * the Back action remove the whole rendered letter, not only the
-     * message that contains the buttons.
-     */
     private val textViewMessageIds =
         ConcurrentHashMap<String, List<Long>>()
 
@@ -346,7 +328,7 @@ class MailForwardingService(
                 appendLine()
                 append(
                     "Письмо могло быть удалено или перемещено " +
-                        "из папки «Входящие».",
+                            "из папки «Входящие».",
                 )
             },
         )
@@ -431,18 +413,35 @@ class MailForwardingService(
             return
         }
 
-        val claimKey = "$accountKey:${batch.uidValidity}"
-        var lastClaimedUid = maxOf(
-            state.lastUid,
-            claimedUids[claimKey] ?: 0L,
-        )
+        val accountCode =
+            MailViewCallbackCodec.accountCode(account)
 
-        for (message in batch.messages) {
-            if (message.uid <= lastClaimedUid) {
+        var lastScheduledUid = state.lastUid
+
+        for (message in batch.messages.sortedBy { item -> item.uid }) {
+            if (message.uid <= lastScheduledUid) {
                 continue
             }
 
-            logDeliveryTiming(account, message)
+            logDeliveryTiming(
+                account = account,
+                message = message,
+            )
+
+            val inserted = outboxRepository.enqueue(
+                accountKey = accountKey,
+                accountCode = accountCode,
+                uidValidity = batch.uidValidity,
+                uid = message.uid,
+            )
+
+            lastScheduledUid = message.uid
+
+            stateRepository.save(
+                accountKey = accountKey,
+                uidValidity = batch.uidValidity,
+                lastUid = lastScheduledUid,
+            )
 
             contentLoader.prefetch(
                 account = account,
@@ -450,448 +449,338 @@ class MailForwardingService(
                 uid = message.uid,
             )
 
-            enqueueNotification(
-                MailNotificationTask(
-                    account = account,
-                    accountKey = accountKey,
-                    uidValidity = batch.uidValidity,
-                    message = message,
-                ),
-            )
-
-            claimedUids[claimKey] = message.uid
-            lastClaimedUid = message.uid
-        }
-    }
-
-    private suspend fun <T> withAccountProcessingLock(
-        account: MailAccountConfig,
-        block: suspend () -> T,
-    ): T {
-        val accountKey = buildAccountKey(account)
-        val mutex = accountProcessingLocks.computeIfAbsent(accountKey) {
-            Mutex()
-        }
-
-        return mutex.withLock {
-            block()
-        }
-    }
-
-    private suspend fun initializeAccount(
-        account: MailAccountConfig,
-        accountKey: String,
-        idleInbox: IMAPFolder?,
-    ) {
-        val cursor = if (idleInbox != null) {
-            imapClient.fetchCursor(idleInbox)
-        } else {
-            imapClient.fetchCursor(account)
-        }
-
-        stateRepository.save(
-            accountKey = accountKey,
-            uidValidity = cursor.uidValidity,
-            lastUid = cursor.latestUid,
-        )
-
-        scope.launch {
-            runCatching {
-                telegramControlClient.sendMessage(
-                    chatId = telegramChatId,
-                    text = buildString {
-                        appendLine("✅ Почтовый ящик подключён")
-                        appendLine()
-                        appendLine("Название: ${account.name}")
-                        appendLine("Адрес: ${account.username}")
-                        append("Старые письма пересылаться не будут.")
-                    },
+            if (inserted) {
+                logger.info(
+                    "Enqueued notification for email UID {} from mailbox {}",
+                    message.uid,
+                    account.username,
+                )
+            } else {
+                logger.debug(
+                    "Notification for email UID {} from mailbox {} " +
+                            "already exists in outbox",
+                    message.uid,
+                    account.username,
                 )
             }
         }
-
-        logger.info(
-            "Initialized mailbox {} at UID {}",
-            account.username,
-            cursor.latestUid,
-        )
     }
 
-    private suspend fun enqueueNotification(
-        task: MailNotificationTask,
-    ) {
-        val notificationKey = notificationKey(task)
-        if (!pendingNotifications.add(notificationKey)) {
-            return
-        }
+        private suspend fun <T> withAccountProcessingLock(
+            account: MailAccountConfig,
+            block: suspend () -> T,
+        ): T {
+            val accountKey = buildAccountKey(account)
+            val mutex = accountProcessingLocks.computeIfAbsent(accountKey) {
+                Mutex()
+            }
 
-        val channel = notificationChannels.computeIfAbsent(task.accountKey) {
-            Channel<MailNotificationTask>(Channel.UNLIMITED).also { newChannel ->
-                scope.launch {
-                    processNotificationChannel(newChannel)
-                }
+            return mutex.withLock {
+                block()
             }
         }
 
-        channel.send(task)
-    }
-
-    private suspend fun processNotificationChannel(
-        channel: Channel<MailNotificationTask>,
-    ) {
-        for (task in channel) {
-            val key = notificationKey(task)
-            var attempt = 0
-
-            while (true) {
-                try {
-                    val fullMessage = contentLoader.get(
-                        account = task.account,
-                        uidValidity = task.uidValidity,
-                        uid = task.message.uid,
-                    )
-
-                    val notificationMessage = fullMessage
-                        ?: task.message
-
-                    telegramControlClient.sendMessageWithButtons(
-                        chatId = telegramChatId,
-                        text = formatNotification(
-                            account = task.account,
-                            message = notificationMessage,
-                            attachmentsKnown = fullMessage != null,
-                        ),
-                        buttons = summaryButtons(
-                            account = task.account,
-                            uidValidity = task.uidValidity,
-                            uid = task.message.uid,
-                        ),
-                    )
-
-                    advanceStateAfterNotification(task)
-                    pendingNotifications.remove(key)
-
-                    logger.info(
-                        "Sent notification for email UID {} from mailbox {}",
-                        task.message.uid,
-                        task.account.username,
-                    )
-                    break
-                } catch (exception: CancellationException) {
-                    throw exception
-                } catch (exception: Exception) {
-                    attempt++
-                    val retrySeconds = minOf(
-                        30L,
-                        2L shl minOf(attempt, 4),
-                    )
-
-                    logger.warn(
-                        "Notification for email UID {} from mailbox {} failed: {}. " +
-                            "Retrying in {} seconds",
-                        task.message.uid,
-                        task.account.username,
-                        exception.javaClass.simpleName,
-                        retrySeconds,
-                    )
-                    delay(retrySeconds * 1_000L)
-                }
-            }
-        }
-    }
-
-    private fun advanceStateAfterNotification(
-        task: MailNotificationTask,
-    ) {
-        val current = stateRepository.find(task.accountKey)
-        if (
-            current != null &&
-            current.uidValidity != task.uidValidity
+        private suspend fun initializeAccount(
+            account: MailAccountConfig,
+            accountKey: String,
+            idleInbox: IMAPFolder?,
         ) {
-            return
-        }
-
-        stateRepository.save(
-            accountKey = task.accountKey,
-            uidValidity = task.uidValidity,
-            lastUid = maxOf(
-                current?.lastUid ?: 0L,
-                task.message.uid,
-            ),
-        )
-    }
-
-    private fun summaryButtons(
-        account: MailAccountConfig,
-        uidValidity: Long,
-        uid: Long,
-    ): List<TelegramInlineButton> {
-        return listOf(
-            TelegramInlineButton(
-                text = "Текст",
-                callbackData = MailViewCallbackCodec.encode(
-                    action = MailViewAction.TEXT,
-                    account = account,
-                    uidValidity = uidValidity,
-                    uid = uid,
-                ),
-            ),
-            TelegramInlineButton(
-                text = "Вложения",
-                callbackData = MailViewCallbackCodec.encode(
-                    action = MailViewAction.ATTACHMENTS,
-                    account = account,
-                    uidValidity = uidValidity,
-                    uid = uid,
-                ),
-            ),
-        )
-    }
-
-    private fun textViewButtons(
-        account: MailAccountConfig,
-        uidValidity: Long,
-        uid: Long,
-    ): List<TelegramInlineButton> {
-        return listOf(
-            TelegramInlineButton(
-                text = "назад",
-                callbackData = MailViewCallbackCodec.encode(
-                    action = MailViewAction.BACK,
-                    account = account,
-                    uidValidity = uidValidity,
-                    uid = uid,
-                ),
-            ),
-            TelegramInlineButton(
-                text = "Вложения",
-                callbackData = MailViewCallbackCodec.encode(
-                    action = MailViewAction.ATTACHMENTS,
-                    account = account,
-                    uidValidity = uidValidity,
-                    uid = uid,
-                ),
-            ),
-        )
-    }
-
-    private fun formatNotification(
-        account: MailAccountConfig,
-        message: EmailSummary,
-        attachmentsKnown: Boolean,
-    ): String {
-        return buildString {
-            appendLine("📨 Новое письмо")
-            appendLine()
-            appendLine("Кому: ${account.name} (${account.username})")
-            appendLine("От: ${message.from}")
-            appendLine("Тема: ${message.subject}")
-            appendAttachmentOverview(
-                message = message,
-                attachmentsKnown = attachmentsKnown,
-            )
-        }.trimEnd()
-    }
-
-    private fun formatFullMessage(
-        account: MailAccountConfig,
-        message: EmailSummary,
-    ): String {
-        val sentAt = message.sentAt
-            ?.let(dateFormatter::format)
-            ?: "(дата неизвестна)"
-        val body = message.body
-            ?.takeIf { text -> text.isNotBlank() }
-            ?: "(текст письма отсутствует или не удалось распознать)"
-
-        return buildString {
-            appendLine("📄 Содержимое письма")
-            appendLine()
-            appendLine("Ящик: ${account.name}")
-            appendLine("Адрес: ${account.username}")
-            appendLine("От: ${message.from}")
-            appendLine("Тема: ${message.subject}")
-            appendLine("Дата: $sentAt")
-            appendLine()
-            appendLine("Текст:")
-            appendLine(body)
-            appendLine()
-            appendAttachmentOverview(
-                message = message,
-                attachmentsKnown = true,
-            )
-        }.trimEnd()
-    }
-
-    private fun StringBuilder.appendAttachmentOverview(
-        message: EmailSummary,
-        attachmentsKnown: Boolean,
-    ) {
-        if (!attachmentsKnown) {
-            append("Вложения: не удалось определить")
-            return
-        }
-
-        val attachmentNames = buildList {
-            message.attachments.forEach { attachment ->
-                add(attachment.fileName)
+            val cursor = if (idleInbox != null) {
+                imapClient.fetchCursor(idleInbox)
+            } else {
+                imapClient.fetchCursor(account)
             }
-            message.skippedAttachments.forEach { attachment ->
-                add(attachment.fileName)
+
+            stateRepository.save(
+                accountKey = accountKey,
+                uidValidity = cursor.uidValidity,
+                lastUid = cursor.latestUid,
+            )
+
+            scope.launch {
+                runCatching {
+                    telegramControlClient.sendMessage(
+                        chatId = telegramChatId,
+                        text = buildString {
+                            appendLine("✅ Почтовый ящик подключён")
+                            appendLine()
+                            appendLine("Название: ${account.name}")
+                            appendLine("Адрес: ${account.username}")
+                            append("Старые письма пересылаться не будут.")
+                        },
+                    )
+                }
             }
+
+            logger.info(
+                "Initialized mailbox {} at UID {}",
+                account.username,
+                cursor.latestUid,
+            )
         }
 
-        if (attachmentNames.isEmpty()) {
-            append("Вложения: нет")
-            return
+        private fun summaryButtons(
+            account: MailAccountConfig,
+            uidValidity: Long,
+            uid: Long,
+        ): List<TelegramInlineButton> {
+            return listOf(
+                TelegramInlineButton(
+                    text = "Текст",
+                    callbackData = MailViewCallbackCodec.encode(
+                        action = MailViewAction.TEXT,
+                        account = account,
+                        uidValidity = uidValidity,
+                        uid = uid,
+                    ),
+                ),
+                TelegramInlineButton(
+                    text = "Вложения",
+                    callbackData = MailViewCallbackCodec.encode(
+                        action = MailViewAction.ATTACHMENTS,
+                        account = account,
+                        uidValidity = uidValidity,
+                        uid = uid,
+                    ),
+                ),
+            )
         }
 
-        appendLine("Вложения:")
-        attachmentNames.forEachIndexed { index, fileName ->
-            append(index + 1)
-            append(". ")
-            append(fileName)
-            append(" (")
-            append(fileExtensionLabel(fileName))
-            append(')')
+        private fun textViewButtons(
+            account: MailAccountConfig,
+            uidValidity: Long,
+            uid: Long,
+        ): List<TelegramInlineButton> {
+            return listOf(
+                TelegramInlineButton(
+                    text = "назад",
+                    callbackData = MailViewCallbackCodec.encode(
+                        action = MailViewAction.BACK,
+                        account = account,
+                        uidValidity = uidValidity,
+                        uid = uid,
+                    ),
+                ),
+                TelegramInlineButton(
+                    text = "Вложения",
+                    callbackData = MailViewCallbackCodec.encode(
+                        action = MailViewAction.ATTACHMENTS,
+                        account = account,
+                        uidValidity = uidValidity,
+                        uid = uid,
+                    ),
+                ),
+            )
+        }
 
-            if (index < attachmentNames.lastIndex) {
+        private fun formatNotification(
+            account: MailAccountConfig,
+            message: EmailSummary,
+            attachmentsKnown: Boolean,
+        ): String {
+            return buildString {
+                appendLine("📨 Новое письмо")
                 appendLine()
-            }
+                appendLine("Кому: ${account.name} (${account.username})")
+                appendLine("От: ${message.from}")
+                appendLine("Тема: ${message.subject}")
+                appendAttachmentOverview(
+                    message = message,
+                    attachmentsKnown = attachmentsKnown,
+                )
+            }.trimEnd()
         }
-    }
 
-    private fun fileExtensionLabel(
-        fileName: String,
-    ): String {
-        val extension = fileName
-            .substringAfterLast('.', missingDelimiterValue = "")
-            .trim()
-            .takeIf { value ->
-                value.isNotBlank() &&
-                    value.length <= 15 &&
-                    value.none(Char::isWhitespace)
+        private fun formatFullMessage(
+            account: MailAccountConfig,
+            message: EmailSummary,
+        ): String {
+            val sentAt = message.sentAt
+                ?.let(dateFormatter::format)
+                ?: "(дата неизвестна)"
+            val body = message.body
+                ?.takeIf { text -> text.isNotBlank() }
+                ?: "(текст письма отсутствует или не удалось распознать)"
+
+            return buildString {
+                appendLine("📄 Содержимое письма")
+                appendLine()
+                appendLine("Ящик: ${account.name}")
+                appendLine("Адрес: ${account.username}")
+                appendLine("От: ${message.from}")
+                appendLine("Тема: ${message.subject}")
+                appendLine("Дата: $sentAt")
+                appendLine()
+                appendLine("Текст:")
+                appendLine(body)
+                appendLine()
+                appendAttachmentOverview(
+                    message = message,
+                    attachmentsKnown = true,
+                )
+            }.trimEnd()
+        }
+
+        private fun StringBuilder.appendAttachmentOverview(
+            message: EmailSummary,
+            attachmentsKnown: Boolean,
+        ) {
+            if (!attachmentsKnown) {
+                append("Вложения: не удалось определить")
+                return
             }
 
-        return extension
-            ?.let { value -> ".${value.lowercase()}" }
-            ?: "без расширения"
-    }
+            val attachmentNames = buildList {
+                message.attachments.forEach { attachment ->
+                    add(attachment.fileName)
+                }
+                message.skippedAttachments.forEach { attachment ->
+                    add(attachment.fileName)
+                }
+            }
 
-    private fun formatSkippedAttachments(
-        account: MailAccountConfig,
-        message: EmailSummary,
-    ): String {
-        return buildString {
-            appendLine("⚠️ Некоторые вложения не были отправлены")
-            appendLine()
-            appendLine("Ящик: ${account.name}")
-            appendLine("Тема: ${message.subject}")
-            appendLine()
+            if (attachmentNames.isEmpty()) {
+                append("Вложения: нет")
+                return
+            }
 
-            message.skippedAttachments.forEachIndexed { index, attachment ->
+            appendLine("Вложения:")
+            attachmentNames.forEachIndexed { index, fileName ->
                 append(index + 1)
                 append(". ")
-                append(attachment.fileName)
-                append(": ")
-                append(attachment.reason)
+                append(fileName)
+                append(" (")
+                append(fileExtensionLabel(fileName))
+                append(')')
 
-                if (index < message.skippedAttachments.lastIndex) {
+                if (index < attachmentNames.lastIndex) {
                     appendLine()
                 }
             }
         }
-    }
 
-    private suspend fun deleteMessageSafely(
-        messageId: Long,
-    ) {
-        try {
-            telegramControlClient.deleteMessage(
-                chatId = telegramChatId,
-                messageId = messageId,
-            )
-        } catch (exception: TelegramApiException) {
-            val harmless = exception.description.contains(
-                other = "message to delete not found",
-                ignoreCase = true,
-            )
+        private fun fileExtensionLabel(
+            fileName: String,
+        ): String {
+            val extension = fileName
+                .substringAfterLast('.', missingDelimiterValue = "")
+                .trim()
+                .takeIf { value ->
+                    value.isNotBlank() &&
+                            value.length <= 15 &&
+                            value.none(Char::isWhitespace)
+                }
 
-            if (!harmless) {
+            return extension
+                ?.let { value -> ".${value.lowercase()}" }
+                ?: "без расширения"
+        }
+
+        private fun formatSkippedAttachments(
+            account: MailAccountConfig,
+            message: EmailSummary,
+        ): String {
+            return buildString {
+                appendLine("⚠️ Некоторые вложения не были отправлены")
+                appendLine()
+                appendLine("Ящик: ${account.name}")
+                appendLine("Тема: ${message.subject}")
+                appendLine()
+
+                message.skippedAttachments.forEachIndexed { index, attachment ->
+                    append(index + 1)
+                    append(". ")
+                    append(attachment.fileName)
+                    append(": ")
+                    append(attachment.reason)
+
+                    if (index < message.skippedAttachments.lastIndex) {
+                        appendLine()
+                    }
+                }
+            }
+        }
+
+        private suspend fun deleteMessageSafely(
+            messageId: Long,
+        ) {
+            try {
+                telegramControlClient.deleteMessage(
+                    chatId = telegramChatId,
+                    messageId = messageId,
+                )
+            } catch (exception: TelegramApiException) {
+                val harmless = exception.description.contains(
+                    other = "message to delete not found",
+                    ignoreCase = true,
+                )
+
+                if (!harmless) {
+                    logger.warn(
+                        "Failed to delete Telegram message {}: TelegramApiException",
+                        messageId,
+                    )
+                }
+            } catch (exception: Exception) {
                 logger.warn(
-                    "Failed to delete Telegram message {}: TelegramApiException",
+                    "Failed to delete Telegram message {}: {}",
                     messageId,
+                    exception.javaClass.simpleName,
                 )
             }
-        } catch (exception: Exception) {
-            logger.warn(
-                "Failed to delete Telegram message {}: {}",
-                messageId,
-                exception.javaClass.simpleName,
-            )
         }
-    }
 
-    private fun logDeliveryTiming(
-        account: MailAccountConfig,
-        message: EmailSummary,
-    ) {
-        val detectedAt = Instant.now()
-        val transportSeconds = if (
-            message.sentAt != null &&
-            message.receivedAt != null
+        private fun logDeliveryTiming(
+            account: MailAccountConfig,
+            message: EmailSummary,
         ) {
-            Duration.between(
-                message.sentAt,
-                message.receivedAt,
-            )
-                .seconds
-                .coerceAtLeast(0)
-        } else {
-            null
-        }
-
-        val detectionSeconds = message.receivedAt
-            ?.let { receivedAt ->
-                Duration.between(receivedAt, detectedAt)
+            val detectedAt = Instant.now()
+            val transportSeconds = if (
+                message.sentAt != null &&
+                message.receivedAt != null
+            ) {
+                Duration.between(
+                    message.sentAt,
+                    message.receivedAt,
+                )
                     .seconds
                     .coerceAtLeast(0)
+            } else {
+                null
             }
 
-        logger.info(
-            "Email UID {} from mailbox {}: mail transport delay={} s, " +
-                "bot detection delay={} s",
-            message.uid,
-            account.username,
-            transportSeconds?.toString() ?: "unknown",
-            detectionSeconds?.toString() ?: "unknown",
-        )
-    }
+            val detectionSeconds = message.receivedAt
+                ?.let { receivedAt ->
+                    Duration.between(receivedAt, detectedAt)
+                        .seconds
+                        .coerceAtLeast(0)
+                }
 
-    private fun notificationKey(
-        task: MailNotificationTask,
-    ): String {
-        return "${task.accountKey}:${task.uidValidity}:${task.message.uid}"
-    }
-
-    private fun interactiveEmailKey(
-        account: MailAccountConfig,
-        uidValidity: Long,
-        uid: Long,
-    ): String {
-        return "${MailViewCallbackCodec.accountCode(account)}:$uidValidity:$uid"
-    }
-
-    private fun buildAccountKey(
-        account: MailAccountConfig,
-    ): String {
-        return "${account.host}:${account.username}".lowercase()
-    }
-
-    override fun close() {
-        notificationChannels.values.forEach { channel ->
-            channel.close()
+            logger.info(
+                "Email UID {} from mailbox {}: mail transport delay={} s, " +
+                        "bot detection delay={} s",
+                message.uid,
+                account.username,
+                transportSeconds?.toString() ?: "unknown",
+                detectionSeconds?.toString() ?: "unknown",
+            )
         }
-        scope.cancel()
+
+        private fun interactiveEmailKey(
+            account: MailAccountConfig,
+            uidValidity: Long,
+            uid: Long,
+        ): String {
+            return "${MailViewCallbackCodec.accountCode(account)}:$uidValidity:$uid"
+        }
+
+        private fun buildAccountKey(
+            account: MailAccountConfig,
+        ): String {
+            return "${account.host}:${account.username}".lowercase()
+        }
+
+        override fun close() {
+            scope.cancel()
+        }
     }
-}

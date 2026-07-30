@@ -135,6 +135,56 @@ class MailNotificationOutboxRepositoryTest {
         assertEquals(0, sent.attempts)
     }
 
+    @Test
+    fun `sent item cannot be enqueued again`() {
+        val repository = createRepository()
+        val now = Instant.parse("2026-07-30T12:00:00Z")
+
+        assertTrue(
+            repository.enqueue(
+                accountKey = "imap.mail.ru:user@example.com",
+                accountCode = "abcdef123456",
+                uidValidity = 900,
+                uid = 1_000,
+                now = now,
+            ),
+        )
+
+        val claimed = assertNotNull(
+            repository.claimNextDue(now),
+        )
+
+        repository.markSent(
+            id = claimed.id,
+            telegramMessageId = 1_100,
+            now = now.plusSeconds(1),
+        )
+
+        val insertedAgain = repository.enqueue(
+            accountKey = "imap.mail.ru:user@example.com",
+            accountCode = "abcdef123456",
+            uidValidity = 900,
+            uid = 1_000,
+            now = now.plusSeconds(2),
+        )
+
+        assertFalse(insertedAgain)
+
+        assertEquals(
+            1L,
+            repository.countByStatus(
+                MailOutboxStatus.SENT,
+            ),
+        )
+
+        assertEquals(
+            0L,
+            repository.countByStatus(
+                MailOutboxStatus.PENDING,
+            ),
+        )
+    }
+
     private fun createRepository(): MailNotificationOutboxRepository {
         val directory = createTempDirectory("mail-outbox-test-")
         return MailNotificationOutboxRepository(

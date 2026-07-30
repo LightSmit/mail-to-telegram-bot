@@ -111,6 +111,7 @@ fun main() = runBlocking {
         telegramMediaClient = telegramMediaClient,
         telegramChatId = telegramChatId,
         stateRepository = mailStateRepository,
+        outboxRepository = mailOutboxRepository,
         contentLoader = contentLoader,
     )
 
