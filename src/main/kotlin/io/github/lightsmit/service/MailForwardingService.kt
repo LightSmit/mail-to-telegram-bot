@@ -29,6 +29,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
+import io.github.lightsmit.storage.MailOutboxEmailMetadata
 
 class MailForwardingService(
     accounts: List<MailAccountConfig>,
@@ -514,6 +515,12 @@ class MailForwardingService(
                 accountCode = accountCode,
                 uidValidity = batch.uidValidity,
                 uid = message.uid,
+                emailMetadata = MailOutboxEmailMetadata(
+                    from = message.from,
+                    subject = message.subject,
+                    sentAt = message.sentAt,
+                    receivedAt = message.receivedAt,
+                ),
             )
 
             lastScheduledUid = message.uid

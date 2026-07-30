@@ -5,6 +5,17 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.*
 
 class MailNotificationOutboxRepositoryTest {
+    private val testEmailMetadata =
+        MailOutboxEmailMetadata(
+            from = "Sender <sender@example.com>",
+            subject = "Test subject",
+            sentAt = Instant.parse(
+                "2026-07-30T11:58:00Z",
+            ),
+            receivedAt = Instant.parse(
+                "2026-07-30T11:59:00Z",
+            ),
+        )
 
     @Test
     fun `enqueue is idempotent for the same email operation`() {
@@ -16,6 +27,7 @@ class MailNotificationOutboxRepositoryTest {
             accountCode = "abcdef123456",
             uidValidity = 100,
             uid = 200,
+            emailMetadata = testEmailMetadata,
             now = now,
         )
         val duplicateInsert = repository.enqueue(
@@ -23,6 +35,7 @@ class MailNotificationOutboxRepositoryTest {
             accountCode = "abcdef123456",
             uidValidity = 100,
             uid = 200,
+            emailMetadata = testEmailMetadata,
             now = now.plusSeconds(5),
         )
 
@@ -30,7 +43,22 @@ class MailNotificationOutboxRepositoryTest {
         assertFalse(duplicateInsert)
         assertEquals(
             1L,
-            repository.countByStatus(MailOutboxStatus.PENDING),
+            repository.countByStatus(
+                MailOutboxStatus.PENDING,
+            ),
+        )
+
+        val stored = assertNotNull(
+            repository.find(
+                accountKey = "imap.mail.ru:user@example.com",
+                uidValidity = 100,
+                uid = 200,
+            ),
+        )
+
+        assertEquals(
+            testEmailMetadata,
+            stored.emailMetadata,
         )
     }
 
@@ -44,10 +72,15 @@ class MailNotificationOutboxRepositoryTest {
             accountCode = "123456abcdef",
             uidValidity = 300,
             uid = 400,
+            emailMetadata = testEmailMetadata,
             now = now,
         )
 
         val claimed = assertNotNull(repository.claimNextDue(now))
+        assertEquals(
+            testEmailMetadata,
+            claimed.emailMetadata,
+        )
         val retryAt = now.plusSeconds(30)
 
         repository.markRetry(
@@ -60,6 +93,10 @@ class MailNotificationOutboxRepositoryTest {
         assertNull(repository.claimNextDue(now.plusSeconds(29)))
 
         val retried = assertNotNull(repository.claimNextDue(retryAt))
+        assertEquals(
+            testEmailMetadata,
+            retried.emailMetadata,
+        )
         assertEquals(claimed.id, retried.id)
         assertEquals(1, retried.attempts)
         assertEquals(MailOutboxStatus.PROCESSING, retried.status)
@@ -75,6 +112,7 @@ class MailNotificationOutboxRepositoryTest {
             accountCode = "abcdef123456",
             uidValidity = 500,
             uid = 600,
+            emailMetadata = testEmailMetadata,
             now = now,
         )
         val claimed = assertNotNull(repository.claimNextDue(now))
@@ -107,6 +145,7 @@ class MailNotificationOutboxRepositoryTest {
             accountCode = "fedcba654321",
             uidValidity = 700,
             uid = 800,
+            emailMetadata = testEmailMetadata,
             now = now,
         )
         val claimed = assertNotNull(repository.claimNextDue(now))
@@ -141,6 +180,7 @@ class MailNotificationOutboxRepositoryTest {
                 accountCode = "abcdef123456",
                 uidValidity = 900,
                 uid = 1_000,
+                emailMetadata = testEmailMetadata,
                 now = now,
             ),
         )
@@ -160,6 +200,7 @@ class MailNotificationOutboxRepositoryTest {
             accountCode = "abcdef123456",
             uidValidity = 900,
             uid = 1_000,
+            emailMetadata = testEmailMetadata,
             now = now.plusSeconds(2),
         )
 

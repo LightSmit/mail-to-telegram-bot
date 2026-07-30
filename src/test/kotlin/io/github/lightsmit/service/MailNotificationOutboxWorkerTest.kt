@@ -1,6 +1,7 @@
 package io.github.lightsmit.service
 
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
+import io.github.lightsmit.storage.MailOutboxEmailMetadata
 import io.github.lightsmit.storage.MailOutboxStatus
 import io.github.lightsmit.telegram.TelegramApiException
 import io.github.lightsmit.telegram.TelegramTransportException
@@ -192,6 +193,12 @@ class MailNotificationOutboxWorkerTest {
             accountCode = ACCOUNT_CODE,
             uidValidity = UID_VALIDITY,
             uid = UID,
+            emailMetadata = MailOutboxEmailMetadata(
+                from = "Sender <sender@example.com>",
+                subject = "Worker test",
+                sentAt = now.minusSeconds(120),
+                receivedAt = now.minusSeconds(60),
+            ),
             now = now,
         )
     }

@@ -7,6 +7,7 @@ import java.sql.DriverManager
 import java.sql.ResultSet
 import java.time.Instant
 
+
 enum class MailOutboxOperation {
     SEND_NOTIFICATION,
 }
@@ -19,12 +20,20 @@ enum class MailOutboxStatus {
     DEAD,
 }
 
+data class MailOutboxEmailMetadata(
+    val from: String,
+    val subject: String,
+    val sentAt: Instant?,
+    val receivedAt: Instant?,
+)
+
 data class MailOutboxItem(
     val id: Long,
     val accountKey: String,
     val accountCode: String,
     val uidValidity: Long,
     val uid: Long,
+    val emailMetadata: MailOutboxEmailMetadata?,
     val operation: MailOutboxOperation,
     val status: MailOutboxStatus,
     val attempts: Int,
@@ -57,35 +66,62 @@ class MailNotificationOutboxRepository(
 
                 statement.executeUpdate(
                     """
-                    CREATE TABLE IF NOT EXISTS mail_notification_outbox (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        account_key TEXT NOT NULL,
-                        account_code TEXT NOT NULL,
-                        uid_validity INTEGER NOT NULL CHECK (uid_validity > 0),
-                        uid INTEGER NOT NULL CHECK (uid > 0),
-                        operation TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-                        next_attempt_at INTEGER NOT NULL,
-                        locked_at INTEGER,
-                        telegram_message_id INTEGER,
-                        last_error TEXT,
-                        created_at INTEGER NOT NULL,
-                        updated_at INTEGER NOT NULL,
-                        UNIQUE (account_key, uid_validity, uid, operation)
-                    )
-                    """.trimIndent(),
+                CREATE TABLE IF NOT EXISTS mail_notification_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_key TEXT NOT NULL,
+                    account_code TEXT NOT NULL,
+                    uid_validity INTEGER NOT NULL CHECK (uid_validity > 0),
+                    uid INTEGER NOT NULL CHECK (uid > 0),
+                    sender TEXT,
+                    subject TEXT,
+                    sent_at INTEGER,
+                    received_at INTEGER,
+                    operation TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                    next_attempt_at INTEGER NOT NULL,
+                    locked_at INTEGER,
+                    telegram_message_id INTEGER,
+                    last_error TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE (account_key, uid_validity, uid, operation)
                 )
+                """.trimIndent(),
+                )
+            }
 
+            ensureColumn(
+                connection = connection,
+                columnName = "sender",
+                definition = "TEXT",
+            )
+            ensureColumn(
+                connection = connection,
+                columnName = "subject",
+                definition = "TEXT",
+            )
+            ensureColumn(
+                connection = connection,
+                columnName = "sent_at",
+                definition = "INTEGER",
+            )
+            ensureColumn(
+                connection = connection,
+                columnName = "received_at",
+                definition = "INTEGER",
+            )
+
+            connection.createStatement().use { statement ->
                 statement.executeUpdate(
                     """
-                    CREATE INDEX IF NOT EXISTS idx_mail_notification_outbox_due
-                    ON mail_notification_outbox (
-                        status,
-                        next_attempt_at,
-                        id
-                    )
-                    """.trimIndent(),
+                CREATE INDEX IF NOT EXISTS idx_mail_notification_outbox_due
+                ON mail_notification_outbox (
+                    status,
+                    next_attempt_at,
+                    id
+                )
+                """.trimIndent(),
                 )
             }
         }
@@ -97,7 +133,9 @@ class MailNotificationOutboxRepository(
         accountCode: String,
         uidValidity: Long,
         uid: Long,
-        operation: MailOutboxOperation = MailOutboxOperation.SEND_NOTIFICATION,
+        emailMetadata: MailOutboxEmailMetadata,
+        operation: MailOutboxOperation =
+            MailOutboxOperation.SEND_NOTIFICATION,
         now: Instant = Instant.now(),
     ): Boolean {
         require(accountKey.isNotBlank()) {
@@ -112,27 +150,40 @@ class MailNotificationOutboxRepository(
         require(uid > 0) {
             "UID must be greater than zero"
         }
+        require(emailMetadata.from.isNotBlank()) {
+            "Email sender must not be blank"
+        }
+        require(emailMetadata.subject.isNotBlank()) {
+            "Email subject must not be blank"
+        }
 
         val timestamp = now.toEpochMilli()
         val sql =
             """
-            INSERT OR IGNORE INTO mail_notification_outbox (
-                account_key,
-                account_code,
-                uid_validity,
-                uid,
-                operation,
-                status,
-                attempts,
-                next_attempt_at,
-                locked_at,
-                telegram_message_id,
-                last_error,
-                created_at,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, NULL, ?, ?)
-            """.trimIndent()
+        INSERT OR IGNORE INTO mail_notification_outbox (
+            account_key,
+            account_code,
+            uid_validity,
+            uid,
+            sender,
+            subject,
+            sent_at,
+            received_at,
+            operation,
+            status,
+            attempts,
+            next_attempt_at,
+            locked_at,
+            telegram_message_id,
+            last_error,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?,
+            NULL, NULL, NULL, ?, ?
+        )
+        """.trimIndent()
 
         openConnection().use { connection ->
             connection.prepareStatement(sql).use { statement ->
@@ -140,11 +191,25 @@ class MailNotificationOutboxRepository(
                 statement.setString(2, accountCode)
                 statement.setLong(3, uidValidity)
                 statement.setLong(4, uid)
-                statement.setString(5, operation.name)
-                statement.setString(6, MailOutboxStatus.PENDING.name)
-                statement.setLong(7, timestamp)
-                statement.setLong(8, timestamp)
-                statement.setLong(9, timestamp)
+                statement.setString(5, emailMetadata.from)
+                statement.setString(6, emailMetadata.subject)
+                statement.setNullableInstant(
+                    parameterIndex = 7,
+                    value = emailMetadata.sentAt,
+                )
+                statement.setNullableInstant(
+                    parameterIndex = 8,
+                    value = emailMetadata.receivedAt,
+                )
+                statement.setString(9, operation.name)
+                statement.setString(
+                    10,
+                    MailOutboxStatus.PENDING.name,
+                )
+                statement.setLong(11, timestamp)
+                statement.setLong(12, timestamp)
+                statement.setLong(13, timestamp)
+
                 return statement.executeUpdate() == 1
             }
         }
@@ -171,20 +236,24 @@ class MailNotificationOutboxRepository(
                 LIMIT 1
             )
             RETURNING
-                id,
-                account_key,
-                account_code,
-                uid_validity,
-                uid,
-                operation,
-                status,
-                attempts,
-                next_attempt_at,
-                locked_at,
-                telegram_message_id,
-                last_error,
-                created_at,
-                updated_at
+    id,
+    account_key,
+    account_code,
+    uid_validity,
+    uid,
+    sender,
+    subject,
+    sent_at,
+    received_at,
+    operation,
+    status,
+    attempts,
+    next_attempt_at,
+    locked_at,
+    telegram_message_id,
+    last_error,
+    created_at,
+    updated_at
             """.trimIndent()
 
         openConnection().use { connection ->
@@ -334,21 +403,25 @@ class MailNotificationOutboxRepository(
     ): MailOutboxItem? {
         val sql =
             """
-            SELECT
-                id,
-                account_key,
-                account_code,
-                uid_validity,
-                uid,
-                operation,
-                status,
-                attempts,
-                next_attempt_at,
-                locked_at,
-                telegram_message_id,
-                last_error,
-                created_at,
-                updated_at
+SELECT
+    id,
+    account_key,
+    account_code,
+    uid_validity,
+    uid,
+    sender,
+    subject,
+    sent_at,
+    received_at,
+    operation,
+    status,
+    attempts,
+    next_attempt_at,
+    locked_at,
+    telegram_message_id,
+    last_error,
+    created_at,
+    updated_at
             FROM mail_notification_outbox
             WHERE account_key = ?
               AND uid_validity = ?
@@ -446,6 +519,69 @@ class MailNotificationOutboxRepository(
         }
     }
 
+    private fun ensureColumn(
+        connection: Connection,
+        columnName: String,
+        definition: String,
+    ) {
+        val columnExists =
+            connection.createStatement().use { statement ->
+                statement.executeQuery(
+                    "PRAGMA table_info(mail_notification_outbox)",
+                ).use { result ->
+                    var found = false
+
+                    while (result.next()) {
+                        if (result.getString("name") == columnName) {
+                            found = true
+                            break
+                        }
+                    }
+
+                    found
+                }
+            }
+
+        if (columnExists) {
+            return
+        }
+
+        connection.createStatement().use { statement ->
+            statement.executeUpdate(
+                "ALTER TABLE mail_notification_outbox " + "ADD COLUMN $columnName $definition",
+            )
+        }
+    }
+
+    private fun java.sql.PreparedStatement.setNullableInstant(
+        parameterIndex: Int,
+        value: Instant?,
+    ) {
+        if (value == null) {
+            setNull(
+                parameterIndex,
+                java.sql.Types.BIGINT,
+            )
+        } else {
+            setLong(
+                parameterIndex,
+                value.toEpochMilli(),
+            )
+        }
+    }
+
+    private fun ResultSet.getNullableInstant(
+        columnName: String,
+    ): Instant? {
+        val value = getLong(columnName)
+
+        return if (wasNull()) {
+            null
+        } else {
+            Instant.ofEpochMilli(value)
+        }
+    }
+
     private fun openConnection(): Connection {
         return DriverManager.getConnection(databaseUrl).apply {
             createStatement().use { statement ->
@@ -456,18 +592,30 @@ class MailNotificationOutboxRepository(
     }
 
     private fun ResultSet.toOutboxItem(): MailOutboxItem {
-        val lockedAtMillis = getLong("locked_at")
-        val lockedAt = if (wasNull()) {
-            null
-        } else {
-            Instant.ofEpochMilli(lockedAtMillis)
-        }
+        val telegramMessageIdValue =
+            getLong("telegram_message_id")
 
-        val telegramMessageIdValue = getLong("telegram_message_id")
         val telegramMessageId = if (wasNull()) {
             null
         } else {
             telegramMessageIdValue
+        }
+
+        val sender = getString("sender")
+        val subject = getString("subject")
+
+        val emailMetadata = if (
+            sender == null ||
+            subject == null
+        ) {
+            null
+        } else {
+            MailOutboxEmailMetadata(
+                from = sender,
+                subject = subject,
+                sentAt = getNullableInstant("sent_at"),
+                receivedAt = getNullableInstant("received_at"),
+            )
         }
 
         return MailOutboxItem(
@@ -476,6 +624,7 @@ class MailNotificationOutboxRepository(
             accountCode = getString("account_code"),
             uidValidity = getLong("uid_validity"),
             uid = getLong("uid"),
+            emailMetadata = emailMetadata,
             operation = MailOutboxOperation.valueOf(
                 getString("operation"),
             ),
@@ -486,7 +635,7 @@ class MailNotificationOutboxRepository(
             nextAttemptAt = Instant.ofEpochMilli(
                 getLong("next_attempt_at"),
             ),
-            lockedAt = lockedAt,
+            lockedAt = getNullableInstant("locked_at"),
             telegramMessageId = telegramMessageId,
             lastError = getString("last_error"),
             createdAt = Instant.ofEpochMilli(
