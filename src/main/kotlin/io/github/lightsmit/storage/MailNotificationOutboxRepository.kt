@@ -10,6 +10,7 @@ import java.time.Instant
 
 enum class MailOutboxOperation {
     SEND_NOTIFICATION,
+    ENRICH_NOTIFICATION,
 }
 
 enum class MailOutboxStatus {
@@ -40,6 +41,7 @@ data class MailOutboxItem(
     val nextAttemptAt: Instant,
     val lockedAt: Instant?,
     val telegramMessageId: Long?,
+    val summaryActive: Boolean,
     val lastError: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
@@ -82,6 +84,8 @@ class MailNotificationOutboxRepository(
                     next_attempt_at INTEGER NOT NULL,
                     locked_at INTEGER,
                     telegram_message_id INTEGER,
+                    summary_active INTEGER NOT NULL DEFAULT 0
+                        CHECK (summary_active IN (0, 1)),
                     last_error TEXT,
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL,
@@ -110,6 +114,11 @@ class MailNotificationOutboxRepository(
                 connection = connection,
                 columnName = "received_at",
                 definition = "INTEGER",
+            )
+            ensureColumn(
+                connection = connection,
+                columnName = "summary_active",
+                definition = "INTEGER NOT NULL DEFAULT 0",
             )
 
             connection.createStatement().use { statement ->
@@ -251,6 +260,7 @@ class MailNotificationOutboxRepository(
     next_attempt_at,
     locked_at,
     telegram_message_id,
+    summary_active,
     last_error,
     created_at,
     updated_at
@@ -297,6 +307,167 @@ class MailNotificationOutboxRepository(
             incrementAttempts = false,
             now = now,
         )
+    }
+
+    @Synchronized
+    fun completeDelivery(
+        item: MailOutboxItem,
+        telegramMessageId: Long,
+        now: Instant = Instant.now(),
+    ) {
+        require(telegramMessageId > 0) {
+            "Telegram message ID must be greater than zero"
+        }
+
+        openConnection().use { connection ->
+            connection.autoCommit = false
+
+            try {
+                markDeliverySent(
+                    connection = connection,
+                    id = item.id,
+                    telegramMessageId = telegramMessageId,
+                    summaryActive =
+                        item.operation ==
+                                MailOutboxOperation.SEND_NOTIFICATION,
+                    now = now,
+                )
+
+                if (
+                    item.operation ==
+                    MailOutboxOperation.SEND_NOTIFICATION &&
+                    item.emailMetadata != null
+                ) {
+                    enqueueEnrichment(
+                        connection = connection,
+                        item = item,
+                        now = now,
+                    )
+                }
+
+                connection.commit()
+            } catch (exception: Exception) {
+                runCatching {
+                    connection.rollback()
+                }
+
+                throw exception
+            }
+        }
+    }
+
+    @Synchronized
+    fun markSummaryInactive(
+        accountKey: String,
+        uidValidity: Long,
+        uid: Long,
+        now: Instant = Instant.now(),
+    ): Boolean {
+        val sql =
+            """
+        UPDATE mail_notification_outbox
+        SET
+            summary_active = 0,
+            updated_at = ?
+        WHERE account_key = ?
+          AND uid_validity = ?
+          AND uid = ?
+          AND operation = ?
+          AND status = ?
+        """.trimIndent()
+
+        openConnection().use { connection ->
+            connection.prepareStatement(sql).use { statement ->
+                statement.setLong(
+                    1,
+                    now.toEpochMilli(),
+                )
+                statement.setString(
+                    2,
+                    accountKey,
+                )
+                statement.setLong(
+                    3,
+                    uidValidity,
+                )
+                statement.setLong(
+                    4,
+                    uid,
+                )
+                statement.setString(
+                    5,
+                    MailOutboxOperation.SEND_NOTIFICATION.name,
+                )
+                statement.setString(
+                    6,
+                    MailOutboxStatus.SENT.name,
+                )
+
+                return statement.executeUpdate() == 1
+            }
+        }
+    }
+
+    @Synchronized
+    fun markSummaryReady(
+        accountKey: String,
+        uidValidity: Long,
+        uid: Long,
+        telegramMessageId: Long,
+        now: Instant = Instant.now(),
+    ): Boolean {
+        require(telegramMessageId > 0) {
+            "Telegram message ID must be greater than zero"
+        }
+
+        val sql =
+            """
+        UPDATE mail_notification_outbox
+        SET
+            telegram_message_id = ?,
+            summary_active = 1,
+            updated_at = ?
+        WHERE account_key = ?
+          AND uid_validity = ?
+          AND uid = ?
+          AND operation = ?
+          AND status = ?
+        """.trimIndent()
+
+        openConnection().use { connection ->
+            connection.prepareStatement(sql).use { statement ->
+                statement.setLong(
+                    1,
+                    telegramMessageId,
+                )
+                statement.setLong(
+                    2,
+                    now.toEpochMilli(),
+                )
+                statement.setString(
+                    3,
+                    accountKey,
+                )
+                statement.setLong(
+                    4,
+                    uidValidity,
+                )
+                statement.setLong(
+                    5,
+                    uid,
+                )
+                statement.setString(
+                    6,
+                    MailOutboxOperation.SEND_NOTIFICATION.name,
+                )
+                statement.setString(
+                    7,
+                    MailOutboxStatus.SENT.name,
+                )
+
+                return statement.executeUpdate() == 1
+            }
+        }
     }
 
     @Synchronized
@@ -419,10 +590,11 @@ SELECT
     next_attempt_at,
     locked_at,
     telegram_message_id,
+    summary_active,
     last_error,
     created_at,
     updated_at
-            FROM mail_notification_outbox
+FROM mail_notification_outbox
             WHERE account_key = ?
               AND uid_validity = ?
               AND uid = ?
@@ -464,6 +636,155 @@ SELECT
                     return result.getLong("item_count")
                 }
             }
+        }
+    }
+
+    private fun markDeliverySent(
+        connection: Connection,
+        id: Long,
+        telegramMessageId: Long,
+        summaryActive: Boolean,
+        now: Instant,
+    ) {
+        val sql =
+            """
+        UPDATE mail_notification_outbox
+        SET
+            status = ?,
+            locked_at = NULL,
+            telegram_message_id = ?,
+            summary_active = ?,
+            last_error = NULL,
+            updated_at = ?
+        WHERE id = ?
+          AND status = ?
+        """.trimIndent()
+
+        connection.prepareStatement(sql).use { statement ->
+            statement.setString(
+                1,
+                MailOutboxStatus.SENT.name,
+            )
+            statement.setLong(
+                2,
+                telegramMessageId,
+            )
+            statement.setInt(
+                3,
+                if (summaryActive) 1 else 0,
+            )
+            statement.setLong(
+                4,
+                now.toEpochMilli(),
+            )
+            statement.setLong(
+                5,
+                id,
+            )
+            statement.setString(
+                6,
+                MailOutboxStatus.PROCESSING.name,
+            )
+
+            check(statement.executeUpdate() == 1) {
+                "Outbox item $id is not in PROCESSING state"
+            }
+        }
+    }
+
+    private fun enqueueEnrichment(
+        connection: Connection,
+        item: MailOutboxItem,
+        now: Instant,
+    ) {
+        val metadata = requireNotNull(
+            item.emailMetadata,
+        )
+
+        val timestamp = now.toEpochMilli()
+        val sql =
+            """
+        INSERT OR IGNORE INTO mail_notification_outbox (
+            account_key,
+            account_code,
+            uid_validity,
+            uid,
+            sender,
+            subject,
+            sent_at,
+            received_at,
+            operation,
+            status,
+            attempts,
+            next_attempt_at,
+            locked_at,
+            telegram_message_id,
+            summary_active,
+            last_error,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?,
+            NULL, NULL, 0, NULL, ?, ?
+        )
+        """.trimIndent()
+
+        connection.prepareStatement(sql).use { statement ->
+            statement.setString(
+                1,
+                item.accountKey,
+            )
+            statement.setString(
+                2,
+                item.accountCode,
+            )
+            statement.setLong(
+                3,
+                item.uidValidity,
+            )
+            statement.setLong(
+                4,
+                item.uid,
+            )
+            statement.setString(
+                5,
+                metadata.from,
+            )
+            statement.setString(
+                6,
+                metadata.subject,
+            )
+            statement.setNullableInstant(
+                parameterIndex = 7,
+                value = metadata.sentAt,
+            )
+            statement.setNullableInstant(
+                parameterIndex = 8,
+                value = metadata.receivedAt,
+            )
+            statement.setString(
+                9,
+                MailOutboxOperation.ENRICH_NOTIFICATION.name,
+            )
+            statement.setString(
+                10,
+                MailOutboxStatus.PENDING.name,
+            )
+            statement.setLong(
+                11,
+                timestamp,
+            )
+            statement.setLong(
+                12,
+                timestamp,
+            )
+            statement.setLong(
+                13,
+                timestamp,
+            )
+
+            statement.executeUpdate()
         }
     }
 
@@ -637,6 +958,7 @@ SELECT
             ),
             lockedAt = getNullableInstant("locked_at"),
             telegramMessageId = telegramMessageId,
+            summaryActive = getInt("summary_active") == 1,
             lastError = getString("last_error"),
             createdAt = Instant.ofEpochMilli(
                 getLong("created_at"),

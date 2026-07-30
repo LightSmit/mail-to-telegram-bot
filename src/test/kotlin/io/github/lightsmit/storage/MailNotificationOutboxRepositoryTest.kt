@@ -221,6 +221,151 @@ class MailNotificationOutboxRepositoryTest {
         )
     }
 
+    @Test
+    fun `completed notification atomically schedules enrichment`() {
+        val repository = createRepository()
+        val now = Instant.parse(
+            "2026-07-30T12:00:00Z",
+        )
+
+        repository.enqueue(
+            accountKey = "imap.mail.ru:user@example.com",
+            accountCode = "abcdef123456",
+            uidValidity = 1_100,
+            uid = 1_200,
+            emailMetadata = testEmailMetadata,
+            now = now,
+        )
+
+        val notification = assertNotNull(
+            repository.claimNextDue(now),
+        )
+
+        repository.completeDelivery(
+            item = notification,
+            telegramMessageId = 1_300,
+            now = now.plusSeconds(1),
+        )
+
+        val sentNotification = assertNotNull(
+            repository.find(
+                accountKey = notification.accountKey,
+                uidValidity = notification.uidValidity,
+                uid = notification.uid,
+                operation =
+                    MailOutboxOperation.SEND_NOTIFICATION,
+            ),
+        )
+
+        assertEquals(
+            MailOutboxStatus.SENT,
+            sentNotification.status,
+        )
+        assertEquals(
+            1_300L,
+            sentNotification.telegramMessageId,
+        )
+        assertTrue(
+            sentNotification.summaryActive,
+        )
+
+        val enrichment = assertNotNull(
+            repository.claimNextDue(
+                now.plusSeconds(1),
+            ),
+        )
+
+        assertEquals(
+            MailOutboxOperation.ENRICH_NOTIFICATION,
+            enrichment.operation,
+        )
+        assertEquals(
+            MailOutboxStatus.PROCESSING,
+            enrichment.status,
+        )
+        assertEquals(
+            testEmailMetadata,
+            enrichment.emailMetadata,
+        )
+        assertFalse(
+            enrichment.summaryActive,
+        )
+    }
+
+    @Test
+    fun `summary state survives repository reads`() {
+        val repository = createRepository()
+        val now = Instant.parse(
+            "2026-07-30T12:00:00Z",
+        )
+
+        repository.enqueue(
+            accountKey = "imap.mail.ru:user@example.com",
+            accountCode = "abcdef123456",
+            uidValidity = 1_400,
+            uid = 1_500,
+            emailMetadata = testEmailMetadata,
+            now = now,
+        )
+
+        val notification = assertNotNull(
+            repository.claimNextDue(now),
+        )
+
+        repository.completeDelivery(
+            item = notification,
+            telegramMessageId = 1_600,
+            now = now.plusSeconds(1),
+        )
+
+        assertTrue(
+            repository.markSummaryInactive(
+                accountKey = notification.accountKey,
+                uidValidity = notification.uidValidity,
+                uid = notification.uid,
+                now = now.plusSeconds(2),
+            ),
+        )
+
+        val inactive = assertNotNull(
+            repository.find(
+                accountKey = notification.accountKey,
+                uidValidity = notification.uidValidity,
+                uid = notification.uid,
+            ),
+        )
+
+        assertFalse(
+            inactive.summaryActive,
+        )
+
+        assertTrue(
+            repository.markSummaryReady(
+                accountKey = notification.accountKey,
+                uidValidity = notification.uidValidity,
+                uid = notification.uid,
+                telegramMessageId = 1_601,
+                now = now.plusSeconds(3),
+            ),
+        )
+
+        val active = assertNotNull(
+            repository.find(
+                accountKey = notification.accountKey,
+                uidValidity = notification.uidValidity,
+                uid = notification.uid,
+            ),
+        )
+
+        assertTrue(
+            active.summaryActive,
+        )
+        assertEquals(
+            1_601L,
+            active.telegramMessageId,
+        )
+    }
+
     private fun createRepository(): MailNotificationOutboxRepository {
         val directory = createTempDirectory("mail-outbox-test-")
         return MailNotificationOutboxRepository(
