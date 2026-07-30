@@ -69,6 +69,9 @@ class MailForwardingService(
     private val textViewMessageIds =
         ConcurrentHashMap<String, List<Long>>()
 
+    private val summaryMessageIds =
+        ConcurrentHashMap<String, Long>()
+
     private val dateFormatter = DateTimeFormatter
         .ofPattern("dd.MM.yyyy, HH:mm")
         .withZone(ZoneId.systemDefault())
@@ -87,7 +90,8 @@ class MailForwardingService(
 
         val account = accountsByKey[item.accountKey]
             ?: throw PermanentMailDeliveryException(
-                "Configured mail account no longer exists: " + item.accountKey,
+                "Configured mail account no longer exists: " +
+                        item.accountKey,
             )
 
         val actualAccountCode =
@@ -99,28 +103,47 @@ class MailForwardingService(
             )
         }
 
-        val message = contentLoader.get(
+        val emailKey = interactiveEmailKey(
             account = account,
             uidValidity = item.uidValidity,
             uid = item.uid,
-        ) ?: throw PermanentMailDeliveryException(
-            "Email UID ${item.uid} is no longer available " + "in mailbox ${account.username}",
         )
 
-        val telegramMessageId =
+        val metadata = item.emailMetadata
+
+        val telegramMessageId = if (metadata == null) {
+            deliverLegacyNotification(
+                account = account,
+                item = item,
+            )
+        } else {
             telegramControlClient.sendMessageWithButtons(
                 chatId = telegramChatId,
-                text = formatNotification(
+                text = formatPendingNotification(
                     account = account,
-                    message = message,
+                    metadata = metadata,
                 ),
-                buttons = summaryButtons(
+                buttons = pendingSummaryButtons(
                     account = account,
-                    message = message,
                     uidValidity = item.uidValidity,
                     uid = item.uid,
                 ),
             )
+        }
+
+        summaryMessageIds[emailKey] = telegramMessageId
+
+        if (metadata != null) {
+            scope.launch {
+                enrichSummaryCard(
+                    account = account,
+                    uidValidity = item.uidValidity,
+                    uid = item.uid,
+                    emailKey = emailKey,
+                    telegramMessageId = telegramMessageId,
+                )
+            }
+        }
 
         logger.info(
             "Delivered outbox item {} for email UID {} from mailbox {}",
@@ -130,6 +153,124 @@ class MailForwardingService(
         )
 
         return telegramMessageId
+    }
+
+    private suspend fun deliverLegacyNotification(
+        account: MailAccountConfig,
+        item: MailOutboxItem,
+    ): Long {
+        val message = contentLoader.get(
+            account = account,
+            uidValidity = item.uidValidity,
+            uid = item.uid,
+        ) ?: throw PermanentMailDeliveryException(
+            "Email UID ${item.uid} is no longer available " +
+                    "in mailbox ${account.username}",
+        )
+
+        return telegramControlClient.sendMessageWithButtons(
+            chatId = telegramChatId,
+            text = formatNotification(
+                account = account,
+                message = message,
+            ),
+            buttons = summaryButtons(
+                account = account,
+                message = message,
+                uidValidity = item.uidValidity,
+                uid = item.uid,
+            ),
+        )
+    }
+
+    private suspend fun enrichSummaryCard(
+        account: MailAccountConfig,
+        uidValidity: Long,
+        uid: Long,
+        emailKey: String,
+        telegramMessageId: Long,
+    ) {
+        val message = try {
+            contentLoader.get(
+                account = account,
+                uidValidity = uidValidity,
+                uid = uid,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn(
+                "Failed to load full content for email UID {} from mailbox {}: {}",
+                uid,
+                account.username,
+                exception.javaClass.simpleName,
+            )
+            return
+        }
+
+        if (message == null) {
+            logger.warn(
+                "Email UID {} from mailbox {} is no longer available for card enrichment",
+                uid,
+                account.username,
+            )
+            return
+        }
+
+        navigationMutex.withLock {
+            if (summaryMessageIds[emailKey] != telegramMessageId) {
+                return@withLock
+            }
+
+            try {
+                telegramControlClient.editMessageWithButtons(
+                    chatId = telegramChatId,
+                    messageId = telegramMessageId,
+                    text = formatNotification(
+                        account = account,
+                        message = message,
+                    ),
+                    buttons = summaryButtons(
+                        account = account,
+                        message = message,
+                        uidValidity = uidValidity,
+                        uid = uid,
+                    ),
+                )
+
+                logger.info(
+                    "Enriched Telegram card for email UID {} from mailbox {}",
+                    uid,
+                    account.username,
+                )
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: TelegramApiException) {
+                val harmless =
+                    exception.description.contains(
+                        other = "message is not modified",
+                        ignoreCase = true,
+                    ) ||
+                            exception.description.contains(
+                                other = "message to edit not found",
+                                ignoreCase = true,
+                            )
+
+                if (!harmless) {
+                    logger.warn(
+                        "Failed to enrich Telegram card for email UID {}: {}",
+                        uid,
+                        exception.description,
+                    )
+                }
+            } catch (exception: Exception) {
+                logger.warn(
+                    "Failed to enrich Telegram card for email UID {}: {}",
+                    uid,
+                    exception.javaClass.simpleName,
+                )
+            }
+        }
     }
 
     suspend fun processAccount(
@@ -158,6 +299,17 @@ class MailForwardingService(
         uid: Long,
         sourceMessageId: Long,
     ) {
+        val emailKey = interactiveEmailKey(
+            account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
+        summaryMessageIds.remove(
+            emailKey,
+            sourceMessageId,
+        )
+
         val message = loadEmailOrNotify(
             account = account,
             expectedUidValidity = expectedUidValidity,
@@ -172,12 +324,6 @@ class MailForwardingService(
         val buttons = textViewButtons(
             account = account,
             message = message,
-            uidValidity = expectedUidValidity,
-            uid = uid,
-        )
-
-        val emailKey = interactiveEmailKey(
-            account = account,
             uidValidity = expectedUidValidity,
             uid = uid,
         )
@@ -257,12 +403,14 @@ class MailForwardingService(
                     text = summaryText,
                     buttons = buttons,
                 )
+                summaryMessageIds[emailKey] = sourceMessageId
             } else {
-                telegramControlClient.sendMessageWithButtons(
-                    chatId = telegramChatId,
-                    text = summaryText,
-                    buttons = buttons,
-                )
+                val summaryMessageId =
+                    telegramControlClient.sendMessageWithButtons(
+                        chatId = telegramChatId,
+                        text = summaryText,
+                        buttons = buttons,
+                    )
 
                 buildSet {
                     add(sourceMessageId)
@@ -270,6 +418,7 @@ class MailForwardingService(
                 }.forEach { messageId ->
                     deleteMessageSafely(messageId)
                 }
+                summaryMessageIds[emailKey] = summaryMessageId
             }
         }
 
@@ -606,6 +755,33 @@ class MailForwardingService(
         )
     }
 
+    private fun pendingSummaryButtons(
+        account: MailAccountConfig,
+        uidValidity: Long,
+        uid: Long,
+    ): List<TelegramInlineButton> {
+        return listOf(
+            TelegramInlineButton(
+                text = "📄 Текст",
+                callbackData = MailViewCallbackCodec.encode(
+                    action = MailViewAction.TEXT,
+                    account = account,
+                    uidValidity = uidValidity,
+                    uid = uid,
+                ),
+            ),
+            TelegramInlineButton(
+                text = "📎 Вложения",
+                callbackData = MailViewCallbackCodec.encode(
+                    action = MailViewAction.ATTACHMENTS,
+                    account = account,
+                    uidValidity = uidValidity,
+                    uid = uid,
+                ),
+            ),
+        )
+    }
+
     private fun summaryButtons(
         account: MailAccountConfig,
         message: EmailSummary,
@@ -677,6 +853,27 @@ class MailForwardingService(
                     ),
                 )
             }
+        }
+    }
+
+    private fun formatPendingNotification(
+        account: MailAccountConfig,
+        metadata: MailOutboxEmailMetadata,
+    ): String {
+        val messageDate = formatMessageDate(
+            sentAt = metadata.sentAt,
+            receivedAt = metadata.receivedAt,
+        )
+
+        return buildString {
+            appendLine("📨 Новое письмо")
+            appendLine()
+            appendLine("📬 Ящик: ${account.name}")
+            appendLine("📧 Кому: ${account.username}")
+            appendLine("👤 От: ${metadata.from}")
+            appendLine("📝 Тема: ${metadata.subject}")
+            appendLine("🕒 Дата: $messageDate")
+            append("📎 Вложения: проверяются…")
         }
     }
 
@@ -772,7 +969,17 @@ class MailForwardingService(
     private fun formatMessageDate(
         message: EmailSummary,
     ): String {
-        return (message.sentAt ?: message.receivedAt)
+        return formatMessageDate(
+            sentAt = message.sentAt,
+            receivedAt = message.receivedAt,
+        )
+    }
+
+    private fun formatMessageDate(
+        sentAt: Instant?,
+        receivedAt: Instant?,
+    ): String {
+        return (sentAt ?: receivedAt)
             ?.let(dateFormatter::format)
             ?: "неизвестна"
     }
