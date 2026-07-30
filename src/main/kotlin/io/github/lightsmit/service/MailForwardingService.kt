@@ -3,6 +3,9 @@ package io.github.lightsmit.service
 import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.mail.EmailSummary
 import io.github.lightsmit.mail.ImapMailClient
+import io.github.lightsmit.storage.MailNotificationOutboxRepository
+import io.github.lightsmit.storage.MailOutboxItem
+import io.github.lightsmit.storage.MailOutboxOperation
 import io.github.lightsmit.storage.MailStateRepository
 import io.github.lightsmit.telegram.MailViewAction
 import io.github.lightsmit.telegram.MailViewCallbackCodec
@@ -15,7 +18,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -28,24 +30,32 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
 
-private data class MailNotificationTask(
-    val account: MailAccountConfig,
-    val accountKey: String,
-    val uidValidity: Long,
-    val message: EmailSummary,
-)
-
 class MailForwardingService(
+    accounts: List<MailAccountConfig>,
     private val imapClient: ImapMailClient,
     private val telegramControlClient: TelegramClient,
     private val telegramMediaClient: TelegramClient,
     private val telegramChatId: Long,
     private val stateRepository: MailStateRepository,
+    private val outboxRepository: MailNotificationOutboxRepository,
     private val contentLoader: EmailContentLoader,
 ) : AutoCloseable {
 
     private val logger =
         LoggerFactory.getLogger(MailForwardingService::class.java)
+
+    private val accountsByKey =
+        accounts.associateBy(::buildAccountKey)
+
+    init {
+        require(accounts.isNotEmpty()) {
+            "At least one mail account is required"
+        }
+
+        require(accountsByKey.size == accounts.size) {
+            "Mail account host and username combinations must be unique"
+        }
+    }
 
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO,
@@ -54,25 +64,72 @@ class MailForwardingService(
     private val navigationMutex = Mutex()
     private val accountProcessingLocks =
         ConcurrentHashMap<String, Mutex>()
-    private val claimedUids =
-        ConcurrentHashMap<String, Long>()
-    private val notificationChannels =
-        ConcurrentHashMap<String, Channel<MailNotificationTask>>()
-    private val pendingNotifications =
-        ConcurrentHashMap.newKeySet<String>()
 
-    /**
-     * For long letters Telegram can create several text messages.
-     * The callback button is attached to the last one. This map lets
-     * the Back action remove the whole rendered letter, not only the
-     * message that contains the buttons.
-     */
     private val textViewMessageIds =
         ConcurrentHashMap<String, List<Long>>()
 
     private val dateFormatter = DateTimeFormatter
         .ofPattern("dd.MM.yyyy HH:mm:ss")
         .withZone(ZoneId.systemDefault())
+
+    suspend fun deliverOutboxNotification(
+        item: MailOutboxItem,
+    ): Long {
+        if (
+            item.operation !=
+            MailOutboxOperation.SEND_NOTIFICATION
+        ) {
+            throw PermanentMailDeliveryException(
+                "Unsupported outbox operation: ${item.operation}",
+            )
+        }
+
+        val account = accountsByKey[item.accountKey]
+            ?: throw PermanentMailDeliveryException(
+                "Configured mail account no longer exists: " + item.accountKey,
+            )
+
+        val actualAccountCode =
+            MailViewCallbackCodec.accountCode(account)
+
+        if (actualAccountCode != item.accountCode) {
+            throw PermanentMailDeliveryException(
+                "Mail account code does not match the current configuration",
+            )
+        }
+
+        val message = contentLoader.get(
+            account = account,
+            uidValidity = item.uidValidity,
+            uid = item.uid,
+        ) ?: throw PermanentMailDeliveryException(
+            "Email UID ${item.uid} is no longer available " + "in mailbox ${account.username}",
+        )
+
+        val telegramMessageId =
+            telegramControlClient.sendMessageWithButtons(
+                chatId = telegramChatId,
+                text = formatNotification(
+                    account = account,
+                    message = message,
+                    attachmentsKnown = true,
+                ),
+                buttons = summaryButtons(
+                    account = account,
+                    uidValidity = item.uidValidity,
+                    uid = item.uid,
+                ),
+            )
+
+        logger.info(
+            "Delivered outbox item {} for email UID {} from mailbox {}",
+            item.id,
+            item.uid,
+            account.username,
+        )
+
+        return telegramMessageId
+    }
 
     suspend fun processAccount(
         account: MailAccountConfig,
@@ -268,8 +325,7 @@ class MailForwardingService(
                 appendLine("⚠️ Не удалось открыть письмо")
                 appendLine()
                 append(
-                    "Письмо могло быть удалено или перемещено " +
-                        "из папки «Входящие».",
+                    "Письмо могло быть удалено или перемещено " + "из папки «Входящие».",
                 )
             },
         )
@@ -354,18 +410,35 @@ class MailForwardingService(
             return
         }
 
-        val claimKey = "$accountKey:${batch.uidValidity}"
-        var lastClaimedUid = maxOf(
-            state.lastUid,
-            claimedUids[claimKey] ?: 0L,
-        )
+        val accountCode =
+            MailViewCallbackCodec.accountCode(account)
 
-        for (message in batch.messages) {
-            if (message.uid <= lastClaimedUid) {
+        var lastScheduledUid = state.lastUid
+
+        for (message in batch.messages.sortedBy { item -> item.uid }) {
+            if (message.uid <= lastScheduledUid) {
                 continue
             }
 
-            logDeliveryTiming(account, message)
+            logDeliveryTiming(
+                account = account,
+                message = message,
+            )
+
+            val inserted = outboxRepository.enqueue(
+                accountKey = accountKey,
+                accountCode = accountCode,
+                uidValidity = batch.uidValidity,
+                uid = message.uid,
+            )
+
+            lastScheduledUid = message.uid
+
+            stateRepository.save(
+                accountKey = accountKey,
+                uidValidity = batch.uidValidity,
+                lastUid = lastScheduledUid,
+            )
 
             contentLoader.prefetch(
                 account = account,
@@ -373,17 +446,19 @@ class MailForwardingService(
                 uid = message.uid,
             )
 
-            enqueueNotification(
-                MailNotificationTask(
-                    account = account,
-                    accountKey = accountKey,
-                    uidValidity = batch.uidValidity,
-                    message = message,
-                ),
-            )
-
-            claimedUids[claimKey] = message.uid
-            lastClaimedUid = message.uid
+            if (inserted) {
+                logger.info(
+                    "Enqueued notification for email UID {} from mailbox {}",
+                    message.uid,
+                    account.username,
+                )
+            } else {
+                logger.debug(
+                    "Notification for email UID {} from mailbox {} " + "already exists in outbox",
+                    message.uid,
+                    account.username,
+                )
+            }
         }
     }
 
@@ -437,110 +512,6 @@ class MailForwardingService(
             "Initialized mailbox {} at UID {}",
             account.username,
             cursor.latestUid,
-        )
-    }
-
-    private suspend fun enqueueNotification(
-        task: MailNotificationTask,
-    ) {
-        val notificationKey = notificationKey(task)
-        if (!pendingNotifications.add(notificationKey)) {
-            return
-        }
-
-        val channel = notificationChannels.computeIfAbsent(task.accountKey) {
-            Channel<MailNotificationTask>(Channel.UNLIMITED).also { newChannel ->
-                scope.launch {
-                    processNotificationChannel(newChannel)
-                }
-            }
-        }
-
-        channel.send(task)
-    }
-
-    private suspend fun processNotificationChannel(
-        channel: Channel<MailNotificationTask>,
-    ) {
-        for (task in channel) {
-            val key = notificationKey(task)
-            var attempt = 0
-
-            while (true) {
-                try {
-                    val fullMessage = contentLoader.get(
-                        account = task.account,
-                        uidValidity = task.uidValidity,
-                        uid = task.message.uid,
-                    )
-
-                    val notificationMessage = fullMessage
-                        ?: task.message
-
-                    telegramControlClient.sendMessageWithButtons(
-                        chatId = telegramChatId,
-                        text = formatNotification(
-                            account = task.account,
-                            message = notificationMessage,
-                            attachmentsKnown = fullMessage != null,
-                        ),
-                        buttons = summaryButtons(
-                            account = task.account,
-                            uidValidity = task.uidValidity,
-                            uid = task.message.uid,
-                        ),
-                    )
-
-                    advanceStateAfterNotification(task)
-                    pendingNotifications.remove(key)
-
-                    logger.info(
-                        "Sent notification for email UID {} from mailbox {}",
-                        task.message.uid,
-                        task.account.username,
-                    )
-                    break
-                } catch (exception: CancellationException) {
-                    throw exception
-                } catch (exception: Exception) {
-                    attempt++
-                    val retrySeconds = minOf(
-                        30L,
-                        2L shl minOf(attempt, 4),
-                    )
-
-                    logger.warn(
-                        "Notification for email UID {} from mailbox {} failed: {}. " +
-                            "Retrying in {} seconds",
-                        task.message.uid,
-                        task.account.username,
-                        exception.javaClass.simpleName,
-                        retrySeconds,
-                    )
-                    delay(retrySeconds * 1_000L)
-                }
-            }
-        }
-    }
-
-    private fun advanceStateAfterNotification(
-        task: MailNotificationTask,
-    ) {
-        val current = stateRepository.find(task.accountKey)
-        if (
-            current != null &&
-            current.uidValidity != task.uidValidity
-        ) {
-            return
-        }
-
-        stateRepository.save(
-            accountKey = task.accountKey,
-            uidValidity = task.uidValidity,
-            lastUid = maxOf(
-                current?.lastUid ?: 0L,
-                task.message.uid,
-            ),
         )
     }
 
@@ -692,8 +663,7 @@ class MailForwardingService(
             .trim()
             .takeIf { value ->
                 value.isNotBlank() &&
-                    value.length <= 15 &&
-                    value.none(Char::isWhitespace)
+                        value.length <= 15 && value.none(Char::isWhitespace)
             }
 
         return extension
@@ -782,19 +752,12 @@ class MailForwardingService(
             }
 
         logger.info(
-            "Email UID {} from mailbox {}: mail transport delay={} s, " +
-                "bot detection delay={} s",
+            "Email UID {} from mailbox {}: mail transport delay={} s, " + "bot detection delay={} s",
             message.uid,
             account.username,
             transportSeconds?.toString() ?: "unknown",
             detectionSeconds?.toString() ?: "unknown",
         )
-    }
-
-    private fun notificationKey(
-        task: MailNotificationTask,
-    ): String {
-        return "${task.accountKey}:${task.uidValidity}:${task.message.uid}"
     }
 
     private fun interactiveEmailKey(
@@ -812,9 +775,6 @@ class MailForwardingService(
     }
 
     override fun close() {
-        notificationChannels.values.forEach { channel ->
-            channel.close()
-        }
         scope.cancel()
     }
 }
