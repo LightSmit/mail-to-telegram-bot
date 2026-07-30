@@ -82,4 +82,21 @@ class TelegramDeliveryFailureClassifierTest {
             retry.delay,
         )
     }
+    @Test
+    fun `permanent mail delivery failure is dead`() {
+        val decision = classifier.classify(
+            exception = PermanentMailDeliveryException(
+                "Configured mail account no longer exists",
+            ),
+            failedAttempts = 1,
+        )
+
+        val dead =
+            assertIs<DeliveryFailureDecision.Dead>(decision)
+
+        assertEquals(
+            "Configured mail account no longer exists",
+            dead.reason,
+        )
+    }
 }

@@ -18,6 +18,10 @@ sealed interface DeliveryFailureDecision {
     ) : DeliveryFailureDecision
 }
 
+class PermanentMailDeliveryException(
+    message: String,
+) : RuntimeException(message)
+
 class TelegramDeliveryFailureClassifier(
     private val baseRetryDelay: Duration = Duration.ofSeconds(5),
     private val maximumRetryDelay: Duration = Duration.ofMinutes(15),
@@ -44,6 +48,13 @@ class TelegramDeliveryFailureClassifier(
         }
 
         return when (exception) {
+            is PermanentMailDeliveryException -> {
+                DeliveryFailureDecision.Dead(
+                    reason = exception.message
+                        ?: "Permanent mail delivery failure",
+                )
+            }
+
             is TelegramTransportException -> {
                 DeliveryFailureDecision.Retry(
                     reason = exception.message

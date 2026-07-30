@@ -27,6 +27,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
+import io.github.lightsmit.storage.MailOutboxItem
+import io.github.lightsmit.storage.MailOutboxOperation
 
 private data class MailNotificationTask(
     val account: MailAccountConfig,
@@ -36,6 +38,7 @@ private data class MailNotificationTask(
 )
 
 class MailForwardingService(
+    accounts: List<MailAccountConfig>,
     private val imapClient: ImapMailClient,
     private val telegramControlClient: TelegramClient,
     private val telegramMediaClient: TelegramClient,
@@ -46,6 +49,19 @@ class MailForwardingService(
 
     private val logger =
         LoggerFactory.getLogger(MailForwardingService::class.java)
+
+    private val accountsByKey =
+        accounts.associateBy(::buildAccountKey)
+
+    init {
+        require(accounts.isNotEmpty()) {
+            "At least one mail account is required"
+        }
+
+        require(accountsByKey.size == accounts.size) {
+            "Mail account host and username combinations must be unique"
+        }
+    }
 
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO,
@@ -73,6 +89,67 @@ class MailForwardingService(
     private val dateFormatter = DateTimeFormatter
         .ofPattern("dd.MM.yyyy HH:mm:ss")
         .withZone(ZoneId.systemDefault())
+
+    suspend fun deliverOutboxNotification(
+        item: MailOutboxItem,
+    ): Long {
+        if (
+            item.operation !=
+            MailOutboxOperation.SEND_NOTIFICATION
+        ) {
+            throw PermanentMailDeliveryException(
+                "Unsupported outbox operation: ${item.operation}",
+            )
+        }
+
+        val account = accountsByKey[item.accountKey]
+            ?: throw PermanentMailDeliveryException(
+                "Configured mail account no longer exists: " +
+                        item.accountKey,
+            )
+
+        val actualAccountCode =
+            MailViewCallbackCodec.accountCode(account)
+
+        if (actualAccountCode != item.accountCode) {
+            throw PermanentMailDeliveryException(
+                "Mail account code does not match the current configuration",
+            )
+        }
+
+        val message = contentLoader.get(
+            account = account,
+            uidValidity = item.uidValidity,
+            uid = item.uid,
+        ) ?: throw PermanentMailDeliveryException(
+            "Email UID ${item.uid} is no longer available " +
+                    "in mailbox ${account.username}",
+        )
+
+        val telegramMessageId =
+            telegramControlClient.sendMessageWithButtons(
+                chatId = telegramChatId,
+                text = formatNotification(
+                    account = account,
+                    message = message,
+                    attachmentsKnown = true,
+                ),
+                buttons = summaryButtons(
+                    account = account,
+                    uidValidity = item.uidValidity,
+                    uid = item.uid,
+                ),
+            )
+
+        logger.info(
+            "Delivered outbox item {} for email UID {} from mailbox {}",
+            item.id,
+            item.uid,
+            account.username,
+        )
+
+        return telegramMessageId
+    }
 
     suspend fun processAccount(
         account: MailAccountConfig,
