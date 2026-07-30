@@ -1,0 +1,14 @@
+.git
+.github
+.gradle
+.idea
+build
+out
+data
+
+.env
+*.iml
+*.log
+
+README.md
+LICENSE
