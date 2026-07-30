@@ -39,7 +39,20 @@ import kotlinx.serialization.json.put
 class TelegramApiException(
     val description: String,
     val retryAfterSeconds: Int? = null,
-) : RuntimeException(description)
+    val errorCode: Int? = null,
+) : RuntimeException(
+    buildString {
+        append("Telegram API")
+
+        errorCode?.let { code ->
+            append(" error ")
+            append(code)
+        }
+
+        append(": ")
+        append(description)
+    },
+)
 
 class TelegramTransportException(
     operation: String,
@@ -484,6 +497,10 @@ class TelegramClient(
             ?.booleanOrNull == true
 
         if (!successful) {
+            val errorCode = root["error_code"]
+                ?.jsonPrimitive
+                ?.intOrNull
+
             val description = root["description"]
                 ?.jsonPrimitive
                 ?.contentOrNull
@@ -498,6 +515,7 @@ class TelegramClient(
             throw TelegramApiException(
                 description = description,
                 retryAfterSeconds = retryAfter,
+                errorCode = errorCode,
             )
         }
 
