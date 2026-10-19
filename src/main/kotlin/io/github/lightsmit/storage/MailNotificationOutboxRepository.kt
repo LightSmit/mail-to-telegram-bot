@@ -1,12 +1,9 @@
 package io.github.lightsmit.storage
 
-import java.nio.file.Files
-import java.nio.file.Path
+import kotlinx.coroutines.withContext
 import java.sql.Connection
-import java.sql.DriverManager
 import java.sql.ResultSet
 import java.time.Instant
-
 
 enum class MailOutboxOperation {
     SEND_NOTIFICATION,
@@ -47,25 +44,11 @@ data class MailOutboxItem(
     val updatedAt: Instant,
 )
 
-class MailNotificationOutboxRepository(
-    databasePath: Path,
-) {
-
-    private val databaseUrl: String
+class MailNotificationOutboxRepository {
 
     init {
-        val absolutePath = databasePath
-            .toAbsolutePath()
-            .normalize()
-
-        absolutePath.parent?.let(Files::createDirectories)
-        databaseUrl = "jdbc:sqlite:$absolutePath"
-
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.createStatement().use { statement ->
-                statement.execute("PRAGMA journal_mode = WAL")
-                statement.execute("PRAGMA synchronous = NORMAL")
-
                 statement.executeUpdate(
                     """
                 CREATE TABLE IF NOT EXISTS mail_notification_outbox (
@@ -95,31 +78,11 @@ class MailNotificationOutboxRepository(
                 )
             }
 
-            ensureColumn(
-                connection = connection,
-                columnName = "sender",
-                definition = "TEXT",
-            )
-            ensureColumn(
-                connection = connection,
-                columnName = "subject",
-                definition = "TEXT",
-            )
-            ensureColumn(
-                connection = connection,
-                columnName = "sent_at",
-                definition = "INTEGER",
-            )
-            ensureColumn(
-                connection = connection,
-                columnName = "received_at",
-                definition = "INTEGER",
-            )
-            ensureColumn(
-                connection = connection,
-                columnName = "summary_active",
-                definition = "INTEGER NOT NULL DEFAULT 0",
-            )
+            ensureColumn(connection, "sender", "TEXT")
+            ensureColumn(connection, "subject", "TEXT")
+            ensureColumn(connection, "sent_at", "INTEGER")
+            ensureColumn(connection, "received_at", "INTEGER")
+            ensureColumn(connection, "summary_active", "INTEGER NOT NULL DEFAULT 0")
 
             connection.createStatement().use { statement ->
                 statement.executeUpdate(
@@ -136,65 +99,32 @@ class MailNotificationOutboxRepository(
         }
     }
 
-    @Synchronized
-    fun enqueue(
+    suspend fun enqueue(
         accountKey: String,
         accountCode: String,
         uidValidity: Long,
         uid: Long,
         emailMetadata: MailOutboxEmailMetadata,
-        operation: MailOutboxOperation =
-            MailOutboxOperation.SEND_NOTIFICATION,
+        operation: MailOutboxOperation = MailOutboxOperation.SEND_NOTIFICATION,
         now: Instant = Instant.now(),
-    ): Boolean {
-        require(accountKey.isNotBlank()) {
-            "Outbox account key must not be blank"
-        }
-        require(accountCode.isNotBlank()) {
-            "Outbox account code must not be blank"
-        }
-        require(uidValidity > 0) {
-            "UIDVALIDITY must be greater than zero"
-        }
-        require(uid > 0) {
-            "UID must be greater than zero"
-        }
-        require(emailMetadata.from.isNotBlank()) {
-            "Email sender must not be blank"
-        }
-        require(emailMetadata.subject.isNotBlank()) {
-            "Email subject must not be blank"
-        }
+    ): Boolean = withContext(DatabaseManager.dispatcher) {
+        require(accountKey.isNotBlank()) { "Outbox account key must not be blank" }
+        require(accountCode.isNotBlank()) { "Outbox account code must not be blank" }
+        require(uidValidity > 0) { "UIDVALIDITY must be greater than zero" }
+        require(uid > 0) { "UID must be greater than zero" }
+        require(emailMetadata.from.isNotBlank()) { "Email sender must not be blank" }
+        require(emailMetadata.subject.isNotBlank()) { "Email subject must not be blank" }
 
         val timestamp = now.toEpochMilli()
-        val sql =
-            """
+        val sql = """
         INSERT OR IGNORE INTO mail_notification_outbox (
-            account_key,
-            account_code,
-            uid_validity,
-            uid,
-            sender,
-            subject,
-            sent_at,
-            received_at,
-            operation,
-            status,
-            attempts,
-            next_attempt_at,
-            locked_at,
-            telegram_message_id,
-            last_error,
-            created_at,
-            updated_at
-        )
-        VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?,
-            NULL, NULL, NULL, ?, ?
-        )
+            account_key, account_code, uid_validity, uid, sender, subject, sent_at, received_at,
+            operation, status, attempts, next_attempt_at, locked_at, telegram_message_id, summary_active,
+            last_error, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, ?, NULL, ?, ?)
         """.trimIndent()
 
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, accountKey)
                 statement.setString(2, accountCode)
@@ -202,71 +132,39 @@ class MailNotificationOutboxRepository(
                 statement.setLong(4, uid)
                 statement.setString(5, emailMetadata.from)
                 statement.setString(6, emailMetadata.subject)
-                statement.setNullableInstant(
-                    parameterIndex = 7,
-                    value = emailMetadata.sentAt,
-                )
-                statement.setNullableInstant(
-                    parameterIndex = 8,
-                    value = emailMetadata.receivedAt,
-                )
+                statement.setNullableInstant(7, emailMetadata.sentAt)
+                statement.setNullableInstant(8, emailMetadata.receivedAt)
                 statement.setString(9, operation.name)
-                statement.setString(
-                    10,
-                    MailOutboxStatus.PENDING.name,
-                )
+                statement.setString(10, MailOutboxStatus.PENDING.name)
                 statement.setLong(11, timestamp)
-                statement.setLong(12, timestamp)
+                statement.setInt(12, if (operation == MailOutboxOperation.SEND_NOTIFICATION) 1 else 0)
                 statement.setLong(13, timestamp)
+                statement.setLong(14, timestamp)
 
-                return statement.executeUpdate() == 1
+                statement.executeUpdate() == 1
             }
         }
     }
 
-    @Synchronized
-    fun claimNextDue(
-        now: Instant = Instant.now(),
-    ): MailOutboxItem? {
+    suspend fun claimNextDue(now: Instant = Instant.now()): MailOutboxItem? = withContext(DatabaseManager.dispatcher) {
         val timestamp = now.toEpochMilli()
-        val sql =
-            """
+        val sql = """
             UPDATE mail_notification_outbox
-            SET
-                status = ?,
-                locked_at = ?,
-                updated_at = ?
+            SET status = ?, locked_at = ?, updated_at = ?
             WHERE id = (
                 SELECT id
                 FROM mail_notification_outbox
-                WHERE status IN (?, ?)
-                  AND next_attempt_at <= ?
-                ORDER BY next_attempt_at ASC, id ASC
+                WHERE status IN (?, ?) AND next_attempt_at <= ?
+                ORDER BY 
+                    CASE WHEN operation = 'SEND_NOTIFICATION' THEN 0 ELSE 1 END ASC,
+                    next_attempt_at ASC, 
+                    id ASC
                 LIMIT 1
             )
-            RETURNING
-    id,
-    account_key,
-    account_code,
-    uid_validity,
-    uid,
-    sender,
-    subject,
-    sent_at,
-    received_at,
-    operation,
-    status,
-    attempts,
-    next_attempt_at,
-    locked_at,
-    telegram_message_id,
-    summary_active,
-    last_error,
-    created_at,
-    updated_at
-            """.trimIndent()
+            RETURNING *
+        """.trimIndent()
 
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, MailOutboxStatus.PROCESSING.name)
                 statement.setLong(2, timestamp)
@@ -276,28 +174,19 @@ class MailNotificationOutboxRepository(
                 statement.setLong(6, timestamp)
 
                 statement.executeQuery().use { result ->
-                    return if (result.next()) {
-                        result.toOutboxItem()
-                    } else {
-                        null
-                    }
+                    if (result.next()) result.toOutboxItem() else null
                 }
             }
         }
     }
 
-    @Synchronized
-    fun markSent(
+    suspend fun markSent(
         id: Long,
         telegramMessageId: Long,
         now: Instant = Instant.now(),
     ) {
-        require(id > 0) {
-            "Outbox ID must be greater than zero"
-        }
-        require(telegramMessageId > 0) {
-            "Telegram message ID must be greater than zero"
-        }
+        require(id > 0) { "Outbox ID must be greater than zero" }
+        require(telegramMessageId > 0) { "Telegram message ID must be greater than zero" }
 
         updateTerminalState(
             id = id,
@@ -309,196 +198,102 @@ class MailNotificationOutboxRepository(
         )
     }
 
-    @Synchronized
-    fun completeDelivery(
+    suspend fun completeDelivery(
         item: MailOutboxItem,
         telegramMessageId: Long,
         now: Instant = Instant.now(),
-    ) {
-        require(telegramMessageId > 0) {
-            "Telegram message ID must be greater than zero"
-        }
+    ) = withContext(DatabaseManager.dispatcher) {
+        require(telegramMessageId > 0) { "Telegram message ID must be greater than zero" }
 
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.autoCommit = false
-
             try {
-                markDeliverySent(
-                    connection = connection,
-                    id = item.id,
-                    telegramMessageId = telegramMessageId,
-                    summaryActive =
-                        item.operation ==
-                                MailOutboxOperation.SEND_NOTIFICATION,
-                    now = now,
-                )
-
-                if (
-                    item.operation ==
-                    MailOutboxOperation.SEND_NOTIFICATION &&
-                    item.emailMetadata != null
-                ) {
-                    enqueueEnrichment(
-                        connection = connection,
-                        item = item,
-                        now = now,
-                    )
+                markDeliverySent(connection, item.id, telegramMessageId, now)
+                if (item.operation == MailOutboxOperation.SEND_NOTIFICATION && item.emailMetadata != null) {
+                    enqueueEnrichment(connection, item, now)
                 }
-
                 connection.commit()
             } catch (exception: Exception) {
-                runCatching {
-                    connection.rollback()
-                }
-
+                runCatching { connection.rollback() }
                 throw exception
             }
         }
     }
 
-    @Synchronized
-    fun markSummaryInactive(
+    suspend fun markSummaryInactive(
         accountKey: String,
         uidValidity: Long,
         uid: Long,
         now: Instant = Instant.now(),
-    ): Boolean {
-        val sql =
-            """
+    ): Boolean = withContext(DatabaseManager.dispatcher) {
+        val sql = """
         UPDATE mail_notification_outbox
-        SET
-            summary_active = 0,
-            updated_at = ?
-        WHERE account_key = ?
-          AND uid_validity = ?
-          AND uid = ?
-          AND operation = ?
-          AND status = ?
+        SET summary_active = 0, updated_at = ?
+        WHERE account_key = ? AND uid_validity = ? AND uid = ? AND operation = ? AND status IN (?, ?)
         """.trimIndent()
 
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
-                statement.setLong(
-                    1,
-                    now.toEpochMilli(),
-                )
-                statement.setString(
-                    2,
-                    accountKey,
-                )
-                statement.setLong(
-                    3,
-                    uidValidity,
-                )
-                statement.setLong(
-                    4,
-                    uid,
-                )
-                statement.setString(
-                    5,
-                    MailOutboxOperation.SEND_NOTIFICATION.name,
-                )
-                statement.setString(
-                    6,
-                    MailOutboxStatus.SENT.name,
-                )
+                statement.setLong(1, now.toEpochMilli())
+                statement.setString(2, accountKey)
+                statement.setLong(3, uidValidity)
+                statement.setLong(4, uid)
+                statement.setString(5, MailOutboxOperation.SEND_NOTIFICATION.name)
+                statement.setString(6, MailOutboxStatus.PROCESSING.name)
+                statement.setString(7, MailOutboxStatus.SENT.name)
 
-                return statement.executeUpdate() == 1
+                statement.executeUpdate() == 1
             }
         }
     }
 
-    @Synchronized
-    fun markSummaryReady(
+    suspend fun markSummaryReady(
         accountKey: String,
         uidValidity: Long,
         uid: Long,
         telegramMessageId: Long,
         now: Instant = Instant.now(),
-    ): Boolean {
-        require(telegramMessageId > 0) {
-            "Telegram message ID must be greater than zero"
-        }
+    ): Boolean = withContext(DatabaseManager.dispatcher) {
+        require(telegramMessageId > 0) { "Telegram message ID must be greater than zero" }
 
-        val sql =
-            """
+        val sql = """
         UPDATE mail_notification_outbox
-        SET
-            telegram_message_id = ?,
-            summary_active = 1,
-            updated_at = ?
-        WHERE account_key = ?
-          AND uid_validity = ?
-          AND uid = ?
-          AND operation = ?
-          AND status = ?
+        SET telegram_message_id = ?, summary_active = 1, updated_at = ?
+        WHERE account_key = ? AND uid_validity = ? AND uid = ? AND operation = ? AND status IN (?, ?)
         """.trimIndent()
 
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
-                statement.setLong(
-                    1,
-                    telegramMessageId,
-                )
-                statement.setLong(
-                    2,
-                    now.toEpochMilli(),
-                )
-                statement.setString(
-                    3,
-                    accountKey,
-                )
-                statement.setLong(
-                    4,
-                    uidValidity,
-                )
-                statement.setLong(
-                    5,
-                    uid,
-                )
-                statement.setString(
-                    6,
-                    MailOutboxOperation.SEND_NOTIFICATION.name,
-                )
-                statement.setString(
-                    7,
-                    MailOutboxStatus.SENT.name,
-                )
+                statement.setLong(1, telegramMessageId)
+                statement.setLong(2, now.toEpochMilli())
+                statement.setString(3, accountKey)
+                statement.setLong(4, uidValidity)
+                statement.setLong(5, uid)
+                statement.setString(6, MailOutboxOperation.SEND_NOTIFICATION.name)
+                statement.setString(7, MailOutboxStatus.PROCESSING.name)
+                statement.setString(8, MailOutboxStatus.SENT.name)
 
-                return statement.executeUpdate() == 1
+                statement.executeUpdate() == 1
             }
         }
     }
 
-    @Synchronized
-    fun markRetry(
+    suspend fun markRetry(
         id: Long,
         nextAttemptAt: Instant,
         error: String,
         now: Instant = Instant.now(),
-    ) {
-        require(id > 0) {
-            "Outbox ID must be greater than zero"
-        }
-        require(!nextAttemptAt.isBefore(now)) {
-            "Next retry time must not be before the current time"
-        }
+    ) = withContext(DatabaseManager.dispatcher) {
+        require(id > 0) { "Outbox ID must be greater than zero" }
+        require(!nextAttemptAt.isBefore(now)) { "Next retry time must not be before the current time" }
 
-        val sql =
-            """
+        val sql = """
             UPDATE mail_notification_outbox
-            SET
-                status = ?,
-                attempts = attempts + 1,
-                next_attempt_at = ?,
-                locked_at = NULL,
-                last_error = ?,
-                updated_at = ?
-            WHERE id = ?
-              AND status = ?
-            """.trimIndent()
+            SET status = ?, attempts = attempts + 1, next_attempt_at = ?, locked_at = NULL, last_error = ?, updated_at = ?
+            WHERE id = ? AND status = ?
+        """.trimIndent()
 
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, MailOutboxStatus.RETRY.name)
                 statement.setLong(2, nextAttemptAt.toEpochMilli())
@@ -507,23 +302,17 @@ class MailNotificationOutboxRepository(
                 statement.setLong(5, id)
                 statement.setString(6, MailOutboxStatus.PROCESSING.name)
 
-                check(statement.executeUpdate() == 1) {
-                    "Outbox item $id is not in PROCESSING state"
-                }
+                check(statement.executeUpdate() == 1) { "Outbox item $id is not in PROCESSING state" }
             }
         }
     }
 
-    @Synchronized
-    fun markDead(
+    suspend fun markDead(
         id: Long,
         error: String,
         now: Instant = Instant.now(),
     ) {
-        require(id > 0) {
-            "Outbox ID must be greater than zero"
-        }
-
+        require(id > 0) { "Outbox ID must be greater than zero" }
         updateTerminalState(
             id = id,
             status = MailOutboxStatus.DEAD,
@@ -534,410 +323,170 @@ class MailNotificationOutboxRepository(
         )
     }
 
-    @Synchronized
-    fun recoverInterrupted(
-        now: Instant = Instant.now(),
-    ): Int {
-        val sql =
-            """
+    suspend fun recoverInterrupted(now: Instant = Instant.now()): Int = withContext(DatabaseManager.dispatcher) {
+        val sql = """
             UPDATE mail_notification_outbox
-            SET
-                status = ?,
-                next_attempt_at = ?,
-                locked_at = NULL,
-                last_error = COALESCE(
-                    last_error,
-                    'Recovered after application restart'
-                ),
-                updated_at = ?
+            SET status = ?, next_attempt_at = ?, locked_at = NULL, last_error = COALESCE(last_error, 'Recovered after application restart'), updated_at = ?
             WHERE status = ?
-            """.trimIndent()
+        """.trimIndent()
 
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 val timestamp = now.toEpochMilli()
                 statement.setString(1, MailOutboxStatus.RETRY.name)
                 statement.setLong(2, timestamp)
                 statement.setLong(3, timestamp)
                 statement.setString(4, MailOutboxStatus.PROCESSING.name)
-                return statement.executeUpdate()
+                statement.executeUpdate()
             }
         }
     }
 
-    @Synchronized
-    fun find(
+    suspend fun find(
         accountKey: String,
         uidValidity: Long,
         uid: Long,
         operation: MailOutboxOperation = MailOutboxOperation.SEND_NOTIFICATION,
-    ): MailOutboxItem? {
-        val sql =
-            """
-SELECT
-    id,
-    account_key,
-    account_code,
-    uid_validity,
-    uid,
-    sender,
-    subject,
-    sent_at,
-    received_at,
-    operation,
-    status,
-    attempts,
-    next_attempt_at,
-    locked_at,
-    telegram_message_id,
-    summary_active,
-    last_error,
-    created_at,
-    updated_at
-FROM mail_notification_outbox
-            WHERE account_key = ?
-              AND uid_validity = ?
-              AND uid = ?
-              AND operation = ?
-            """.trimIndent()
-
-        openConnection().use { connection ->
+    ): MailOutboxItem? = withContext(DatabaseManager.dispatcher) {
+        val sql = "SELECT * FROM mail_notification_outbox WHERE account_key = ? AND uid_validity = ? AND uid = ? AND operation = ?"
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, accountKey)
                 statement.setLong(2, uidValidity)
                 statement.setLong(3, uid)
                 statement.setString(4, operation.name)
-
                 statement.executeQuery().use { result ->
-                    return if (result.next()) {
-                        result.toOutboxItem()
-                    } else {
-                        null
-                    }
+                    if (result.next()) result.toOutboxItem() else null
                 }
             }
         }
     }
 
-    @Synchronized
-    fun countByStatus(status: MailOutboxStatus): Long {
-        val sql =
-            """
-            SELECT COUNT(*) AS item_count
-            FROM mail_notification_outbox
-            WHERE status = ?
-            """.trimIndent()
-
-        openConnection().use { connection ->
+    suspend fun countByStatus(status: MailOutboxStatus): Long = withContext(DatabaseManager.dispatcher) {
+        val sql = "SELECT COUNT(*) AS item_count FROM mail_notification_outbox WHERE status = ?"
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, status.name)
                 statement.executeQuery().use { result ->
                     check(result.next())
-                    return result.getLong("item_count")
+                    result.getLong("item_count")
                 }
             }
         }
     }
 
-    private fun markDeliverySent(
-        connection: Connection,
-        id: Long,
-        telegramMessageId: Long,
-        summaryActive: Boolean,
-        now: Instant,
-    ) {
-        val sql =
-            """
+    private fun markDeliverySent(connection: Connection, id: Long, telegramMessageId: Long, now: Instant) {
+        val sql = """
         UPDATE mail_notification_outbox
-        SET
-            status = ?,
-            locked_at = NULL,
-            telegram_message_id = ?,
-            summary_active = ?,
-            last_error = NULL,
-            updated_at = ?
-        WHERE id = ?
-          AND status = ?
+        SET status = ?, locked_at = NULL, telegram_message_id = ?, last_error = NULL, updated_at = ?
+        WHERE id = ? AND status = ?
         """.trimIndent()
 
         connection.prepareStatement(sql).use { statement ->
-            statement.setString(
-                1,
-                MailOutboxStatus.SENT.name,
-            )
-            statement.setLong(
-                2,
-                telegramMessageId,
-            )
-            statement.setInt(
-                3,
-                if (summaryActive) 1 else 0,
-            )
-            statement.setLong(
-                4,
-                now.toEpochMilli(),
-            )
-            statement.setLong(
-                5,
-                id,
-            )
-            statement.setString(
-                6,
-                MailOutboxStatus.PROCESSING.name,
-            )
-
-            check(statement.executeUpdate() == 1) {
-                "Outbox item $id is not in PROCESSING state"
-            }
+            statement.setString(1, MailOutboxStatus.SENT.name)
+            statement.setLong(2, telegramMessageId)
+            statement.setLong(3, now.toEpochMilli())
+            statement.setLong(4, id)
+            statement.setString(5, MailOutboxStatus.PROCESSING.name)
+            check(statement.executeUpdate() == 1) { "Outbox item $id is not in PROCESSING state" }
         }
     }
 
-    private fun enqueueEnrichment(
-        connection: Connection,
-        item: MailOutboxItem,
-        now: Instant,
-    ) {
-        val metadata = requireNotNull(
-            item.emailMetadata,
-        )
-
+    private fun enqueueEnrichment(connection: Connection, item: MailOutboxItem, now: Instant) {
+        val metadata = requireNotNull(item.emailMetadata)
         val timestamp = now.toEpochMilli()
-        val sql =
-            """
+        val sql = """
         INSERT OR IGNORE INTO mail_notification_outbox (
-            account_key,
-            account_code,
-            uid_validity,
-            uid,
-            sender,
-            subject,
-            sent_at,
-            received_at,
-            operation,
-            status,
-            attempts,
-            next_attempt_at,
-            locked_at,
-            telegram_message_id,
-            summary_active,
-            last_error,
-            created_at,
-            updated_at
-        )
-        VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?,
-            NULL, NULL, 0, NULL, ?, ?
-        )
+            account_key, account_code, uid_validity, uid, sender, subject, sent_at, received_at,
+            operation, status, attempts, next_attempt_at, locked_at, telegram_message_id, summary_active,
+            last_error, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, 0, NULL, ?, ?)
         """.trimIndent()
 
         connection.prepareStatement(sql).use { statement ->
-            statement.setString(
-                1,
-                item.accountKey,
-            )
-            statement.setString(
-                2,
-                item.accountCode,
-            )
-            statement.setLong(
-                3,
-                item.uidValidity,
-            )
-            statement.setLong(
-                4,
-                item.uid,
-            )
-            statement.setString(
-                5,
-                metadata.from,
-            )
-            statement.setString(
-                6,
-                metadata.subject,
-            )
-            statement.setNullableInstant(
-                parameterIndex = 7,
-                value = metadata.sentAt,
-            )
-            statement.setNullableInstant(
-                parameterIndex = 8,
-                value = metadata.receivedAt,
-            )
-            statement.setString(
-                9,
-                MailOutboxOperation.ENRICH_NOTIFICATION.name,
-            )
-            statement.setString(
-                10,
-                MailOutboxStatus.PENDING.name,
-            )
-            statement.setLong(
-                11,
-                timestamp,
-            )
-            statement.setLong(
-                12,
-                timestamp,
-            )
-            statement.setLong(
-                13,
-                timestamp,
-            )
-
+            statement.setString(1, item.accountKey)
+            statement.setString(2, item.accountCode)
+            statement.setLong(3, item.uidValidity)
+            statement.setLong(4, item.uid)
+            statement.setString(5, metadata.from)
+            statement.setString(6, metadata.subject)
+            statement.setNullableInstant(7, metadata.sentAt)
+            statement.setNullableInstant(8, metadata.receivedAt)
+            statement.setString(9, MailOutboxOperation.ENRICH_NOTIFICATION.name)
+            statement.setString(10, MailOutboxStatus.PENDING.name)
+            statement.setLong(11, timestamp)
+            statement.setLong(12, timestamp)
+            statement.setLong(13, timestamp)
             statement.executeUpdate()
         }
     }
 
-    private fun updateTerminalState(
+    private suspend fun updateTerminalState(
         id: Long,
         status: MailOutboxStatus,
         telegramMessageId: Long?,
         lastError: String?,
         incrementAttempts: Boolean,
         now: Instant,
-    ) {
+    ) = withContext(DatabaseManager.dispatcher) {
         require(status == MailOutboxStatus.SENT || status == MailOutboxStatus.DEAD)
-
-        val attemptUpdate = if (incrementAttempts) {
-            "attempts = attempts + 1,"
-        } else {
-            ""
-        }
-
-        val sql =
-            """
+        val attemptUpdate = if (incrementAttempts) "attempts = attempts + 1," else ""
+        val sql = """
             UPDATE mail_notification_outbox
-            SET
-                status = ?,
-                $attemptUpdate
-                locked_at = NULL,
-                telegram_message_id = ?,
-                last_error = ?,
-                updated_at = ?
-            WHERE id = ?
-              AND status = ?
-            """.trimIndent()
+            SET status = ?, $attemptUpdate locked_at = NULL, telegram_message_id = ?, last_error = ?, updated_at = ?
+            WHERE id = ? AND status = ?
+        """.trimIndent()
 
-        openConnection().use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, status.name)
-
-                if (telegramMessageId == null) {
-                    statement.setNull(2, java.sql.Types.BIGINT)
-                } else {
-                    statement.setLong(2, telegramMessageId)
-                }
-
+                if (telegramMessageId == null) statement.setNull(2, java.sql.Types.BIGINT) else statement.setLong(2, telegramMessageId)
                 statement.setString(3, lastError)
                 statement.setLong(4, now.toEpochMilli())
                 statement.setLong(5, id)
                 statement.setString(6, MailOutboxStatus.PROCESSING.name)
-
-                check(statement.executeUpdate() == 1) {
-                    "Outbox item $id is not in PROCESSING state"
-                }
+                check(statement.executeUpdate() == 1) { "Outbox item $id is not in PROCESSING state" }
             }
         }
     }
 
-    private fun ensureColumn(
-        connection: Connection,
-        columnName: String,
-        definition: String,
-    ) {
-        val columnExists =
-            connection.createStatement().use { statement ->
-                statement.executeQuery(
-                    "PRAGMA table_info(mail_notification_outbox)",
-                ).use { result ->
-                    var found = false
-
-                    while (result.next()) {
-                        if (result.getString("name") == columnName) {
-                            found = true
-                            break
-                        }
+    private fun ensureColumn(connection: Connection, columnName: String, definition: String) {
+        val columnExists = connection.createStatement().use { statement ->
+            statement.executeQuery("PRAGMA table_info(mail_notification_outbox)").use { result ->
+                var found = false
+                while (result.next()) {
+                    if (result.getString("name") == columnName) {
+                        found = true
+                        break
                     }
-
-                    found
                 }
+                found
             }
-
-        if (columnExists) {
-            return
         }
-
-        connection.createStatement().use { statement ->
-            statement.executeUpdate(
-                "ALTER TABLE mail_notification_outbox " + "ADD COLUMN $columnName $definition",
-            )
+        if (!columnExists) {
+            connection.createStatement().use { statement ->
+                statement.executeUpdate("ALTER TABLE mail_notification_outbox ADD COLUMN $columnName $definition")
+            }
         }
     }
 
-    private fun java.sql.PreparedStatement.setNullableInstant(
-        parameterIndex: Int,
-        value: Instant?,
-    ) {
-        if (value == null) {
-            setNull(
-                parameterIndex,
-                java.sql.Types.BIGINT,
-            )
-        } else {
-            setLong(
-                parameterIndex,
-                value.toEpochMilli(),
-            )
-        }
+    private fun java.sql.PreparedStatement.setNullableInstant(parameterIndex: Int, value: Instant?) {
+        if (value == null) setNull(parameterIndex, java.sql.Types.BIGINT) else setLong(parameterIndex, value.toEpochMilli())
     }
 
-    private fun ResultSet.getNullableInstant(
-        columnName: String,
-    ): Instant? {
+    private fun ResultSet.getNullableInstant(columnName: String): Instant? {
         val value = getLong(columnName)
-
-        return if (wasNull()) {
-            null
-        } else {
-            Instant.ofEpochMilli(value)
-        }
-    }
-
-    private fun openConnection(): Connection {
-        return DriverManager.getConnection(databaseUrl).apply {
-            createStatement().use { statement ->
-                statement.execute("PRAGMA busy_timeout = 5000")
-                statement.execute("PRAGMA foreign_keys = ON")
-            }
-        }
+        return if (wasNull()) null else Instant.ofEpochMilli(value)
     }
 
     private fun ResultSet.toOutboxItem(): MailOutboxItem {
-        val telegramMessageIdValue =
-            getLong("telegram_message_id")
-
-        val telegramMessageId = if (wasNull()) {
-            null
-        } else {
-            telegramMessageIdValue
-        }
-
+        val telegramMessageIdValue = getLong("telegram_message_id")
+        val telegramMessageId = if (wasNull()) null else telegramMessageIdValue
         val sender = getString("sender")
         val subject = getString("subject")
-
-        val emailMetadata = if (
-            sender == null ||
-            subject == null
-        ) {
-            null
-        } else {
-            MailOutboxEmailMetadata(
-                from = sender,
-                subject = subject,
-                sentAt = getNullableInstant("sent_at"),
-                receivedAt = getNullableInstant("received_at"),
-            )
-        }
+        val emailMetadata = if (sender == null || subject == null) null else MailOutboxEmailMetadata(
+            from = sender, subject = subject, sentAt = getNullableInstant("sent_at"), receivedAt = getNullableInstant("received_at")
+        )
 
         return MailOutboxItem(
             id = getLong("id"),
@@ -946,39 +495,18 @@ FROM mail_notification_outbox
             uidValidity = getLong("uid_validity"),
             uid = getLong("uid"),
             emailMetadata = emailMetadata,
-            operation = MailOutboxOperation.valueOf(
-                getString("operation"),
-            ),
-            status = MailOutboxStatus.valueOf(
-                getString("status"),
-            ),
+            operation = MailOutboxOperation.valueOf(getString("operation")),
+            status = MailOutboxStatus.valueOf(getString("status")),
             attempts = getInt("attempts"),
-            nextAttemptAt = Instant.ofEpochMilli(
-                getLong("next_attempt_at"),
-            ),
+            nextAttemptAt = Instant.ofEpochMilli(getLong("next_attempt_at")),
             lockedAt = getNullableInstant("locked_at"),
             telegramMessageId = telegramMessageId,
             summaryActive = getInt("summary_active") == 1,
             lastError = getString("last_error"),
-            createdAt = Instant.ofEpochMilli(
-                getLong("created_at"),
-            ),
-            updatedAt = Instant.ofEpochMilli(
-                getLong("updated_at"),
-            ),
+            createdAt = Instant.ofEpochMilli(getLong("created_at")),
+            updatedAt = Instant.ofEpochMilli(getLong("updated_at")),
         )
     }
 
-    private fun sanitizeError(error: String): String {
-        return error
-            .replace('\r', ' ')
-            .replace('\n', ' ')
-            .trim()
-            .ifBlank { "Unknown error" }
-            .take(MAX_ERROR_LENGTH)
-    }
-
-    private companion object {
-        const val MAX_ERROR_LENGTH = 500
-    }
+    private fun sanitizeError(error: String): String = error.replace('\r', ' ').replace('\n', ' ').trim().ifBlank { "Unknown error" }.take(500)
 }

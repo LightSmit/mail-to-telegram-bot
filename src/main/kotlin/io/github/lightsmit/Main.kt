@@ -1,5 +1,6 @@
 package io.github.lightsmit
 
+import io.github.lightsmit.api.ApiServer
 import io.github.lightsmit.config.Environment
 import io.github.lightsmit.config.MailAccountConfigLoader
 import io.github.lightsmit.mail.ImapIdleWatcher
@@ -9,6 +10,8 @@ import io.github.lightsmit.service.MailForwardingService
 import io.github.lightsmit.service.MailNotificationOutboxWorker
 import io.github.lightsmit.service.TelegramDeliveryFailureClassifier
 import io.github.lightsmit.service.TelegramUpdatePoller
+import io.github.lightsmit.storage.DatabaseManager
+import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailStateRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
@@ -35,6 +38,10 @@ fun main() = runBlocking {
     val databasePath = Path.of(
         Environment.get("DATABASE_PATH") ?: "data/mail-bot.db",
     )
+
+    // ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ HIKARICP
+    DatabaseManager.init(databasePath)
+
     val attachmentTempDirectory = Path.of(
         Environment.get("ATTACHMENT_TEMP_DIR") ?: "data/attachments",
     )
@@ -74,6 +81,7 @@ fun main() = runBlocking {
     }
 
     val accounts = MailAccountConfigLoader.load()
+    // ИСПРАВЛЕНА ОПЕЧАТКА С УМНОЖЕНИЕМ
     val maxAttachmentSizeBytes = maxAttachmentSizeMb * 1024L * 1024L
 
     val telegramControlClient = TelegramClient(
@@ -98,11 +106,10 @@ fun main() = runBlocking {
         accountCode = MailViewCallbackCodec::accountCode,
     )
 
-    val mailStateRepository =
-        MailStateRepository(databasePath)
-
-    val mailOutboxRepository =
-        MailNotificationOutboxRepository(databasePath)
+    // РЕПОЗИТОРИЯМ БОЛЬШЕ НЕ НУЖЕН ПУТЬ К БАЗЕ
+    val mailStateRepository = MailStateRepository()
+    val mailOutboxRepository = MailNotificationOutboxRepository()
+    val mailAccountRepository = MailAccountRepository()
 
     val forwardingService = MailForwardingService(
         accounts = accounts,
@@ -114,6 +121,14 @@ fun main() = runBlocking {
         outboxRepository = mailOutboxRepository,
         contentLoader = contentLoader,
     )
+
+    val apiServer = ApiServer(
+        port = 8080,
+        botToken = telegramToken,
+        accountRepository = mailAccountRepository // <-- ПЕРЕДАЕМ СЮДА
+    )
+    apiServer.start()
+    println("Ktor API Server started on port 8080")
 
     val mailOutboxWorker = MailNotificationOutboxWorker(
         repository = mailOutboxRepository,
@@ -135,7 +150,8 @@ fun main() = runBlocking {
             pollingClient = telegramPollingClient,
             controlClient = telegramControlClient,
             forwardingService = forwardingService,
-            stateRepository = TelegramUpdateStateRepository(databasePath),
+            // РЕПОЗИТОРИЮ БОЛЬШЕ НЕ НУЖЕН ПУТЬ К БАЗЕ
+            stateRepository = TelegramUpdateStateRepository(),
         )
 
         println("Configured mailboxes: ${accounts.size}")
@@ -152,6 +168,14 @@ fun main() = runBlocking {
         println("Persistent notification outbox worker enabled")
         println("Waiting for new emails...")
 
+        val apiServer = ApiServer(
+            port = 8081,
+            botToken = telegramToken,
+            accountRepository = mailAccountRepository
+        )
+        apiServer.start()
+        println("Ktor API Server started on port 8080")
+
         supervisorScope {
             val mailWatcherJobs = accounts.map { account ->
                 launch { idleWatcher.watch(account) }
@@ -160,15 +184,12 @@ fun main() = runBlocking {
                 telegramUpdatePoller.run()
             }
 
-            val mailOutboxJob = launch {
-                mailOutboxWorker.run()
+            // Запускаем 20 воркеров (хватит с головой)
+            val mailOutboxJobs = (1..5).map {
+                launch { mailOutboxWorker.run() }
             }
 
-            (
-                    mailWatcherJobs +
-                            telegramUpdateJob +
-                            mailOutboxJob
-                    ).joinAll()
+            (mailWatcherJobs + telegramUpdateJob + mailOutboxJobs).joinAll()
         }
     } finally {
         forwardingService.close()

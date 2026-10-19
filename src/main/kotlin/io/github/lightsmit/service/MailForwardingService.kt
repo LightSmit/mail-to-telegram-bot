@@ -4,6 +4,7 @@ import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.mail.EmailSummary
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
+import io.github.lightsmit.storage.MailOutboxEmailMetadata
 import io.github.lightsmit.storage.MailOutboxItem
 import io.github.lightsmit.storage.MailOutboxOperation
 import io.github.lightsmit.storage.MailStateRepository
@@ -22,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.isActive
 import org.eclipse.angus.mail.imap.IMAPFolder
 import org.slf4j.LoggerFactory
 import java.time.Duration
@@ -29,7 +31,11 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
-import io.github.lightsmit.storage.MailOutboxEmailMetadata
+
+private data class ActiveView(
+    val messageIds: List<Long>,
+    val openedAt: Instant = Instant.now()
+)
 
 class MailForwardingService(
     accounts: List<MailAccountConfig>,
@@ -47,17 +53,6 @@ class MailForwardingService(
 
     private val accountsByKey =
         accounts.associateBy(::buildAccountKey)
-
-    init {
-        require(accounts.isNotEmpty()) {
-            "At least one mail account is required"
-        }
-
-        require(accountsByKey.size == accounts.size) {
-            "Mail account host and username combinations must be unique"
-        }
-    }
-
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO,
     )
@@ -66,28 +61,37 @@ class MailForwardingService(
     private val accountProcessingLocks =
         ConcurrentHashMap<String, Mutex>()
 
-    private val textViewMessageIds =
-        ConcurrentHashMap<String, List<Long>>()
-
-    private val summaryMessageIds =
-        ConcurrentHashMap<String, Long>()
+    private val textViewMessageIds = ConcurrentHashMap<String, ActiveView>()
 
     private val dateFormatter = DateTimeFormatter
         .ofPattern("dd.MM.yyyy, HH:mm")
         .withZone(ZoneId.systemDefault())
 
+    init {
+        require(accounts.isNotEmpty()) {
+            "At least one mail account is required"
+        }
+        require(accountsByKey.size == accounts.size) {
+            "Mail account host and username combinations must be unique"
+        }
+
+        // Фоновая очистка "забытых" сообщений (старше 24 часов)
+        scope.launch {
+            while (isActive) {
+                delay(Duration.ofHours(1).toMillis())
+                val now = Instant.now()
+                textViewMessageIds.entries.removeIf { (_, view) ->
+                    Duration.between(view.openedAt, now).toHours() >= 24
+                }
+            }
+        }
+    }
+
+
+
     suspend fun deliverOutboxNotification(
         item: MailOutboxItem,
     ): Long {
-        if (
-            item.operation !=
-            MailOutboxOperation.SEND_NOTIFICATION
-        ) {
-            throw PermanentMailDeliveryException(
-                "Unsupported outbox operation: ${item.operation}",
-            )
-        }
-
         val account = accountsByKey[item.accountKey]
             ?: throw PermanentMailDeliveryException(
                 "Configured mail account no longer exists: " +
@@ -103,56 +107,57 @@ class MailForwardingService(
             )
         }
 
-        val emailKey = interactiveEmailKey(
-            account = account,
-            uidValidity = item.uidValidity,
-            uid = item.uid,
-        )
-
-        val metadata = item.emailMetadata
-
-        val telegramMessageId = if (metadata == null) {
-            deliverLegacyNotification(
-                account = account,
-                item = item,
-            )
-        } else {
-            telegramControlClient.sendMessageWithButtons(
-                chatId = telegramChatId,
-                text = formatPendingNotification(
+        val telegramMessageId = when (item.operation) {
+            MailOutboxOperation.SEND_NOTIFICATION -> {
+                deliverInitialNotification(
                     account = account,
-                    metadata = metadata,
-                ),
-                buttons = pendingSummaryButtons(
-                    account = account,
-                    uidValidity = item.uidValidity,
-                    uid = item.uid,
-                ),
-            )
-        }
+                    item = item,
+                )
+            }
 
-        summaryMessageIds[emailKey] = telegramMessageId
-
-        if (metadata != null) {
-            scope.launch {
+            MailOutboxOperation.ENRICH_NOTIFICATION -> {
                 enrichSummaryCard(
                     account = account,
-                    uidValidity = item.uidValidity,
-                    uid = item.uid,
-                    emailKey = emailKey,
-                    telegramMessageId = telegramMessageId,
+                    item = item,
                 )
             }
         }
 
         logger.info(
-            "Delivered outbox item {} for email UID {} from mailbox {}",
-            item.id,
+            "Delivered outbox operation {} for email UID {} from mailbox {}",
+            item.operation,
             item.uid,
             account.username,
         )
 
         return telegramMessageId
+    }
+
+    private suspend fun deliverInitialNotification(
+        account: MailAccountConfig,
+        item: MailOutboxItem,
+    ): Long {
+        val metadata = item.emailMetadata
+
+        if (metadata == null) {
+            return deliverLegacyNotification(
+                account = account,
+                item = item,
+            )
+        }
+
+        return telegramControlClient.sendMessageWithButtons(
+            chatId = telegramChatId,
+            text = formatPendingNotification(
+                account = account,
+                metadata = metadata,
+            ),
+            buttons = pendingSummaryButtons(
+                account = account,
+                uidValidity = item.uidValidity,
+                uid = item.uid,
+            ),
+        )
     }
 
     private suspend fun deliverLegacyNotification(
@@ -185,41 +190,42 @@ class MailForwardingService(
 
     private suspend fun enrichSummaryCard(
         account: MailAccountConfig,
-        uidValidity: Long,
-        uid: Long,
-        emailKey: String,
-        telegramMessageId: Long,
-    ) {
-        val message = try {
-            contentLoader.get(
-                account = account,
-                uidValidity = uidValidity,
-                uid = uid,
-            )
-        } catch (exception: CancellationException) {
-            throw exception
-        } catch (exception: Exception) {
-            logger.warn(
-                "Failed to load full content for email UID {} from mailbox {}: {}",
-                uid,
-                account.username,
-                exception.javaClass.simpleName,
-            )
-            return
-        }
+        item: MailOutboxItem,
+    ): Long {
+        val message = contentLoader.get(
+            account = account,
+            uidValidity = item.uidValidity,
+            uid = item.uid,
+        ) ?: throw PermanentMailDeliveryException(
+            "Email UID ${item.uid} is no longer available " +
+                    "in mailbox ${account.username}",
+        )
 
-        if (message == null) {
-            logger.warn(
-                "Email UID {} from mailbox {} is no longer available for card enrichment",
-                uid,
-                account.username,
+        return navigationMutex.withLock {
+            val notification = outboxRepository.find(
+                accountKey = item.accountKey,
+                uidValidity = item.uidValidity,
+                uid = item.uid,
+                operation =
+                    MailOutboxOperation.SEND_NOTIFICATION,
+            ) ?: throw PermanentMailDeliveryException(
+                "Notification state for email UID ${item.uid} no longer exists",
             )
-            return
-        }
 
-        navigationMutex.withLock {
-            if (summaryMessageIds[emailKey] != telegramMessageId) {
-                return@withLock
+            val telegramMessageId =
+                notification.telegramMessageId
+                    ?: throw PermanentMailDeliveryException(
+                        "Telegram message ID for email UID ${item.uid} is missing",
+                    )
+
+            if (!notification.summaryActive) {
+                logger.info(
+                    "Skipped Telegram card enrichment for email UID {} " +
+                            "because summary view is inactive",
+                    item.uid,
+                )
+
+                return@withLock telegramMessageId
             }
 
             try {
@@ -233,43 +239,29 @@ class MailForwardingService(
                     buttons = summaryButtons(
                         account = account,
                         message = message,
-                        uidValidity = uidValidity,
-                        uid = uid,
+                        uidValidity = item.uidValidity,
+                        uid = item.uid,
                     ),
                 )
-
-                logger.info(
-                    "Enriched Telegram card for email UID {} from mailbox {}",
-                    uid,
-                    account.username,
-                )
-            } catch (exception: CancellationException) {
-                throw exception
             } catch (exception: TelegramApiException) {
-                val harmless =
+                val notModified =
                     exception.description.contains(
                         other = "message is not modified",
                         ignoreCase = true,
-                    ) ||
-                            exception.description.contains(
-                                other = "message to edit not found",
-                                ignoreCase = true,
-                            )
-
-                if (!harmless) {
-                    logger.warn(
-                        "Failed to enrich Telegram card for email UID {}: {}",
-                        uid,
-                        exception.description,
                     )
+
+                if (!notModified) {
+                    throw exception
                 }
-            } catch (exception: Exception) {
-                logger.warn(
-                    "Failed to enrich Telegram card for email UID {}: {}",
-                    uid,
-                    exception.javaClass.simpleName,
-                )
             }
+
+            logger.info(
+                "Enriched Telegram card for email UID {} from mailbox {}",
+                item.uid,
+                account.username,
+            )
+
+            telegramMessageId
         }
     }
 
@@ -305,11 +297,6 @@ class MailForwardingService(
             uid = uid,
         )
 
-        summaryMessageIds.remove(
-            emailKey,
-            sourceMessageId,
-        )
-
         val message = loadEmailOrNotify(
             account = account,
             expectedUidValidity = expectedUidValidity,
@@ -328,30 +315,57 @@ class MailForwardingService(
             uid = uid,
         )
 
+        val accountKey = buildAccountKey(account)
+
         navigationMutex.withLock {
-            if (
-                telegramControlClient.fitsSingleTextMessage(
-                    fullText,
-                )
-            ) {
-                telegramControlClient.editMessageWithButtons(
-                    chatId = telegramChatId,
-                    messageId = sourceMessageId,
-                    text = fullText,
-                    buttons = buttons,
+            val stateUpdated =
+                outboxRepository.markSummaryInactive(
+                    accountKey = accountKey,
+                    uidValidity = expectedUidValidity,
+                    uid = uid,
                 )
 
-                textViewMessageIds.remove(emailKey)
-            } else {
-                val newMessageIds =
-                    telegramControlClient.sendLongMessageWithButtons(
+            if (!stateUpdated) {
+                logger.warn(
+                    "Failed to mark summary inactive for email UID {}",
+                    uid,
+                )
+            }
+
+            try {
+                if (
+                    telegramControlClient.fitsSingleTextMessage(
+                        fullText,
+                    )
+                ) {
+                    telegramControlClient.editMessageWithButtons(
                         chatId = telegramChatId,
+                        messageId = sourceMessageId,
                         text = fullText,
                         buttons = buttons,
                     )
 
-                textViewMessageIds[emailKey] = newMessageIds
-                deleteMessageSafely(sourceMessageId)
+                    textViewMessageIds.remove(emailKey)
+                } else {
+                    val newMessageIds =
+                        telegramControlClient.sendLongMessageWithButtons(
+                            chatId = telegramChatId,
+                            text = fullText,
+                            buttons = buttons,
+                        )
+
+                    textViewMessageIds[emailKey] = ActiveView(newMessageIds)
+                    deleteMessageSafely(sourceMessageId)
+                }
+            } catch (exception: Exception) {
+                outboxRepository.markSummaryReady(
+                    accountKey = accountKey,
+                    uidValidity = expectedUidValidity,
+                    uid = uid,
+                    telegramMessageId = sourceMessageId,
+                )
+
+                throw exception
             }
         }
 
@@ -391,10 +405,10 @@ class MailForwardingService(
             uidValidity = expectedUidValidity,
             uid = uid,
         )
+        val accountKey = buildAccountKey(account)
 
         navigationMutex.withLock {
-            val longViewMessageIds =
-                textViewMessageIds.remove(emailKey)
+            val longViewMessageIds = textViewMessageIds.remove(emailKey)?.messageIds
 
             if (longViewMessageIds == null) {
                 telegramControlClient.editMessageWithButtons(
@@ -403,7 +417,21 @@ class MailForwardingService(
                     text = summaryText,
                     buttons = buttons,
                 )
-                summaryMessageIds[emailKey] = sourceMessageId
+
+                val stateUpdated =
+                    outboxRepository.markSummaryReady(
+                        accountKey = accountKey,
+                        uidValidity = expectedUidValidity,
+                        uid = uid,
+                        telegramMessageId = sourceMessageId,
+                    )
+
+                if (!stateUpdated) {
+                    logger.warn(
+                        "Failed to persist summary view for email UID {}",
+                        uid,
+                    )
+                }
             } else {
                 val summaryMessageId =
                     telegramControlClient.sendMessageWithButtons(
@@ -418,7 +446,21 @@ class MailForwardingService(
                 }.forEach { messageId ->
                     deleteMessageSafely(messageId)
                 }
-                summaryMessageIds[emailKey] = summaryMessageId
+
+                val stateUpdated =
+                    outboxRepository.markSummaryReady(
+                        accountKey = accountKey,
+                        uidValidity = expectedUidValidity,
+                        uid = uid,
+                        telegramMessageId = summaryMessageId,
+                    )
+
+                if (!stateUpdated) {
+                    logger.warn(
+                        "Failed to persist summary view for email UID {}",
+                        uid,
+                    )
+                }
             }
         }
 

@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import io.github.lightsmit.storage.MailOutboxOperation
 
 class MailNotificationOutboxWorkerTest {
 
@@ -52,6 +53,24 @@ class MailNotificationOutboxWorkerTest {
         assertEquals(
             0,
             item.attempts,
+        )
+        assertTrue(
+            item.summaryActive,
+        )
+
+        val enrichment = assertNotNull(
+            repository.find(
+                accountKey = ACCOUNT_KEY,
+                uidValidity = UID_VALIDITY,
+                uid = UID,
+                operation =
+                    MailOutboxOperation.ENRICH_NOTIFICATION,
+            ),
+        )
+
+        assertEquals(
+            MailOutboxStatus.PENDING,
+            enrichment.status,
         )
     }
 
@@ -183,6 +202,72 @@ class MailNotificationOutboxWorkerTest {
             item.nextAttemptAt,
         )
     }
+
+    @Test
+    fun `successful enrichment does not schedule another task`() =
+        runBlocking {
+            val repository = createRepository()
+            val now = Instant.parse(
+                "2026-07-30T15:00:00Z",
+            )
+
+            enqueueTestItem(
+                repository = repository,
+                now = now,
+            )
+
+            val notification = assertNotNull(
+                repository.claimNextDue(now),
+            )
+
+            repository.completeDelivery(
+                item = notification,
+                telegramMessageId = 12345L,
+                now = now.plusSeconds(1),
+            )
+
+            val worker = MailNotificationOutboxWorker(
+                repository = repository,
+                failureClassifier =
+                    TelegramDeliveryFailureClassifier(),
+                deliver = { item ->
+                    assertEquals(
+                        MailOutboxOperation.ENRICH_NOTIFICATION,
+                        item.operation,
+                    )
+
+                    12345L
+                },
+                nowProvider = {
+                    now.plusSeconds(2)
+                },
+            )
+
+            assertTrue(
+                worker.processNextDue(),
+            )
+
+            val enrichment = assertNotNull(
+                repository.find(
+                    accountKey = ACCOUNT_KEY,
+                    uidValidity = UID_VALIDITY,
+                    uid = UID,
+                    operation =
+                        MailOutboxOperation.ENRICH_NOTIFICATION,
+                ),
+            )
+
+            assertEquals(
+                MailOutboxStatus.SENT,
+                enrichment.status,
+            )
+            assertEquals(
+                0L,
+                repository.countByStatus(
+                    MailOutboxStatus.PENDING,
+                ),
+            )
+        }
 
     private fun enqueueTestItem(
         repository: MailNotificationOutboxRepository,

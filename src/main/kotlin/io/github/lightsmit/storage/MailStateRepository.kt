@@ -1,30 +1,16 @@
 package io.github.lightsmit.storage
 
-import java.nio.file.Files
-import java.nio.file.Path
-import java.sql.DriverManager
+import kotlinx.coroutines.withContext
 
 data class MailAccountState(
     val uidValidity: Long,
     val lastUid: Long,
 )
 
-class MailStateRepository(
-    databasePath: Path,
-) {
-
-    private val databaseUrl: String
+class MailStateRepository {
 
     init {
-        val absolutePath = databasePath
-            .toAbsolutePath()
-            .normalize()
-
-        absolutePath.parent?.let(Files::createDirectories)
-
-        databaseUrl = "jdbc:sqlite:$absolutePath"
-
-        DriverManager.getConnection(databaseUrl).use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.createStatement().use { statement ->
                 statement.executeUpdate(
                     """
@@ -40,25 +26,21 @@ class MailStateRepository(
         }
     }
 
-    @Synchronized
-    fun find(accountKey: String): MailAccountState? {
-        val sql =
-            """
+    suspend fun find(accountKey: String): MailAccountState? = withContext(DatabaseManager.dispatcher) {
+        val sql = """
             SELECT uid_validity, last_uid
             FROM mail_account_state
             WHERE account_key = ?
-            """.trimIndent()
+        """.trimIndent()
 
-        DriverManager.getConnection(databaseUrl).use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, accountKey)
 
                 statement.executeQuery().use { result ->
-                    if (!result.next()) {
-                        return null
-                    }
+                    if (!result.next()) return@withContext null
 
-                    return MailAccountState(
+                    MailAccountState(
                         uidValidity = result.getLong("uid_validity"),
                         lastUid = result.getLong("last_uid"),
                     )
@@ -67,14 +49,12 @@ class MailStateRepository(
         }
     }
 
-    @Synchronized
-    fun save(
+    suspend fun save(
         accountKey: String,
         uidValidity: Long,
         lastUid: Long,
-    ) {
-        val sql =
-            """
+    ) = withContext(DatabaseManager.dispatcher) {
+        val sql = """
             INSERT INTO mail_account_state (
                 account_key,
                 uid_validity,
@@ -86,9 +66,9 @@ class MailStateRepository(
                 uid_validity = excluded.uid_validity,
                 last_uid = excluded.last_uid,
                 updated_at = CURRENT_TIMESTAMP
-            """.trimIndent()
+        """.trimIndent()
 
-        DriverManager.getConnection(databaseUrl).use { connection ->
+        DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, accountKey)
                 statement.setLong(2, uidValidity)

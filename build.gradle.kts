@@ -11,7 +11,7 @@ repositories {
 
 dependencies {
     implementation("io.ktor:ktor-client-core:3.5.1")
-    implementation("io.ktor:ktor-client-cio:3.5.1")
+    implementation("io.ktor:ktor-client-okhttp:3.5.1") // Убедись, что версия совпадает с твоим Ktor
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
@@ -21,7 +21,22 @@ dependencies {
     implementation("org.xerial:sqlite-jdbc:3.53.1.0")
     implementation("org.jsoup:jsoup:1.22.2")
 
+    implementation("com.zaxxer:HikariCP:5.1.0")
+
     testImplementation(kotlin("test"))
+}
+
+val ktorVersion = "2.3.9"
+
+dependencies {
+    // Ядро и движок сервера
+    implementation("io.ktor:ktor-server-core:$ktorVersion")
+    implementation("io.ktor:ktor-server-netty:$ktorVersion")
+    implementation("io.ktor:ktor-server-cors:$ktorVersion")
+
+    // Для работы с JSON
+    implementation("io.ktor:ktor-server-content-negotiation:$ktorVersion")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
 }
 
 kotlin {

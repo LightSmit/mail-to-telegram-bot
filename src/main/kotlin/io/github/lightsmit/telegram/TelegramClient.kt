@@ -3,7 +3,7 @@ package io.github.lightsmit.telegram
 import io.github.lightsmit.mail.EmailAttachment
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.ProxyBuilder
-import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.forms.InputProvider
@@ -71,7 +71,7 @@ class TelegramClient(
 
     private val baseUrl = "https://api.telegram.org/bot$token"
 
-    private val httpClient = HttpClient(CIO) {
+    private val httpClient = HttpClient(OkHttp) {
         expectSuccess = false
 
         install(HttpTimeout) {
@@ -81,9 +81,14 @@ class TelegramClient(
         }
 
         engine {
-            proxy = proxyUrl
-                ?.takeIf { value -> value.isNotBlank() }
-                ?.let { value -> ProxyBuilder.http(Url(value)) }
+            proxyUrl?.takeIf { it.isNotBlank() }?.let { value ->
+                val url = io.ktor.http.Url(value)
+                proxy = if (url.protocol.name == "socks") {
+                    io.ktor.client.engine.ProxyBuilder.socks(host = url.host, port = url.port)
+                } else {
+                    io.ktor.client.engine.ProxyBuilder.http(url)
+                }
+            }
         }
     }
 

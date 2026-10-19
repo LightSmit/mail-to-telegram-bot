@@ -55,7 +55,8 @@ class MailNotificationOutboxWorker(
         }
     }
 
-    fun recoverInterrupted(): Int {
+    // ДОБАВЛЕН МОДИФИКАТОР suspend
+    suspend fun recoverInterrupted(): Int {
         val recoveredCount = repository.recoverInterrupted(
             now = nowProvider(),
         )
@@ -78,15 +79,16 @@ class MailNotificationOutboxWorker(
         try {
             val telegramMessageId = deliver(item)
 
-            repository.markSent(
-                id = item.id,
+            repository.completeDelivery(
+                item = item,
                 telegramMessageId = telegramMessageId,
                 now = nowProvider(),
             )
 
             logger.info(
-                "Outbox item {} sent for email UID {} from account {}",
+                "Outbox item {} ({}) completed for email UID {} from account {}",
                 item.id,
+                item.operation,
                 item.uid,
                 item.accountKey,
             )
@@ -102,7 +104,8 @@ class MailNotificationOutboxWorker(
         return true
     }
 
-    private fun handleDeliveryFailure(
+    // ДОБАВЛЕН МОДИФИКАТОР suspend
+    private suspend fun handleDeliveryFailure(
         item: MailOutboxItem,
         exception: Exception,
     ) {

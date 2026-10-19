@@ -366,6 +366,60 @@ class MailNotificationOutboxRepositoryTest {
         )
     }
 
+    @Test
+    fun `summary can become inactive before delivery completion`() {
+        val repository = createRepository()
+        val now = Instant.parse(
+            "2026-07-30T12:00:00Z",
+        )
+
+        repository.enqueue(
+            accountKey = "imap.mail.ru:user@example.com",
+            accountCode = "abcdef123456",
+            uidValidity = 1_700,
+            uid = 1_800,
+            emailMetadata = testEmailMetadata,
+            now = now,
+        )
+
+        val notification = assertNotNull(
+            repository.claimNextDue(now),
+        )
+
+        assertTrue(
+            notification.summaryActive,
+        )
+
+        assertTrue(
+            repository.markSummaryInactive(
+                accountKey = notification.accountKey,
+                uidValidity = notification.uidValidity,
+                uid = notification.uid,
+                now = now.plusMillis(500),
+            ),
+        )
+
+        repository.completeDelivery(
+            item = notification,
+            telegramMessageId = 1_900,
+            now = now.plusSeconds(1),
+        )
+
+        val stored = assertNotNull(
+            repository.find(
+                accountKey = notification.accountKey,
+                uidValidity = notification.uidValidity,
+                uid = notification.uid,
+                operation =
+                    MailOutboxOperation.SEND_NOTIFICATION,
+            ),
+        )
+
+        assertFalse(
+            stored.summaryActive,
+        )
+    }
+
     private fun createRepository(): MailNotificationOutboxRepository {
         val directory = createTempDirectory("mail-outbox-test-")
         return MailNotificationOutboxRepository(
