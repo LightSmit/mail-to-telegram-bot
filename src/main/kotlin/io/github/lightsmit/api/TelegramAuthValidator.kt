@@ -9,13 +9,35 @@ object TelegramAuthValidator {
 
     private const val ALGORITHM = "HmacSHA256"
 
+    /** Причина отказа. Нужна для диагностики: из одного лишь "401" не видно, что именно не так. */
+    enum class Failure {
+        EMPTY_INIT_DATA,
+        MALFORMED,
+        NO_HASH,
+        NO_AUTH_DATE,
+        EXPIRED,
+        HASH_MISMATCH,
+    }
+
+    data class Result(
+        val failure: Failure?,
+        val authAgeSeconds: Long? = null,
+    ) {
+        val ok: Boolean get() = failure == null
+    }
+
     /**
      * @param initData Строка, полученная из Telegram.WebApp.initData
      * @param botToken Токен бота от BotFather
      * @param maxAgeSeconds Максимальный возраст авторизации (защита от replay-атак)
      */
-    fun validate(initData: String, botToken: String, maxAgeSeconds: Long = 86400): Boolean {
-        try {
+    fun validate(initData: String, botToken: String, maxAgeSeconds: Long = 86400): Boolean =
+        inspect(initData, botToken, maxAgeSeconds).ok
+
+    fun inspect(initData: String, botToken: String, maxAgeSeconds: Long = 86400): Result {
+        if (initData.isBlank()) return Result(Failure.EMPTY_INIT_DATA)
+
+        return try {
             // Парсим параметры из query-строки
             val params = initData.split("&").associate { pair ->
                 val parts = pair.split("=", limit = 2)
@@ -24,42 +46,41 @@ object TelegramAuthValidator {
                 key to value
             }
 
-            val receivedHash = params["hash"] ?: return false
-            val authDateStr = params["auth_date"] ?: return false
+            val receivedHash = params["hash"] ?: return Result(Failure.NO_HASH)
+            val authDate = params["auth_date"]?.toLongOrNull() ?: return Result(Failure.NO_AUTH_DATE)
 
             // Защита от старых токенов
-            val authDate = authDateStr.toLongOrNull() ?: return false
-            val now = System.currentTimeMillis() / 1000
-            if (now - authDate > maxAgeSeconds) {
-                return false // Токен протух (старше 24 часов)
-            }
+            val age = System.currentTimeMillis() / 1000 - authDate
+            if (age > maxAgeSeconds) return Result(Failure.EXPIRED, age)
 
-            // Сортировка по алфавиту
+            // Сортировка по алфавиту. В строку входят все поля, кроме hash
+            // (поле signature для проверки по токену бота НЕ исключается).
             val dataCheckString = params.filterKeys { it != "hash" }
                 .entries
                 .sortedBy { it.key }
                 .joinToString("\n") { "${it.key}=${it.value}" }
 
-            // Генерируем Secret Key: HMAC-SHA256(botToken, "WebAppData")
+            // Secret Key: HMAC-SHA256(botToken, "WebAppData")
             val secretKeyMac = Mac.getInstance(ALGORITHM).apply {
                 init(SecretKeySpec("WebAppData".toByteArray(), ALGORITHM))
             }
             val secretKey = secretKeyMac.doFinal(botToken.toByteArray())
 
-            // Вычисляем хэш: HMAC-SHA256(dataCheckString, secretKey)
+            // Хэш: HMAC-SHA256(dataCheckString, secretKey)
             val hashMac = Mac.getInstance(ALGORITHM).apply {
                 init(SecretKeySpec(secretKey, ALGORITHM))
             }
-            val calculatedHashBytes = hashMac.doFinal(dataCheckString.toByteArray())
-            val calculatedHash = calculatedHashBytes.joinToString("") { "%02x".format(it) }
+            val calculatedHash = hashMac.doFinal(dataCheckString.toByteArray())
+                .joinToString("") { "%02x".format(it) }
 
-            // Сравниваем хэши безопасным от тайминг-атак способом
-            return MessageDigest.isEqual(
+            // Сравнение за постоянное время
+            val equal = MessageDigest.isEqual(
                 receivedHash.toByteArray(),
-                calculatedHash.toByteArray()
+                calculatedHash.toByteArray(),
             )
+            if (equal) Result(null, age) else Result(Failure.HASH_MISMATCH, age)
         } catch (e: Exception) {
-            return false
+            Result(Failure.MALFORMED)
         }
     }
 }

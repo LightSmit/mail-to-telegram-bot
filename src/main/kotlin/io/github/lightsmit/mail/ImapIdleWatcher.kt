@@ -60,9 +60,10 @@ class ImapIdleWatcher(
                 throw exception
             } catch (exception: Exception) {
                 logger.warn(
-                    "Mailbox monitoring failed for {}: {}. Reconnecting in {} seconds",
+                    "Mailbox monitoring failed for {}: {} ({}). Reconnecting in {} seconds",
                     account.username,
                     exception.javaClass.simpleName,
+                    exception.message,
                     reconnectDelaySeconds,
                 )
                 delay(reconnectDelaySeconds * 1_000)
@@ -151,9 +152,10 @@ class ImapIdleWatcher(
                 throw exception
             } catch (exception: Exception) {
                 logger.debug(
-                    "Safety mail check failed for {}: {}",
+                    "Safety mail check failed for {}: {} ({})",
                     account.username,
                     exception.javaClass.simpleName,
+                    exception.message,
                 )
             }
         }

@@ -1,5 +1,6 @@
 plugins {
     kotlin("jvm") version "2.3.0"
+    kotlin("plugin.serialization") version "2.3.0"
     application
 }
 
@@ -9,9 +10,13 @@ repositories {
     mavenCentral()
 }
 
+// Единая версия Ktor для клиента и сервера. Смешивание 2.x и 3.x даёт
+// NoSuchMethodError в рантайме (ContentConverter.serializeNullable).
+val ktorVersion = "3.5.1"
+
 dependencies {
-    implementation("io.ktor:ktor-client-core:3.5.1")
-    implementation("io.ktor:ktor-client-okhttp:3.5.1") // Убедись, что версия совпадает с твоим Ktor
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation("io.ktor:ktor-client-okhttp:$ktorVersion")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
@@ -26,13 +31,13 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
-val ktorVersion = "2.3.9"
-
 dependencies {
     // Ядро и движок сервера
     implementation("io.ktor:ktor-server-core:$ktorVersion")
     implementation("io.ktor:ktor-server-netty:$ktorVersion")
     implementation("io.ktor:ktor-server-cors:$ktorVersion")
+    implementation("io.ktor:ktor-server-call-logging:$ktorVersion")
+    implementation("io.ktor:ktor-server-status-pages:$ktorVersion")
 
     // Для работы с JSON
     implementation("io.ktor:ktor-server-content-negotiation:$ktorVersion")

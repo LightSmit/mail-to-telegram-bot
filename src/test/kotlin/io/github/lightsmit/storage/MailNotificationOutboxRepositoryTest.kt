@@ -1,5 +1,6 @@
 package io.github.lightsmit.storage
 
+import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import kotlin.io.path.createTempDirectory
 import kotlin.test.*
@@ -18,7 +19,7 @@ class MailNotificationOutboxRepositoryTest {
         )
 
     @Test
-    fun `enqueue is idempotent for the same email operation`() {
+    fun `enqueue is idempotent for the same email operation`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse("2026-07-30T12:00:00Z")
 
@@ -63,7 +64,7 @@ class MailNotificationOutboxRepositoryTest {
     }
 
     @Test
-    fun `retry item becomes claimable only after next attempt time`() {
+    fun `retry item becomes claimable only after next attempt time`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse("2026-07-30T12:00:00Z")
 
@@ -103,7 +104,7 @@ class MailNotificationOutboxRepositoryTest {
     }
 
     @Test
-    fun `processing item is recovered after restart`() {
+    fun `processing item is recovered after restart`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse("2026-07-30T12:00:00Z")
 
@@ -136,7 +137,7 @@ class MailNotificationOutboxRepositoryTest {
     }
 
     @Test
-    fun `sent item stores Telegram message id`() {
+    fun `sent item stores Telegram message id`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse("2026-07-30T12:00:00Z")
 
@@ -170,7 +171,7 @@ class MailNotificationOutboxRepositoryTest {
     }
 
     @Test
-    fun `sent item cannot be enqueued again`() {
+    fun `sent item cannot be enqueued again`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse("2026-07-30T12:00:00Z")
 
@@ -222,7 +223,7 @@ class MailNotificationOutboxRepositoryTest {
     }
 
     @Test
-    fun `completed notification atomically schedules enrichment`() {
+    fun `completed notification atomically schedules enrichment`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse(
             "2026-07-30T12:00:00Z",
@@ -293,7 +294,7 @@ class MailNotificationOutboxRepositoryTest {
     }
 
     @Test
-    fun `summary state survives repository reads`() {
+    fun `summary state survives repository reads`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse(
             "2026-07-30T12:00:00Z",
@@ -367,7 +368,7 @@ class MailNotificationOutboxRepositoryTest {
     }
 
     @Test
-    fun `summary can become inactive before delivery completion`() {
+    fun `summary can become inactive before delivery completion`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse(
             "2026-07-30T12:00:00Z",
@@ -420,10 +421,15 @@ class MailNotificationOutboxRepositoryTest {
         )
     }
 
+    @AfterTest
+    fun tearDown() {
+        DatabaseManager.close()
+    }
+
     private fun createRepository(): MailNotificationOutboxRepository {
+        DatabaseManager.close()
         val directory = createTempDirectory("mail-outbox-test-")
-        return MailNotificationOutboxRepository(
-            databasePath = directory.resolve("mail-bot.db"),
-        )
+        DatabaseManager.init(directory.resolve("mail-bot.db"))
+        return MailNotificationOutboxRepository()
     }
 }

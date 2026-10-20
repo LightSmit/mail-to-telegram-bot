@@ -247,6 +247,18 @@ class TelegramClient(
         }
     }
 
+    /** Имя бота, которому принадлежит токен (getMe). Нужно для диагностики. */
+    suspend fun getBotUsername(): String? {
+        val root = executeOnce("getMe") {
+            httpClient.get("$baseUrl/getMe")
+        }
+        return root["result"]
+            ?.jsonObject
+            ?.get("username")
+            ?.jsonPrimitive
+            ?.contentOrNull
+    }
+
     suspend fun deleteMessage(
         chatId: Long,
         messageId: Long,

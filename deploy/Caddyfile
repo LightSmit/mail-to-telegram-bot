@@ -1,0 +1,14 @@
+# DOMAIN задаётся в .env (например, mail.example.com или 203-0-113-10.sslip.io)
+{$DOMAIN} {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy mail-bot:8080
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

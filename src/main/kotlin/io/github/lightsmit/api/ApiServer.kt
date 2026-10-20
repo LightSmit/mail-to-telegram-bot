@@ -7,8 +7,10 @@ import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
+import io.ktor.server.plugins.calllogging.*
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
+import io.ktor.server.plugins.statuspages.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -56,14 +58,38 @@ class ApiServer(
                 json(Json { ignoreUnknownKeys = true })
             }
 
+            // Лог каждого запроса: метод, путь, статус, время
+            install(CallLogging)
+
+            // Любое необработанное исключение логируем и отдаём как JSON 500
+            install(StatusPages) {
+                exception<Throwable> { call, cause ->
+                    call.application.environment.log.error(
+                        "Unhandled error on ${call.request.local.method.value} ${call.request.local.uri}",
+                        cause,
+                    )
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Internal error"))
+                }
+            }
+
             routing {
                 route("/api") {
 
                     // Перехватчик: Защита всех эндпоинтов /api
                     intercept(ApplicationCallPipeline.Call) {
-                        val initData = call.request.headers["X-Telegram-Init-Data"]
+                        val initData = call.request.headers["X-Telegram-Init-Data"].orEmpty()
+                        val auth = TelegramAuthValidator.inspect(initData, botToken)
 
-                        if (initData == null || !TelegramAuthValidator.validate(initData, botToken)) {
+                        if (!auth.ok) {
+                            // Без самих данных: initData содержит данные пользователя
+                            call.application.environment.log.warn(
+                                "API auth rejected for {} {}: reason={}, initData length={}, auth_date age={}s",
+                                call.request.local.method.value,
+                                call.request.local.uri,
+                                auth.failure,
+                                initData.length,
+                                auth.authAgeSeconds,
+                            )
                             call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized"))
                             finish()
                             return@intercept

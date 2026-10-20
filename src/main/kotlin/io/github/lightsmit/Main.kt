@@ -9,6 +9,7 @@ import io.github.lightsmit.service.EmailContentLoader
 import io.github.lightsmit.service.MailForwardingService
 import io.github.lightsmit.service.MailNotificationOutboxWorker
 import io.github.lightsmit.service.TelegramDeliveryFailureClassifier
+import io.github.lightsmit.security.CryptoHelper
 import io.github.lightsmit.service.TelegramUpdatePoller
 import io.github.lightsmit.storage.DatabaseManager
 import io.github.lightsmit.storage.MailAccountRepository
@@ -17,6 +18,7 @@ import io.github.lightsmit.storage.MailStateRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.telegram.MailViewCallbackCodec
 import io.github.lightsmit.telegram.TelegramClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -38,6 +40,9 @@ fun main() = runBlocking {
     val databasePath = Path.of(
         Environment.get("DATABASE_PATH") ?: "data/mail-bot.db",
     )
+
+    // Ключ шифрования обязателен: падаем сразу, а не при первом сохранении ящика
+    CryptoHelper.requireConfigured()
 
     // ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ HIKARICP
     DatabaseManager.init(databasePath)
@@ -97,6 +102,19 @@ fun main() = runBlocking {
         proxyUrl = telegramProxyUrl,
     )
 
+    // Диагностика: какому боту принадлежит токен. Mini App должен открываться
+    // именно из этого бота, иначе проверка подписи initData не пройдёт (401).
+    launch {
+        try {
+            val username = telegramControlClient.getBotUsername()
+            println("Telegram bot for TELEGRAM_BOT_TOKEN: @$username")
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            println("Telegram getMe failed: ${exception.javaClass.simpleName}")
+        }
+    }
+
     val imapClient = ImapMailClient(
         attachmentTempDirectory = attachmentTempDirectory,
         maxAttachmentSizeBytes = maxAttachmentSizeBytes,
@@ -123,12 +141,11 @@ fun main() = runBlocking {
     )
 
     val apiServer = ApiServer(
-        port = 8080,
+        port = Environment.get("API_PORT")?.toIntOrNull() ?: 8080,
         botToken = telegramToken,
-        accountRepository = mailAccountRepository // <-- ПЕРЕДАЕМ СЮДА
+        accountRepository = mailAccountRepository,
     )
     apiServer.start()
-    println("Ktor API Server started on port 8080")
 
     val mailOutboxWorker = MailNotificationOutboxWorker(
         repository = mailOutboxRepository,
@@ -167,14 +184,6 @@ fun main() = runBlocking {
         )
         println("Persistent notification outbox worker enabled")
         println("Waiting for new emails...")
-
-        val apiServer = ApiServer(
-            port = 8081,
-            botToken = telegramToken,
-            accountRepository = mailAccountRepository
-        )
-        apiServer.start()
-        println("Ktor API Server started on port 8080")
 
         supervisorScope {
             val mailWatcherJobs = accounts.map { account ->

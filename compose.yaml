@@ -3,22 +3,37 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-
     container_name: mail-to-telegram-bot
     restart: unless-stopped
     init: true
-
     env_file:
       - .env
-
     environment:
       DATABASE_PATH: /app/data/mail-bot.db
       ATTACHMENT_TEMP_DIR: /app/data/attachments
-
       TZ: Europe/Moscow
-
     volumes:
       - mail-bot-data:/app/data
+    # Порты наружу не публикуем: к API ходит только Caddy внутри сети compose.
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: mail-to-telegram-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - mail-bot
 
 volumes:
   mail-bot-data:
+  caddy-data:
+  caddy-config:

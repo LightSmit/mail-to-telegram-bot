@@ -9,11 +9,15 @@ import java.nio.file.Path
 object DatabaseManager {
     val dispatcher = Dispatchers.IO.limitedParallelism(1)
 
-    lateinit var dataSource: HikariDataSource
-        private set
+    private var currentDataSource: HikariDataSource? = null
 
+    val dataSource: HikariDataSource
+        get() = currentDataSource
+            ?: error("DatabaseManager is not initialized: call DatabaseManager.init() first")
+
+    @Synchronized
     fun init(databasePath: Path) {
-        if (::dataSource.isInitialized) return
+        if (currentDataSource != null) return
 
         val absolutePath = databasePath.toAbsolutePath().normalize()
         absolutePath.parent?.let(Files::createDirectories)
@@ -27,6 +31,13 @@ object DatabaseManager {
             addDataSourceProperty("foreign_keys", "ON")
         }
 
-        dataSource = HikariDataSource(config)
+        currentDataSource = HikariDataSource(config)
+    }
+
+    /** Закрывает пул соединений. Нужен для корректной остановки и для изоляции тестов. */
+    @Synchronized
+    fun close() {
+        currentDataSource?.close()
+        currentDataSource = null
     }
 }

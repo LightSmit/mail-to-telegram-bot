@@ -1,29 +1,37 @@
 package io.github.lightsmit.security
 
 import io.github.lightsmit.config.Environment
-import java.util.Base64
-import javax.crypto.Cipher
-import javax.crypto.spec.SecretKeySpec
 
+/**
+ * Единая точка доступа к шифрованию. Ключ обязателен: без ENCRYPTION_KEY
+ * приложение не стартует (вместо молчаливого ключа по умолчанию).
+ */
 object CryptoHelper {
-    private const val ALGORITHM = "AES"
+    private val crypto: AesGcmCrypto by lazy {
+        val key = Environment.get("ENCRYPTION_KEY")
+            ?: error(
+                "Missing required configuration value: ENCRYPTION_KEY " +
+                    "(at least ${AesGcmCrypto.MIN_KEY_LENGTH} characters; generate with: openssl rand -base64 48)",
+            )
 
-    private val secretKey by lazy {
-        val keyStr = Environment.get("ENCRYPTION_KEY") ?: "DefaultSecureKey"
-        // Берем ровно 16 байт для AES-128
-        val keyBytes = keyStr.toByteArray().copyOf(16)
-        SecretKeySpec(keyBytes, ALGORITHM)
+        // Старые записи могли быть зашифрованы прежним ключом или ключом по умолчанию.
+        val legacyKeys = listOfNotNull(
+            Environment.get("ENCRYPTION_KEY_LEGACY"),
+            key,
+            "DefaultSecureKey",
+        ).distinct()
+
+        AesGcmCrypto(masterKey = key, legacyKeys = legacyKeys)
     }
 
-    fun encrypt(data: String): String {
-        val cipher = Cipher.getInstance(ALGORITHM)
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-        return Base64.getEncoder().encodeToString(cipher.doFinal(data.toByteArray()))
+    /** Вызвать при старте приложения, чтобы упасть сразу, а не при первом шифровании. */
+    fun requireConfigured() {
+        crypto
     }
 
-    fun decrypt(encryptedData: String): String {
-        val cipher = Cipher.getInstance(ALGORITHM)
-        cipher.init(Cipher.DECRYPT_MODE, secretKey)
-        return String(cipher.doFinal(Base64.getDecoder().decode(encryptedData)))
-    }
+    fun encrypt(data: String): String = crypto.encrypt(data)
+
+    fun decrypt(encryptedData: String): String = crypto.decrypt(encryptedData)
+
+    fun isCurrentFormat(stored: String): Boolean = crypto.isCurrentFormat(stored)
 }

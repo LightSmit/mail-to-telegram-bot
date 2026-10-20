@@ -1,5 +1,6 @@
 package io.github.lightsmit.service
 
+import io.github.lightsmit.storage.DatabaseManager
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailOutboxEmailMetadata
 import io.github.lightsmit.storage.MailOutboxStatus
@@ -8,6 +9,7 @@ import io.github.lightsmit.telegram.TelegramTransportException
 import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import kotlin.io.path.createTempDirectory
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -161,7 +163,7 @@ class MailNotificationOutboxWorkerTest {
     }
 
     @Test
-    fun `worker recovers interrupted processing item`() {
+    fun `worker recovers interrupted processing item`() = runBlocking<Unit> {
         val repository = createRepository()
         val now = Instant.parse("2026-07-30T15:00:00Z")
 
@@ -269,7 +271,7 @@ class MailNotificationOutboxWorkerTest {
             )
         }
 
-    private fun enqueueTestItem(
+    private suspend fun enqueueTestItem(
         repository: MailNotificationOutboxRepository,
         now: Instant,
     ) {
@@ -288,7 +290,7 @@ class MailNotificationOutboxWorkerTest {
         )
     }
 
-    private fun findTestItem(
+    private suspend fun findTestItem(
         repository: MailNotificationOutboxRepository,
     ) = repository.find(
         accountKey = ACCOUNT_KEY,
@@ -296,13 +298,18 @@ class MailNotificationOutboxWorkerTest {
         uid = UID,
     )
 
+    @AfterTest
+    fun tearDown() {
+        DatabaseManager.close()
+    }
+
     private fun createRepository(): MailNotificationOutboxRepository {
+        DatabaseManager.close()
         val directory =
             createTempDirectory("mail-outbox-worker-test-")
+        DatabaseManager.init(directory.resolve("mail-bot.db"))
 
-        return MailNotificationOutboxRepository(
-            databasePath = directory.resolve("mail-bot.db"),
-        )
+        return MailNotificationOutboxRepository()
     }
 
     private companion object {
