@@ -9,6 +9,13 @@ import './index.css'
 if (telegramScriptLoaded) {
   WebApp.ready();
   WebApp.expand();
+
+  // Светлая или темная тема Telegram: от нее зависит оттенок фирменного цвета
+  const applyScheme = () => {
+    document.documentElement.dataset.tgScheme = WebApp.colorScheme;
+  };
+  applyScheme();
+  WebApp.onEvent('themeChanged', applyScheme);
 }
 
 createRoot(document.getElementById('root')!).render(

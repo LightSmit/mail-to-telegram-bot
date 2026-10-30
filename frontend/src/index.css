@@ -1,15 +1,22 @@
 /*
-  Цвета берутся из темы Telegram (переменные --tg-theme-*, их выставляет
-  telegram-web-app.js), поэтому приложение выглядит родным и в светлой,
-  и в темной теме. Значения после запятой - запасные, для браузера.
+  Фон, текст и подсказки берутся из темы Telegram (переменные --tg-theme-*,
+  их выставляет telegram-web-app.js), поэтому приложение выглядит родным
+  и в светлой, и в темной теме. Значения после запятой - запасные, для браузера.
+  Акцентный цвет свой, фирменный: фиолетово-голубой, как на аватарке бота.
 */
 :root {
   --fb-bg: #ffffff;
   --fb-surface: #f1f2f5;
   --fb-text: #15181d;
   --fb-hint: #7a8290;
-  --fb-accent: #2f6fe4;
   --fb-accent-text: #ffffff;
+
+  /* Фирменные цвета (аватарка бота) */
+  --brand-violet: #6c4dff;
+  --brand-blue: #2a7de1;
+  --brand-gradient: linear-gradient(135deg, var(--brand-violet), var(--brand-blue));
+  --brand-accent: #5b4ce8;
+  --brand-link: #5443d8;
   --fb-danger: #e0423f;
   --fb-separator: rgba(120, 128, 140, 0.22);
 
@@ -17,17 +24,17 @@
   --surface: var(--tg-theme-secondary-bg-color, var(--fb-surface));
   --text: var(--tg-theme-text-color, var(--fb-text));
   --hint: var(--tg-theme-hint-color, var(--fb-hint));
-  --accent: var(--tg-theme-button-color, var(--fb-accent));
-  --accent-text: var(--tg-theme-button-text-color, var(--fb-accent-text));
-  --link: var(--tg-theme-link-color, var(--accent));
+  --accent: var(--brand-accent);
+  --accent-text: var(--fb-accent-text);
+  --link: var(--brand-link);
   --danger: var(--tg-theme-destructive-text-color, var(--fb-danger));
   --separator: var(--tg-theme-section-separator-color, var(--fb-separator));
   --ok: #2fa66a;
   --warn: #e0a019;
 
-  /* Полоска авиапочты: единственный декоративный элемент */
-  --airmail-red: #d1233a;
-  --airmail-blue: #1f57b0;
+  /* Полоска авиапочты в фирменных цветах: единственный декоративный элемент */
+  --airmail-red: var(--brand-violet);
+  --airmail-blue: #2fb8ff;
   --airmail: repeating-linear-gradient(
     -45deg,
     var(--airmail-red) 0 12px,
@@ -53,9 +60,27 @@
     --fb-surface: #22252b;
     --fb-text: #eef0f3;
     --fb-hint: #8d95a3;
-    --fb-accent: #4c8dff;
     --fb-separator: rgba(160, 168, 180, 0.18);
   }
+}
+
+/* В темной теме фирменный цвет светлее, чтобы ссылки и переключатели читались на темном фоне */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand-accent: #7b6cff;
+    --brand-link: #a59bff;
+  }
+}
+
+/* Telegram сообщает свою тему атрибутом, он важнее настроек браузера */
+:root[data-tg-scheme='dark'] {
+  --brand-accent: #7b6cff;
+  --brand-link: #a59bff;
+}
+
+:root[data-tg-scheme='light'] {
+  --brand-accent: #5b4ce8;
+  --brand-link: #5443d8;
 }
 
 * {

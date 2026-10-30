@@ -296,7 +296,7 @@ select:focus {
 
 .steps li::marker {
   font-weight: 700;
-  color: var(--airmail-blue);
+  color: var(--link);
 }
 
 .steps-placeholder {
@@ -308,7 +308,7 @@ select:focus {
   padding: 14px;
   border: 0;
   border-radius: 12px;
-  background: var(--accent);
+  background: var(--brand-gradient);
   color: var(--accent-text);
   font-size: 16px;
   font-weight: 600;
