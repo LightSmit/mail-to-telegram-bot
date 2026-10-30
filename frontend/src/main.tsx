@@ -2,10 +2,11 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import WebApp from '@twa-dev/sdk'
 import App from './App.tsx'
+import { telegramScriptLoaded } from './telegram'
 import './index.css'
 
-// Вызываем методы Telegram только если мы реально внутри Telegram
-if (WebApp.initData) {
+// Вызываем методы Telegram, только если официальный скрипт загрузился
+if (telegramScriptLoaded) {
   WebApp.ready();
   WebApp.expand();
 }

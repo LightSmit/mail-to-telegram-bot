@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import WebApp from '@twa-dev/sdk'
 import './App.css'
+import { initData, initDataSource, telegramScriptLoaded } from './telegram'
 
 interface Account {
   name: string;
@@ -22,11 +22,9 @@ function describeError(error: unknown): string {
 // Для 401 показываем, пришли ли вообще данные от Telegram
 function httpError(prefix: string, status: number): string {
   if (status !== 401) return `${prefix} (HTTP ${status})`;
-  const length = WebApp.initData?.length ?? 0;
-  const userId = WebApp.initDataUnsafe?.user?.id;
   const hashLength = window.location.hash.length;
-  return `${prefix} (HTTP 401). Telegram-данные: ${length} симв., user: ${userId ?? 'нет'}; ` +
-    `платформа: ${WebApp.platform}, версия: ${WebApp.version}, hash в адресе: ${hashLength} симв.`;
+  return `${prefix} (HTTP 401). Telegram-данные: ${initData.length} симв. (источник: ${initDataSource}); ` +
+    `скрипт Telegram: ${telegramScriptLoaded ? 'загружен' : 'не загружен'}, hash в адресе: ${hashLength} симв.`;
 }
 
 function App() {
@@ -34,7 +32,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<Status>(
-    WebApp.initData ? null : { kind: 'error', text: 'Откройте приложение из Telegram: без него вход невозможен' }
+    initData ? null : { kind: 'error', text: 'Откройте приложение из Telegram: без него вход невозможен' }
   );
 
   // Состояния формы
@@ -58,7 +56,7 @@ function App() {
         signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
-          'X-Telegram-Init-Data': WebApp.initData || ''
+          'X-Telegram-Init-Data': initData
         },
         body: body === undefined ? undefined : JSON.stringify(body)
       });

@@ -6,6 +6,15 @@
 		reverse_proxy mail-bot:8080
 	}
 
+	# Официальный скрипт Telegram Mini App через наш сервер:
+	# у пользователей в России telegram.org может не открываться.
+	handle /telegram-web-app.js {
+		rewrite * /js/telegram-web-app.js
+		reverse_proxy https://telegram.org {
+			header_up Host {upstream_hostport}
+		}
+	}
+
 	handle {
 		root * /srv
 		try_files {path} /index.html

@@ -17,6 +17,12 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      // Тот же путь, что отдаёт Caddy в проде
+      '/telegram-web-app.js': {
+        target: 'https://telegram.org',
+        changeOrigin: true,
+        rewrite: () => '/js/telegram-web-app.js',
+      },
     },
   },
 })

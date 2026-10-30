@@ -31,3 +31,5 @@ Thumbs.db
 diagnostic-logs.txt
 mail-bot-diagnostic/
 mail-bot-diagnostic.zip
+# Patch files
+*.patch

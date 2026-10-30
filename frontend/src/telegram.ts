@@ -1,0 +1,42 @@
+import WebApp from '@twa-dev/sdk'
+
+// Официальный скрипт Telegram (telegram-web-app.js) может не загрузиться,
+// например, если telegram.org недоступен у пользователя. Тогда объект WebApp
+// пустой, хотя Telegram всё равно передаёт подписанные данные в адресе
+// страницы: #tgWebAppData=...  Читаем их сами как запасной вариант.
+
+type TelegramGlobal = { Telegram?: { WebApp?: { initData?: string } } };
+
+function readFromHash(): string {
+  try {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    return params.get('tgWebAppData') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function resolveInitData(): string {
+  const fromSdk = WebApp.initData || (window as unknown as TelegramGlobal).Telegram?.WebApp?.initData;
+  if (fromSdk) return fromSdk;
+
+  const fromHash = readFromHash();
+  if (fromHash) {
+    try { sessionStorage.setItem('tgWebAppData', fromHash); } catch { /* хранилище недоступно */ }
+    return fromHash;
+  }
+
+  // После перезагрузки страницы hash может исчезнуть
+  try { return sessionStorage.getItem('tgWebAppData') ?? ''; } catch { return ''; }
+}
+
+/** Подписанные данные Telegram, вычисляются один раз при загрузке страницы. */
+export const initData: string = resolveInitData();
+
+/** Загрузился ли официальный скрипт Telegram (нужен для ready/expand/тем). */
+const platform = String((WebApp as { platform?: unknown }).platform ?? '');
+export const telegramScriptLoaded: boolean = platform !== '' && platform !== 'unknown';
+
+/** Откуда взялись данные: для диагностики. */
+export const initDataSource: string =
+  WebApp.initData ? 'sdk' : initData ? 'адрес страницы' : 'нет';
