@@ -35,8 +35,9 @@ object ImapSessionFactory {
                 WRITE_TIMEOUT_MILLIS.toString(),
             )
 
-            // Добавляем пинг сервера каждые 10 секунд во время IDLE
-            setProperty("mail.imaps.minidletime", "10000")
+            // mail.imaps.minidletime НЕ задаём: это не пинг, а принудительная пауза
+            // вокруг каждой команды IDLE. Значение 10000 задерживало каждое новое
+            // письмо примерно на 10 секунд. Оставляем значение по умолчанию.
 
             // A larger partial-fetch block substantially reduces round trips
             // when an email contains medium-sized attachments.
