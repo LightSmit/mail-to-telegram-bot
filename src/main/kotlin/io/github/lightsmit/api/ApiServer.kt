@@ -25,7 +25,15 @@ import java.net.URLDecoder
 
 // --- DTO Модели для приема и отдачи JSON ---
 @Serializable
-data class AccountResponseDto(val id: Long, val name: String, val email: String, val host: String)
+data class AccountResponseDto(
+    val id: Long,
+    val name: String,
+    val email: String,
+    val host: String,
+    // CONNECTING, OK или ERROR; problem - понятное описание ошибки
+    val status: String = "CONNECTING",
+    val problem: String? = null,
+)
 
 @Serializable
 data class AddAccountRequestDto(
@@ -113,7 +121,15 @@ class ApiServer(
                     get("/accounts") {
                         val ownerId = call.attributes[UserIdKey]
                         val response = accountService.list(ownerId).map { account ->
-                            AccountResponseDto(id = account.id, name = account.name, email = account.username, host = account.host)
+                            val health = accountService.health(account.id)
+                            AccountResponseDto(
+                                id = account.id,
+                                name = account.name,
+                                email = account.username,
+                                host = account.host,
+                                status = health.status.name,
+                                problem = health.problem,
+                            )
                         }
                         call.respond(response)
                     }

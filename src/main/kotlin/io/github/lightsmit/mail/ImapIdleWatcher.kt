@@ -23,6 +23,9 @@ class ImapIdleWatcher(
         suspend (MailAccountConfig) -> Unit,
     private val reconnectDelaySeconds: Long,
     private val safetyPollSeconds: Long,
+    // Сообщают монитору здоровья ящиков: подключение удалось / сорвалось
+    private val onMailboxConnected: (MailAccountConfig) -> Unit = {},
+    private val onMailboxFailure: (MailAccountConfig, Exception) -> Unit = { _, _ -> },
 ) {
 
     private val logger =
@@ -67,6 +70,7 @@ class ImapIdleWatcher(
                     consecutiveFailures = 0
                 }
                 consecutiveFailures++
+                onMailboxFailure(account, exception)
 
                 val delayMillis = backoffMillis(consecutiveFailures)
                 logger.warn(
@@ -117,6 +121,7 @@ class ImapIdleWatcher(
                 "IMAP IDLE monitoring started for {}",
                 account.username,
             )
+            onMailboxConnected(account)
 
             onIdleMailboxChanged(account, openedInbox)
 
@@ -164,10 +169,12 @@ class ImapIdleWatcher(
             try {
                 onSafetyMailboxCheck(account)
                 consecutiveFailures = 0
+                onMailboxConnected(account)
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
                 consecutiveFailures++
+                onMailboxFailure(account, exception)
                 logger.debug(
                     "Safety mail check failed for {}: {} ({})",
                     account.username,

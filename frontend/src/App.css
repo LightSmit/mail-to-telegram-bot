@@ -1,125 +1,292 @@
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-}
-
-body {
-  margin: 0;
-  background-color: var(--tg-theme-bg-color, #ffffff);
-  color: var(--tg-theme-text-color, #1a1a1a); /* Сделали базовый текст темным */
-}
-
-.container {
-  padding: 20px;
-  max-width: 500px;
+.app {
+  max-width: 560px;
   margin: 0 auto;
-}
-
-h1, h2 {
-  font-size: 20px;
-  margin-bottom: 15px;
-  color: var(--tg-theme-text-color, #1a1a1a); /* Явно красим заголовки */
-}
-
-.status-text {
-  color: var(--tg-theme-hint-color, #707070); /* Сделали подсказки видимыми */
-  font-size: 14px;
-}
-
-.account-list ul {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 30px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.account-item {
-  background-color: var(--tg-theme-secondary-bg-color, #f4f4f5);
-  padding: 15px;
-  border-radius: 12px;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.account-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
+  padding: 0 16px 40px;
   text-align: left;
 }
 
-.account-info span {
+/* Шапка: полоска авиапочты над названием */
+.masthead {
+  padding-top: 18px;
+  margin-bottom: 20px;
+}
+
+.airmail-band {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--airmail);
+  margin-bottom: 18px;
+}
+
+.masthead h1 {
+  font-size: 27px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  margin-top: 6px;
+  color: var(--hint);
+  font-size: 15px;
+}
+
+/* Сообщения о результате действий */
+.notice {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  font-size: 15px;
+  background: var(--surface);
+  border-left: 4px solid var(--hint);
+}
+
+.notice-ok {
+  border-left-color: var(--ok);
+}
+
+.notice-error {
+  border-left-color: var(--danger);
+}
+
+.notice-info {
+  border-left-color: var(--accent);
+}
+
+/* Разделы */
+.section + .section {
+  margin-top: 28px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.count {
+  min-width: 22px;
+  padding: 0 7px;
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--hint);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: center;
+}
+
+.empty {
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--hint);
+  font-size: 15px;
+}
+
+/* Список ящиков: одна сгруппированная плашка, как в настройках Telegram */
+.mailbox-list {
+  list-style: none;
+  padding: 0;
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.mailbox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 14px;
+}
+
+.mailbox + .mailbox {
+  border-top: 1px solid var(--separator);
+}
+
+.status-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.status-ok {
+  background: var(--ok);
+}
+
+.status-error {
+  background: var(--danger);
+}
+
+.mailbox-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.mailbox-name {
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.account-item strong {
-  font-size: 16px;
-}
-
-.host-text {
-  font-size: 12px;
-  color: var(--tg-theme-hint-color, #999999);
-}
-
-.add-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-input, select {
-  padding: 14px;
-  font-size: 16px;
-  border-radius: 10px;
-  border: 1px solid var(--tg-theme-hint-color, #cccccc);
-  background-color: var(--tg-theme-bg-color, #ffffff);
-  color: var(--tg-theme-text-color, #000000);
-  outline: none;
-}
-
-input:focus, select:focus {
-  border-color: var(--tg-theme-button-color, #2481cc);
-}
-
-button {
-  padding: 14px;
-  font-size: 16px;
-  font-weight: 600;
-  border-radius: 10px;
-  border: none;
-  background-color: var(--tg-theme-button-color, #2481cc);
-  color: var(--tg-theme-button-text-color, #ffffff);
-  cursor: pointer;
-  margin-top: 10px;
-}
-
-button:active {
-  opacity: 0.8;
-}
-
-.delete-button {
-  margin-top: 0;
-  padding: 8px 12px;
+.mailbox-address {
   font-size: 14px;
-  flex-shrink: 0;
-  background-color: transparent;
-  color: var(--tg-theme-destructive-text-color, #e5484d);
-  border: 1px solid var(--tg-theme-destructive-text-color, #e5484d);
+  color: var(--hint);
+  overflow-wrap: anywhere;
 }
 
-.delete-button.confirm {
-  background-color: var(--tg-theme-destructive-text-color, #e5484d);
+.mailbox-status {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.status-text-error {
+  color: var(--danger);
+}
+
+.remove {
+  flex-shrink: 0;
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.remove.confirm {
+  background: var(--danger);
   color: #ffffff;
 }
 
-.hint-text {
-  margin: 0;
+.remove:disabled {
+  opacity: 0.6;
+}
+
+/* Форма */
+.add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.optional {
+  color: var(--hint);
+  font-weight: 400;
+}
+
+.field-hint {
   font-size: 13px;
-  text-align: left;
-  color: var(--tg-theme-hint-color, #707070);
+  color: var(--hint);
+}
+
+input,
+select {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--separator);
+  background: var(--surface);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+select {
+  background-image: linear-gradient(45deg, transparent 50%, var(--hint) 50%),
+    linear-gradient(135deg, var(--hint) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 50%, calc(100% - 14px) 50%;
+  background-size: 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 36px;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--accent);
+}
+
+/* Главный блок: про пароль приложения. Обрамлён полоской авиапочты */
+.app-password {
+  position: relative;
+  padding: 18px 16px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.app-password::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 5px;
+  background: var(--airmail);
+}
+
+.app-password h3 {
+  font-size: 16px;
+  line-height: 1.3;
+  font-weight: 700;
+}
+
+.app-password p {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--hint);
+}
+
+.steps {
+  margin-top: 12px;
+  padding-left: 22px;
+  font-size: 15px;
+}
+
+.steps li + li {
+  margin-top: 6px;
+}
+
+.steps li::marker {
+  font-weight: 700;
+  color: var(--airmail-blue);
+}
+
+.steps-placeholder {
+  font-style: italic;
+}
+
+.primary {
+  margin-top: 4px;
+  padding: 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary:disabled {
+  opacity: 0.7;
 }

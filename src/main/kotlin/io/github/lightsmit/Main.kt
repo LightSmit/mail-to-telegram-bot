@@ -8,6 +8,7 @@ import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.service.EmailContentLoader
 import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
+import io.github.lightsmit.service.MailboxHealthMonitor
 import io.github.lightsmit.service.MailboxSupervisor
 import io.github.lightsmit.service.MailForwardingService
 import io.github.lightsmit.service.MailNotificationOutboxWorker
@@ -47,6 +48,10 @@ fun main() = runBlocking {
     }
 
     val telegramProxyUrl = Environment.get("TELEGRAM_PROXY_URL")
+
+    // Адрес Mini App для кнопок в сообщениях бота: MINI_APP_URL или https://DOMAIN
+    val miniAppUrl = Environment.get("MINI_APP_URL")
+        ?: Environment.get("DOMAIN")?.let { domain -> "https://$domain" }
 
     val databasePath = Path.of(
         Environment.get("DATABASE_PATH") ?: "data/mail-bot.db",
@@ -152,11 +157,18 @@ fun main() = runBlocking {
         contentLoader = contentLoader,
     )
 
+    val healthMonitor = MailboxHealthMonitor(
+        telegramClient = telegramControlClient,
+        miniAppUrl = miniAppUrl,
+    )
+
     val idleWatcher = ImapIdleWatcher(
         onIdleMailboxChanged = forwardingService::processIdleAccount,
         onSafetyMailboxCheck = forwardingService::processAccount,
         reconnectDelaySeconds = reconnectDelaySeconds,
         safetyPollSeconds = safetyPollSeconds,
+        onMailboxConnected = healthMonitor::onConnected,
+        onMailboxFailure = healthMonitor::onFailure,
     )
 
     val mailboxSupervisor = MailboxSupervisor(
@@ -171,6 +183,7 @@ fun main() = runBlocking {
         outboxRepository = mailOutboxRepository,
         imapClient = imapClient,
         maxAccountsPerOwner = maxAccountsPerOwner,
+        healthMonitor = healthMonitor,
     )
 
     // Разовый перенос ящиков из .env в базу (повторный запуск ничего не дублирует)
@@ -205,8 +218,8 @@ fun main() = runBlocking {
             pollingClient = telegramPollingClient,
             controlClient = telegramControlClient,
             forwardingService = forwardingService,
-            // РЕПОЗИТОРИЮ БОЛЬШЕ НЕ НУЖЕН ПУТЬ К БАЗЕ
             stateRepository = TelegramUpdateStateRepository(),
+            miniAppUrl = miniAppUrl,
         )
 
         println("Watched mailboxes: $watchedMailboxes (limit per user: $maxAccountsPerOwner)")
@@ -237,6 +250,7 @@ fun main() = runBlocking {
         }
     } finally {
         mailboxSupervisor.close()
+        healthMonitor.close()
         forwardingService.close()
         contentLoader.close()
         telegramMediaClient.close()

@@ -155,6 +155,45 @@ class TelegramClient(
         return extractMessageId(root)
     }
 
+    /** Сообщение с кнопкой, которая открывает Mini App прямо в Telegram (с подписанными данными). */
+    suspend fun sendMessageWithWebAppButton(
+        chatId: Long,
+        text: String,
+        buttonText: String,
+        webAppUrl: String,
+    ): Long {
+        val replyMarkup = buildJsonObject {
+            put(
+                "inline_keyboard",
+                buildJsonArray {
+                    add(
+                        buildJsonArray {
+                            add(
+                                buildJsonObject {
+                                    put("text", buttonText)
+                                    put("web_app", buildJsonObject { put("url", webAppUrl) })
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        }
+
+        val root = executeWithRetry("sendMessage") {
+            httpClient.submitForm(
+                url = "$baseUrl/sendMessage",
+                formParameters = Parameters.build {
+                    append("chat_id", chatId.toString())
+                    append("text", text)
+                    append("reply_markup", replyMarkup.toString())
+                },
+            )
+        }
+
+        return extractMessageId(root)
+    }
+
     fun fitsSingleTextMessage(
         text: String,
     ): Boolean {
@@ -306,7 +345,7 @@ class TelegramClient(
                     }
                     parameters.append(
                         "allowed_updates",
-                        """["callback_query"]""",
+                        """["callback_query","message"]""",
                     )
                 }
             }
@@ -321,6 +360,7 @@ class TelegramClient(
 
         var highestUpdateId: Long? = null
         val callbackQueries = mutableListOf<TelegramCallbackQueryUpdate>()
+        val messages = mutableListOf<TelegramMessageUpdate>()
 
         for (updateElement in updates) {
             val update = updateElement.jsonObject
@@ -333,6 +373,24 @@ class TelegramClient(
                 highestUpdateId ?: updateId,
                 updateId,
             )
+
+            val message = update["message"]?.jsonObject
+            if (message != null) {
+                val chat = message["chat"]?.jsonObject
+                val chatId = chat?.get("id")?.jsonPrimitive?.longOrNull
+                val fromUserId = message["from"]?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
+
+                if (chatId != null && fromUserId != null) {
+                    messages += TelegramMessageUpdate(
+                        updateId = updateId,
+                        chatId = chatId,
+                        chatType = chat?.get("type")?.jsonPrimitive?.contentOrNull,
+                        fromUserId = fromUserId,
+                        text = message["text"]?.jsonPrimitive?.contentOrNull,
+                    )
+                }
+                continue
+            }
 
             val callbackQuery = update["callback_query"]
                 ?.jsonObject
@@ -382,6 +440,7 @@ class TelegramClient(
         return TelegramUpdateBatch(
             nextOffset = highestUpdateId?.plus(1),
             callbackQueries = callbackQueries,
+            messages = messages,
         )
     }
 

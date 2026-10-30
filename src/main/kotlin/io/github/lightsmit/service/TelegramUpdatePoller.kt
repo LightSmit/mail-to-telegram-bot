@@ -6,6 +6,7 @@ import io.github.lightsmit.telegram.MailViewCallbackCodec
 import io.github.lightsmit.telegram.TelegramApiException
 import io.github.lightsmit.telegram.TelegramCallbackQueryUpdate
 import io.github.lightsmit.telegram.TelegramClient
+import io.github.lightsmit.telegram.TelegramMessageUpdate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -22,6 +23,8 @@ class TelegramUpdatePoller(
     private val controlClient: TelegramClient,
     private val forwardingService: MailForwardingService,
     private val stateRepository: TelegramUpdateStateRepository,
+    // Адрес Mini App для кнопки в приветствии; null - кнопку не показываем
+    private val miniAppUrl: String? = null,
 ) {
 
     private val logger =
@@ -48,6 +51,12 @@ class TelegramUpdatePoller(
                 for (callbackQuery in batch.callbackQueries) {
                     launch {
                         handleCallbackQuery(callbackQuery)
+                    }
+                }
+
+                for (message in batch.messages) {
+                    launch {
+                        handleMessage(message)
                     }
                 }
             } catch (exception: CancellationException) {
@@ -205,6 +214,43 @@ class TelegramUpdatePoller(
         }
     }
 
+    // Бот не переписывается: на /start и /help отвечает инструкцией,
+    // на остальное - короткой подсказкой. Только в личном чате.
+    private suspend fun handleMessage(
+        message: TelegramMessageUpdate,
+    ) {
+        if (message.chatType != "private") return
+
+        val command = message.text
+            ?.trim()
+            ?.substringBefore(' ')
+            ?.substringBefore('@')
+            ?.lowercase()
+
+        val text = when (command) {
+            "/start", "/help" -> WELCOME_TEXT
+            else -> "Я не отвечаю на сообщения, зато пересылаю сюда новые письма 🙂\n\n" +
+                "Подключить или удалить ящик можно в приложении. Инструкция: /help"
+        }
+
+        try {
+            if (miniAppUrl != null) {
+                controlClient.sendMessageWithWebAppButton(
+                    chatId = message.chatId,
+                    text = text,
+                    buttonText = "📬 Открыть приложение",
+                    webAppUrl = miniAppUrl,
+                )
+            } else {
+                controlClient.sendMessage(chatId = message.chatId, text = text)
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to answer message from {}: {}", message.fromUserId, exception.javaClass.simpleName)
+        }
+    }
+
     private suspend fun performActionWithAcknowledgement(
         callbackQueryId: String,
         text: String?,
@@ -254,6 +300,17 @@ class TelegramUpdatePoller(
     }
 
     private companion object {
+        val WELCOME_TEXT = """
+            👋 Привет! Я пересылаю новые письма из ваших почтовых ящиков прямо сюда, в Telegram.
+
+            Как подключить ящик:
+            1. Откройте приложение кнопкой ниже (или кнопкой меню слева от поля ввода).
+            2. Создайте в настройках почты пароль приложения. Это НЕ ваш обычный пароль от почты, а отдельный код, который выдаёт сам почтовый сервис. Пошаговая инструкция для каждого сервиса есть в приложении.
+            3. Введите адрес почты и пароль приложения. Бот проверит вход и начнёт присылать новые письма.
+
+            Поддерживаются Mail.ru, Яндекс, Gmail, Рамблер, iCloud и другие ящики с доступом по IMAP.
+        """.trimIndent()
+
         const val LONG_POLL_TIMEOUT_SECONDS = 25
         const val POLL_RETRY_DELAY_MILLIS = 1_000L
         const val CALLBACK_ANSWER_TIMEOUT_MILLIS = 5_000L

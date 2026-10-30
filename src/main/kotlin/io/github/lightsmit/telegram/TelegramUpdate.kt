@@ -9,7 +9,17 @@ data class TelegramCallbackQueryUpdate(
     val data: String?,
 )
 
+/** Текстовое сообщение пользователя боту (например, /start). */
+data class TelegramMessageUpdate(
+    val updateId: Long,
+    val chatId: Long,
+    val chatType: String?,
+    val fromUserId: Long,
+    val text: String?,
+)
+
 data class TelegramUpdateBatch(
     val nextOffset: Long?,
     val callbackQueries: List<TelegramCallbackQueryUpdate>,
+    val messages: List<TelegramMessageUpdate> = emptyList(),
 )

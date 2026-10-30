@@ -41,12 +41,16 @@ class MailAccountService(
     private val outboxRepository: MailNotificationOutboxRepository,
     private val imapClient: ImapMailClient,
     private val maxAccountsPerOwner: Int,
+    private val healthMonitor: MailboxHealthMonitor,
 ) {
 
     private val logger = LoggerFactory.getLogger(MailAccountService::class.java)
 
     suspend fun list(ownerChatId: Long): List<MailAccountConfig> =
         repository.findAllByOwnerId(ownerChatId)
+
+    fun health(accountId: Long): MailboxHealth =
+        healthMonitor.health(accountId)
 
     suspend fun add(ownerChatId: Long, request: NewMailAccount): AddMailAccountResult {
         val username = request.username.trim().let { value ->
@@ -93,6 +97,7 @@ class MailAccountService(
         }
 
         val saved = repository.upsert(ownerChatId, candidate)
+        healthMonitor.forget(saved.id)
         supervisor.start(saved)
 
         logger.info("Mailbox {} (id {}) added by owner {}", saved.username, saved.id, ownerChatId)
@@ -103,6 +108,7 @@ class MailAccountService(
     suspend fun delete(ownerChatId: Long, accountId: Long): Boolean {
         val deleted = repository.delete(accountId, ownerChatId) ?: return false
         supervisor.stop(accountId)
+        healthMonitor.forget(accountId)
         stateRepository.delete(MailAccountKeys.accountKey(deleted))
         logger.info("Mailbox {} (id {}) deleted by owner {}", deleted.username, deleted.id, ownerChatId)
         return true
