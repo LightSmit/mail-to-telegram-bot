@@ -1,7 +1,8 @@
 package io.github.lightsmit.api
 
-import io.github.lightsmit.config.MailAccountConfig
-import io.github.lightsmit.storage.MailAccountRepository
+import io.github.lightsmit.service.AddMailAccountResult
+import io.github.lightsmit.service.MailAccountService
+import io.github.lightsmit.service.NewMailAccount
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -24,13 +25,13 @@ import java.net.URLDecoder
 
 // --- DTO Модели для приема и отдачи JSON ---
 @Serializable
-data class AccountResponseDto(val name: String, val email: String, val host: String)
+data class AccountResponseDto(val id: Long, val name: String, val email: String, val host: String)
 
 @Serializable
 data class AddAccountRequestDto(
-    val name: String,
+    val name: String = "",
     val host: String,
-    val port: Int,
+    val port: Int = 993,
     val username: String,
     val appPassword: String
 )
@@ -38,7 +39,7 @@ data class AddAccountRequestDto(
 class ApiServer(
     private val port: Int = 8080,
     private val botToken: String,
-    private val accountRepository: MailAccountRepository
+    private val accountService: MailAccountService,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -52,6 +53,7 @@ class ApiServer(
                 allowMethod(HttpMethod.Options)
                 allowMethod(HttpMethod.Get)
                 allowMethod(HttpMethod.Post)
+                allowMethod(HttpMethod.Delete)
             }
 
             install(ContentNegotiation) {
@@ -107,32 +109,66 @@ class ApiServer(
                         call.attributes.put(UserIdKey, userId)
                     }
 
-                    // Получить список аккаунтов текущего пользователя
+                    // Ящики текущего пользователя
                     get("/accounts") {
                         val ownerId = call.attributes[UserIdKey]
-                        val accounts = accountRepository.findAllByOwnerId(ownerId)
-
-                        val response = accounts.map {
-                            AccountResponseDto(name = it.name, email = it.username, host = it.host)
+                        val response = accountService.list(ownerId).map { account ->
+                            AccountResponseDto(id = account.id, name = account.name, email = account.username, host = account.host)
                         }
                         call.respond(response)
                     }
 
-                    // Добавить новый аккаунт
+                    // Добавить ящик: проверяем адрес сервера и вход, потом сохраняем и начинаем следить
                     post("/accounts") {
                         val ownerId = call.attributes[UserIdKey]
                         val request = call.receive<AddAccountRequestDto>()
 
-                        val config = MailAccountConfig(
-                            name = request.name,
-                            host = request.host,
-                            port = request.port,
-                            username = request.username,
-                            password = request.appPassword
+                        val result = accountService.add(
+                            ownerChatId = ownerId,
+                            request = NewMailAccount(
+                                name = request.name,
+                                host = request.host,
+                                port = request.port,
+                                username = request.username,
+                                password = request.appPassword,
+                            ),
                         )
 
-                        accountRepository.save(ownerId, config)
-                        call.respond(HttpStatusCode.Created, mapOf("status" to "success"))
+                        when (result) {
+                            is AddMailAccountResult.Added -> {
+                                val account = result.account
+                                call.respond(
+                                    HttpStatusCode.Created,
+                                    AccountResponseDto(id = account.id, name = account.name, email = account.username, host = account.host),
+                                )
+                            }
+
+                            is AddMailAccountResult.Rejected ->
+                                call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
+
+                            is AddMailAccountResult.LimitReached ->
+                                call.respond(
+                                    HttpStatusCode.Conflict,
+                                    mapOf("error" to "Можно подключить не больше ${result.limit} ящиков"),
+                                )
+                        }
+                    }
+
+                    // Удалить свой ящик
+                    delete("/accounts/{id}") {
+                        val ownerId = call.attributes[UserIdKey]
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+
+                        if (accountId == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный ящик"))
+                            return@delete
+                        }
+
+                        if (accountService.delete(ownerId, accountId)) {
+                            call.respond(HttpStatusCode.OK, mapOf("status" to "deleted"))
+                        } else {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Ящик не найден"))
+                        }
                     }
                 }
             }

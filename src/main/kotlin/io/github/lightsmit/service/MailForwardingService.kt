@@ -1,6 +1,7 @@
 package io.github.lightsmit.service
 
 import io.github.lightsmit.config.MailAccountConfig
+import io.github.lightsmit.config.MailAccountKeys
 import io.github.lightsmit.mail.EmailSummary
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
@@ -38,11 +39,10 @@ private data class ActiveView(
 )
 
 class MailForwardingService(
-    accounts: List<MailAccountConfig>,
+    private val registry: MailAccountRegistry,
     private val imapClient: ImapMailClient,
     private val telegramControlClient: TelegramClient,
     private val telegramMediaClient: TelegramClient,
-    private val telegramChatId: Long,
     private val stateRepository: MailStateRepository,
     private val outboxRepository: MailNotificationOutboxRepository,
     private val contentLoader: EmailContentLoader,
@@ -51,8 +51,6 @@ class MailForwardingService(
     private val logger =
         LoggerFactory.getLogger(MailForwardingService::class.java)
 
-    private val accountsByKey =
-        accounts.associateBy(::buildAccountKey)
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO,
     )
@@ -68,13 +66,6 @@ class MailForwardingService(
         .withZone(ZoneId.systemDefault())
 
     init {
-        require(accounts.isNotEmpty()) {
-            "At least one mail account is required"
-        }
-        require(accountsByKey.size == accounts.size) {
-            "Mail account host and username combinations must be unique"
-        }
-
         // Фоновая очистка "забытых" сообщений (старше 24 часов)
         scope.launch {
             while (isActive) {
@@ -92,9 +83,9 @@ class MailForwardingService(
     suspend fun deliverOutboxNotification(
         item: MailOutboxItem,
     ): Long {
-        val account = accountsByKey[item.accountKey]
+        val account = registry.findByKey(item.accountKey)
             ?: throw PermanentMailDeliveryException(
-                "Configured mail account no longer exists: " +
+                "Mail account no longer exists: " +
                         item.accountKey,
             )
 
@@ -147,7 +138,7 @@ class MailForwardingService(
         }
 
         return telegramControlClient.sendMessageWithButtons(
-            chatId = telegramChatId,
+            chatId = account.ownerChatId,
             text = formatPendingNotification(
                 account = account,
                 metadata = metadata,
@@ -174,7 +165,7 @@ class MailForwardingService(
         )
 
         return telegramControlClient.sendMessageWithButtons(
-            chatId = telegramChatId,
+            chatId = account.ownerChatId,
             text = formatNotification(
                 account = account,
                 message = message,
@@ -230,7 +221,7 @@ class MailForwardingService(
 
             try {
                 telegramControlClient.editMessageWithButtons(
-                    chatId = telegramChatId,
+                    chatId = account.ownerChatId,
                     messageId = telegramMessageId,
                     text = formatNotification(
                         account = account,
@@ -339,7 +330,7 @@ class MailForwardingService(
                     )
                 ) {
                     telegramControlClient.editMessageWithButtons(
-                        chatId = telegramChatId,
+                        chatId = account.ownerChatId,
                         messageId = sourceMessageId,
                         text = fullText,
                         buttons = buttons,
@@ -349,13 +340,13 @@ class MailForwardingService(
                 } else {
                     val newMessageIds =
                         telegramControlClient.sendLongMessageWithButtons(
-                            chatId = telegramChatId,
+                            chatId = account.ownerChatId,
                             text = fullText,
                             buttons = buttons,
                         )
 
                     textViewMessageIds[emailKey] = ActiveView(newMessageIds)
-                    deleteMessageSafely(sourceMessageId)
+                    deleteMessageSafely(account.ownerChatId, sourceMessageId)
                 }
             } catch (exception: Exception) {
                 outboxRepository.markSummaryReady(
@@ -412,7 +403,7 @@ class MailForwardingService(
 
             if (longViewMessageIds == null) {
                 telegramControlClient.editMessageWithButtons(
-                    chatId = telegramChatId,
+                    chatId = account.ownerChatId,
                     messageId = sourceMessageId,
                     text = summaryText,
                     buttons = buttons,
@@ -435,7 +426,7 @@ class MailForwardingService(
             } else {
                 val summaryMessageId =
                     telegramControlClient.sendMessageWithButtons(
-                        chatId = telegramChatId,
+                        chatId = account.ownerChatId,
                         text = summaryText,
                         buttons = buttons,
                     )
@@ -444,7 +435,7 @@ class MailForwardingService(
                     add(sourceMessageId)
                     addAll(longViewMessageIds)
                 }.forEach { messageId ->
-                    deleteMessageSafely(messageId)
+                    deleteMessageSafely(account.ownerChatId, messageId)
                 }
 
                 val stateUpdated =
@@ -487,7 +478,7 @@ class MailForwardingService(
             message.skippedAttachments.isEmpty()
         ) {
             telegramControlClient.sendMessage(
-                chatId = telegramChatId,
+                chatId = account.ownerChatId,
                 text = "У этого письма нет вложений.",
             )
             return
@@ -498,7 +489,7 @@ class MailForwardingService(
         val statusMessageId = if (attachmentTotal > 0) {
             try {
                 telegramControlClient.sendMessage(
-                    chatId = telegramChatId,
+                    chatId = account.ownerChatId,
                     text = "⏳ Отправляю вложения: 0/$attachmentTotal",
                 )
             } catch (exception: CancellationException) {
@@ -519,12 +510,13 @@ class MailForwardingService(
                 val startedAt = System.currentTimeMillis()
 
                 telegramMediaClient.sendAttachment(
-                    chatId = telegramChatId,
+                    chatId = account.ownerChatId,
                     attachment = attachment,
                 )
 
                 statusMessageId?.let { messageId ->
                     editMessageSafely(
+                        chatId = account.ownerChatId,
                         messageId = messageId,
                         text = "⏳ Отправляю вложения: " +
                                 "${index + 1}/$attachmentTotal",
@@ -541,7 +533,7 @@ class MailForwardingService(
 
             if (message.skippedAttachments.isNotEmpty()) {
                 telegramControlClient.sendLongMessage(
-                    chatId = telegramChatId,
+                    chatId = account.ownerChatId,
                     text = formatSkippedAttachments(
                         account = account,
                         message = message,
@@ -551,12 +543,13 @@ class MailForwardingService(
 
             statusMessageId?.let { messageId ->
                 editMessageSafely(
+                    chatId = account.ownerChatId,
                     messageId = messageId,
                     text = "✅ Вложения отправлены: $attachmentTotal",
                 )
 
                 delay(1_500)
-                deleteMessageSafely(messageId)
+                deleteMessageSafely(account.ownerChatId, messageId)
             }
 
             logger.info(
@@ -570,6 +563,7 @@ class MailForwardingService(
         } catch (exception: Exception) {
             statusMessageId?.let { messageId ->
                 editMessageSafely(
+                    chatId = account.ownerChatId,
                     messageId = messageId,
                     text = "⚠️ Не удалось отправить вложения. " +
                             "Повторите попытку.",
@@ -596,7 +590,7 @@ class MailForwardingService(
         }
 
         telegramControlClient.sendMessage(
-            chatId = telegramChatId,
+            chatId = account.ownerChatId,
             text = buildString {
                 appendLine("⚠️ Не удалось открыть письмо")
                 appendLine()
@@ -673,7 +667,7 @@ class MailForwardingService(
             scope.launch {
                 runCatching {
                     telegramControlClient.sendMessage(
-                        chatId = telegramChatId,
+                        chatId = account.ownerChatId,
                         text = buildString {
                             appendLine("⚠️ Нумерация писем была обновлена")
                             appendLine()
@@ -778,7 +772,7 @@ class MailForwardingService(
         scope.launch {
             runCatching {
                 telegramControlClient.sendMessage(
-                    chatId = telegramChatId,
+                    chatId = account.ownerChatId,
                     text = buildString {
                         appendLine("✅ Почтовый ящик подключён")
                         appendLine()
@@ -1088,12 +1082,13 @@ class MailForwardingService(
     }
 
     private suspend fun editMessageSafely(
+        chatId: Long,
         messageId: Long,
         text: String,
     ) {
         try {
             telegramControlClient.editMessage(
-                chatId = telegramChatId,
+                chatId = chatId,
                 messageId = messageId,
                 text = text,
             )
@@ -1109,11 +1104,12 @@ class MailForwardingService(
     }
 
     private suspend fun deleteMessageSafely(
+        chatId: Long,
         messageId: Long,
     ) {
         try {
             telegramControlClient.deleteMessage(
-                chatId = telegramChatId,
+                chatId = chatId,
                 messageId = messageId,
             )
         } catch (exception: TelegramApiException) {
@@ -1183,7 +1179,7 @@ class MailForwardingService(
     private fun buildAccountKey(
         account: MailAccountConfig,
     ): String {
-        return "${account.host}:${account.username}".lowercase()
+        return MailAccountKeys.accountKey(account)
     }
 
     override fun close() {

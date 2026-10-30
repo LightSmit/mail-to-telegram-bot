@@ -362,6 +362,26 @@ class MailNotificationOutboxRepository {
         }
     }
 
+    /**
+     * Переносит записи ящика на новый ключ и код (миграция на ключи с владельцем).
+     * Возвращает число перенесённых записей.
+     */
+    suspend fun rekeyAccount(
+        oldAccountKey: String,
+        newAccountKey: String,
+        newAccountCode: String,
+    ): Int = withContext(DatabaseManager.dispatcher) {
+        val sql = "UPDATE OR IGNORE mail_notification_outbox SET account_key = ?, account_code = ? WHERE account_key = ?"
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement(sql).use { statement ->
+                statement.setString(1, newAccountKey)
+                statement.setString(2, newAccountCode)
+                statement.setString(3, oldAccountKey)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     suspend fun countByStatus(status: MailOutboxStatus): Long = withContext(DatabaseManager.dispatcher) {
         val sql = "SELECT COUNT(*) AS item_count FROM mail_notification_outbox WHERE status = ?"
         DatabaseManager.dataSource.connection.use { connection ->

@@ -105,7 +105,26 @@ object MailViewCallbackCodec {
         )
     }
 
+    /** Короткий код ящика для кнопок: зависит от владельца, сервера и логина. */
     fun accountCode(
+        account: MailAccountConfig,
+    ): String {
+        val source = buildString {
+            append(account.ownerChatId)
+            append('\n')
+            append(account.host.lowercase())
+            append('\n')
+            append(account.username.lowercase())
+        }
+
+        return shortHash(source)
+    }
+
+    /**
+     * Код из однопользовательской версии (без владельца). Кнопки под письмами,
+     * отправленными до перехода на мультитенантность, содержат именно его.
+     */
+    fun legacyAccountCode(
         account: MailAccountConfig,
     ): String {
         val source = buildString {
@@ -114,6 +133,12 @@ object MailViewCallbackCodec {
             append(account.username.lowercase())
         }
 
+        return shortHash(source)
+    }
+
+    private fun shortHash(
+        source: String,
+    ): String {
         val digest = MessageDigest
             .getInstance("SHA-256")
             .digest(

@@ -46,7 +46,10 @@ class ImapIdleWatcher(
     private suspend fun runIdleReconnectLoop(
         account: MailAccountConfig,
     ) {
+        var consecutiveFailures = 0
+
         while (currentCoroutineContext().isActive) {
+            val startedAt = TimeSource.Monotonic.markNow()
             try {
                 val supported = watchUsingIdle(account)
                 if (!supported) {
@@ -59,14 +62,22 @@ class ImapIdleWatcher(
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
+                // Соединение продержалось долго - значит, вход работает, это обычный обрыв
+                if (startedAt.elapsedNow().inWholeSeconds >= HEALTHY_SESSION_SECONDS) {
+                    consecutiveFailures = 0
+                }
+                consecutiveFailures++
+
+                val delayMillis = backoffMillis(consecutiveFailures)
                 logger.warn(
-                    "Mailbox monitoring failed for {}: {} ({}). Reconnecting in {} seconds",
+                    "Mailbox monitoring failed for {}: {} ({}). Attempt {}, reconnecting in {} seconds",
                     account.username,
                     exception.javaClass.simpleName,
                     exception.message,
-                    reconnectDelaySeconds,
+                    consecutiveFailures,
+                    delayMillis / 1_000,
                 )
-                delay(reconnectDelaySeconds * 1_000)
+                delay(delayMillis)
             }
         }
     }
@@ -143,14 +154,20 @@ class ImapIdleWatcher(
     private suspend fun runSafetyPollLoop(
         account: MailAccountConfig,
     ) {
+        var consecutiveFailures = 0
+
         while (currentCoroutineContext().isActive) {
-            delay(safetyPollSeconds * 1_000)
+            // При ошибках опрашиваем реже, чтобы почтовик не принял нас за перебор паролей
+            val extraDelay = if (consecutiveFailures == 0) 0L else backoffMillis(consecutiveFailures)
+            delay(safetyPollSeconds * 1_000 + extraDelay)
 
             try {
                 onSafetyMailboxCheck(account)
+                consecutiveFailures = 0
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
+                consecutiveFailures++
                 logger.debug(
                     "Safety mail check failed for {}: {} ({})",
                     account.username,
@@ -161,7 +178,16 @@ class ImapIdleWatcher(
         }
     }
 
+    // 5 с, 10 с, 20 с ... но не больше 10 минут
+    private fun backoffMillis(consecutiveFailures: Int): Long {
+        val exponent = (consecutiveFailures - 1).coerceIn(0, 16)
+        val delaySeconds = (reconnectDelaySeconds shl exponent).coerceAtMost(MAX_BACKOFF_SECONDS)
+        return delaySeconds * 1_000
+    }
+
     private companion object {
         const val IDLE_READ_TIMEOUT_MILLIS = 25 * 60 * 1_000
+        const val HEALTHY_SESSION_SECONDS = 120L
+        const val MAX_BACKOFF_SECONDS = 600L
     }
 }

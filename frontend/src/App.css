@@ -39,8 +39,22 @@ h1, h2 {
   padding: 15px;
   border-radius: 12px;
   display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-info {
+  display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+  text-align: left;
+}
+
+.account-info span {
+  overflow-wrap: anywhere;
 }
 
 .account-item strong {
@@ -58,7 +72,7 @@ h1, h2 {
   gap: 12px;
 }
 
-input {
+input, select {
   padding: 14px;
   font-size: 16px;
   border-radius: 10px;
@@ -68,7 +82,7 @@ input {
   outline: none;
 }
 
-input:focus {
+input:focus, select:focus {
   border-color: var(--tg-theme-button-color, #2481cc);
 }
 
@@ -86,4 +100,26 @@ button {
 
 button:active {
   opacity: 0.8;
+}
+
+.delete-button {
+  margin-top: 0;
+  padding: 8px 12px;
+  font-size: 14px;
+  flex-shrink: 0;
+  background-color: transparent;
+  color: var(--tg-theme-destructive-text-color, #e5484d);
+  border: 1px solid var(--tg-theme-destructive-text-color, #e5484d);
+}
+
+.delete-button.confirm {
+  background-color: var(--tg-theme-destructive-text-color, #e5484d);
+  color: #ffffff;
+}
+
+.hint-text {
+  margin: 0;
+  font-size: 13px;
+  text-align: left;
+  color: var(--tg-theme-hint-color, #707070);
 }

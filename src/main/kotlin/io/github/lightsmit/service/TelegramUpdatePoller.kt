@@ -1,6 +1,5 @@
 package io.github.lightsmit.service
 
-import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.telegram.MailViewAction
 import io.github.lightsmit.telegram.MailViewCallbackCodec
@@ -18,8 +17,7 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 
 class TelegramUpdatePoller(
-    private val accounts: List<MailAccountConfig>,
-    private val telegramChatId: Long,
+    private val registry: MailAccountRegistry,
     private val pollingClient: TelegramClient,
     private val controlClient: TelegramClient,
     private val forwardingService: MailForwardingService,
@@ -67,10 +65,8 @@ class TelegramUpdatePoller(
     private suspend fun handleCallbackQuery(
         update: TelegramCallbackQueryUpdate,
     ) {
-        if (
-            update.chatId != telegramChatId ||
-            update.fromUserId != telegramChatId
-        ) {
+        // Кнопки работают только в личном чате с ботом: письма приходят туда
+        if (update.chatId != update.fromUserId) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
                 text = "Доступ запрещён",
@@ -91,15 +87,16 @@ class TelegramUpdatePoller(
             return
         }
 
-        val account = accounts.firstOrNull { configuredAccount ->
-            MailViewCallbackCodec.accountCode(configuredAccount) ==
-                    request.accountCode
-        }
+        // Ищем только среди ящиков нажавшего: чужие письма открыть нельзя
+        val account = registry.findForCallback(
+            accountCode = request.accountCode,
+            ownerChatId = update.fromUserId,
+        )
 
         if (account == null) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
-                text = "Почтовый ящик больше не настроен",
+                text = "Почтовый ящик больше не подключён",
                 showAlert = true,
             )
             return
@@ -121,6 +118,8 @@ class TelegramUpdatePoller(
         }
 
         val emailKey = buildString {
+            append(account.ownerChatId)
+            append(':')
             append(request.accountCode)
             append(':')
             append(request.uidValidity)
@@ -197,7 +196,7 @@ class TelegramUpdatePoller(
 
             runCatching {
                 controlClient.sendMessage(
-                    chatId = telegramChatId,
+                    chatId = account.ownerChatId,
                     text = "⚠️ Не удалось выполнить действие. Повторите попытку.",
                 )
             }

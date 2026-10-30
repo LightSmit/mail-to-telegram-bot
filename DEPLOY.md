@@ -10,8 +10,8 @@ cd mail-to-telegram-bot
 cp .env.example .env
 nano .env
 ```
-В `.env` заполни: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ENCRYPTION_KEY`
-(`openssl rand -base64 48`), `DOMAIN`, хотя бы один `MAIL_ACCOUNT_1_*`.
+В `.env` заполни: `TELEGRAM_BOT_TOKEN`, `ENCRYPTION_KEY`
+(`openssl rand -base64 48`), `DOMAIN`. Ящики пользователи добавляют сами в Mini App.
 `TELEGRAM_PROXY_URL` на зарубежном сервере оставь пустым.
 
 ## 2. Проверка до запуска

@@ -6,6 +6,9 @@ import io.github.lightsmit.config.MailAccountConfigLoader
 import io.github.lightsmit.mail.ImapIdleWatcher
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.service.EmailContentLoader
+import io.github.lightsmit.service.MailAccountRegistry
+import io.github.lightsmit.service.MailAccountService
+import io.github.lightsmit.service.MailboxSupervisor
 import io.github.lightsmit.service.MailForwardingService
 import io.github.lightsmit.service.MailNotificationOutboxWorker
 import io.github.lightsmit.service.TelegramDeliveryFailureClassifier
@@ -30,10 +33,18 @@ fun main() = runBlocking {
     println("Mail to Telegram Bot started")
 
     val telegramToken = Environment.require("TELEGRAM_BOT_TOKEN")
-    val telegramChatId = Environment
-        .require("TELEGRAM_CHAT_ID")
-        .toLongOrNull()
-        ?: error("TELEGRAM_CHAT_ID must be a valid integer")
+    // Нужен только для разового импорта ящиков из .env (MAIL_ACCOUNT_*) на этот Telegram ID
+    val legacyOwnerChatId = Environment
+        .get("TELEGRAM_CHAT_ID")
+        ?.let { value -> value.toLongOrNull() ?: error("TELEGRAM_CHAT_ID must be a valid integer") }
+
+    val maxAccountsPerOwner = Environment
+        .get("MAX_MAILBOXES_PER_USER")
+        ?.toIntOrNull()
+        ?: 5
+    require(maxAccountsPerOwner in 1..100) {
+        "MAX_MAILBOXES_PER_USER must be between 1 and 100"
+    }
 
     val telegramProxyUrl = Environment.get("TELEGRAM_PROXY_URL")
 
@@ -85,7 +96,7 @@ fun main() = runBlocking {
         }
     }
 
-    val accounts = MailAccountConfigLoader.load()
+    val legacyAccounts = MailAccountConfigLoader.load()
     // ИСПРАВЛЕНА ОПЕЧАТКА С УМНОЖЕНИЕМ
     val maxAttachmentSizeBytes = maxAttachmentSizeMb * 1024L * 1024L
 
@@ -129,21 +140,56 @@ fun main() = runBlocking {
     val mailOutboxRepository = MailNotificationOutboxRepository()
     val mailAccountRepository = MailAccountRepository()
 
+    val accountRegistry = MailAccountRegistry()
+
     val forwardingService = MailForwardingService(
-        accounts = accounts,
+        registry = accountRegistry,
         imapClient = imapClient,
         telegramControlClient = telegramControlClient,
         telegramMediaClient = telegramMediaClient,
-        telegramChatId = telegramChatId,
         stateRepository = mailStateRepository,
         outboxRepository = mailOutboxRepository,
         contentLoader = contentLoader,
     )
 
+    val idleWatcher = ImapIdleWatcher(
+        onIdleMailboxChanged = forwardingService::processIdleAccount,
+        onSafetyMailboxCheck = forwardingService::processAccount,
+        reconnectDelaySeconds = reconnectDelaySeconds,
+        safetyPollSeconds = safetyPollSeconds,
+    )
+
+    val mailboxSupervisor = MailboxSupervisor(
+        watcher = idleWatcher,
+        registry = accountRegistry,
+    )
+
+    val accountService = MailAccountService(
+        repository = mailAccountRepository,
+        supervisor = mailboxSupervisor,
+        stateRepository = mailStateRepository,
+        outboxRepository = mailOutboxRepository,
+        imapClient = imapClient,
+        maxAccountsPerOwner = maxAccountsPerOwner,
+    )
+
+    // Разовый перенос ящиков из .env в базу (повторный запуск ничего не дублирует)
+    if (legacyAccounts.isNotEmpty()) {
+        val owner = legacyOwnerChatId
+            ?: error("TELEGRAM_CHAT_ID is required to import MAIL_ACCOUNT_* mailboxes from .env")
+        val imported = accountService.importLegacyAccounts(legacyAccounts, owner)
+        println("Mailboxes from .env imported into the database: $imported of ${legacyAccounts.size}")
+        println("Remove MAIL_ACCOUNT_* from .env: mailboxes are now managed in the Mini App")
+    }
+
+    // Ящики должны быть в реестре до запуска воркеров outbox, иначе ожидающие
+    // уведомления посчитаются уведомлениями удалённых ящиков
+    val watchedMailboxes = accountService.startAll()
+
     val apiServer = ApiServer(
         port = Environment.get("API_PORT")?.toIntOrNull() ?: 8080,
         botToken = telegramToken,
-        accountRepository = mailAccountRepository,
+        accountService = accountService,
     )
     apiServer.start()
 
@@ -154,16 +200,8 @@ fun main() = runBlocking {
     )
 
     try {
-        val idleWatcher = ImapIdleWatcher(
-            onIdleMailboxChanged = forwardingService::processIdleAccount,
-            onSafetyMailboxCheck = forwardingService::processAccount,
-            reconnectDelaySeconds = reconnectDelaySeconds,
-            safetyPollSeconds = safetyPollSeconds,
-        )
-
         val telegramUpdatePoller = TelegramUpdatePoller(
-            accounts = accounts,
-            telegramChatId = telegramChatId,
+            registry = accountRegistry,
             pollingClient = telegramPollingClient,
             controlClient = telegramControlClient,
             forwardingService = forwardingService,
@@ -171,7 +209,7 @@ fun main() = runBlocking {
             stateRepository = TelegramUpdateStateRepository(),
         )
 
-        println("Configured mailboxes: ${accounts.size}")
+        println("Watched mailboxes: $watchedMailboxes (limit per user: $maxAccountsPerOwner)")
         println("Maximum attachment size: $maxAttachmentSizeMb MB")
         println("Real-time IMAP IDLE monitoring enabled")
         println("IMAP safety polling interval: $safetyPollSeconds seconds")
@@ -186,21 +224,19 @@ fun main() = runBlocking {
         println("Waiting for new emails...")
 
         supervisorScope {
-            val mailWatcherJobs = accounts.map { account ->
-                launch { idleWatcher.watch(account) }
-            }
             val telegramUpdateJob = launch {
                 telegramUpdatePoller.run()
             }
 
-            // Запускаем 20 воркеров (хватит с головой)
+            // 5 параллельных воркеров доставки уведомлений
             val mailOutboxJobs = (1..5).map {
                 launch { mailOutboxWorker.run() }
             }
 
-            (mailWatcherJobs + telegramUpdateJob + mailOutboxJobs).joinAll()
+            (listOf(telegramUpdateJob) + mailOutboxJobs).joinAll()
         }
     } finally {
+        mailboxSupervisor.close()
         forwardingService.close()
         contentLoader.close()
         telegramMediaClient.close()
