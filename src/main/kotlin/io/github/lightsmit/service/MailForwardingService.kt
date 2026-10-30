@@ -706,6 +706,9 @@ class MailForwardingService(
 
         var lastScheduledUid = state.lastUid
 
+        // Фильтры берем из реестра: их могли изменить в приложении после запуска слежения
+        val filters = (registry.findByKey(accountKey) ?: account).filters
+
         for (message in batch.messages.sortedBy { item -> item.uid }) {
             if (message.uid <= lastScheduledUid) {
                 continue
@@ -715,6 +718,30 @@ class MailForwardingService(
                 account = account,
                 message = message,
             )
+
+            val skipReason = MailFilterEngine.check(
+                filters = filters,
+                senderAddress = message.senderAddress,
+                subject = message.subject,
+                isBulk = message.isBulk,
+            )
+
+            if (skipReason != null) {
+                // Письмо отфильтровано: сдвигаем позицию, чтобы не вернуться к нему позже
+                lastScheduledUid = message.uid
+                stateRepository.save(
+                    accountKey = accountKey,
+                    uidValidity = batch.uidValidity,
+                    lastUid = lastScheduledUid,
+                )
+                logger.info(
+                    "Skipped email UID {} from mailbox {}: filter {}",
+                    message.uid,
+                    account.username,
+                    skipReason,
+                )
+                continue
+            }
 
             val inserted = outboxRepository.enqueue(
                 accountKey = accountKey,

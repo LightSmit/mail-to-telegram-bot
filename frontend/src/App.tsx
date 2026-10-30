@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 import { initData, initDataSource, telegramScriptLoaded } from './telegram'
+import { EMPTY_FILTERS, FiltersPanel, type MailFilters } from './FiltersPanel'
 import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
@@ -12,6 +13,7 @@ interface Account {
   host: string;
   status?: MailboxStatus;
   problem?: string | null;
+  filters?: MailFilters;
 }
 
 type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | null;
@@ -51,6 +53,7 @@ async function errorText(response: Response, prefix: string): Promise<string> {
 }
 
 function statusLabel(account: Account): string {
+  if (account.filters?.paused) return 'На паузе: письма не приходят';
   switch (account.status) {
     case 'OK':
       return 'Письма приходят';
@@ -67,6 +70,7 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [filtersOpenId, setFiltersOpenId] = useState<number | null>(null);
   const [notice, setNotice] = useState<Notice>(
     initData ? null : { kind: 'error', text: 'Откройте приложение из чата с ботом в Telegram: без этого вход невозможен.' }
   );
@@ -84,7 +88,7 @@ function App() {
 
   const request = async (
     path: string,
-    method: 'GET' | 'POST' | 'DELETE' = 'GET',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
     body?: unknown,
     timeoutMs: number = REQUEST_TIMEOUT_MS,
   ) => {
@@ -172,6 +176,22 @@ function App() {
     }
   };
 
+  const handleSaveFilters = async (account: Account, filters: MailFilters): Promise<boolean> => {
+    try {
+      const response = await request(`/accounts/${account.id}/filters`, 'PUT', filters);
+      if (response.ok) {
+        const saved: MailFilters = await response.json();
+        setAccounts((current) => current.map((item) => (item.id === account.id ? { ...item, filters: saved } : item)));
+        setNotice({ kind: 'ok', text: `Фильтры для ${account.email} сохранены.` });
+        return true;
+      }
+      setNotice({ kind: 'error', text: await errorText(response, 'Не удалось сохранить фильтры') });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return false;
+  };
+
   const handleDelete = async (account: Account) => {
     // Удаление в два нажатия: первое спрашивает подтверждение
     if (confirmDeleteId !== account.id) {
@@ -222,24 +242,43 @@ function App() {
         ) : (
           <ul className="mailbox-list">
             {accounts.map((acc) => (
-              <li key={acc.id} className="mailbox">
-                <span className={`status-dot status-${(acc.status ?? 'CONNECTING').toLowerCase()}`} aria-hidden="true" />
-                <div className="mailbox-info">
-                  <span className="mailbox-name">{acc.name !== acc.email ? acc.name : acc.email}</span>
-                  {acc.name !== acc.email && <span className="mailbox-address">{acc.email}</span>}
-                  <span className={`mailbox-status status-text-${(acc.status ?? 'CONNECTING').toLowerCase()}`}>
-                    {statusLabel(acc)}
-                  </span>
+              <li key={acc.id} className="mailbox-item">
+                <div className="mailbox">
+                  <span className={`status-dot status-${acc.filters?.paused ? 'paused' : (acc.status ?? 'CONNECTING').toLowerCase()}`} aria-hidden="true" />
+                  <div className="mailbox-info">
+                    <span className="mailbox-name">{acc.name !== acc.email ? acc.name : acc.email}</span>
+                    {acc.name !== acc.email && <span className="mailbox-address">{acc.email}</span>}
+                    <span className={`mailbox-status status-text-${acc.filters?.paused ? 'paused' : (acc.status ?? 'CONNECTING').toLowerCase()}`}>
+                      {statusLabel(acc)}
+                    </span>
+                  </div>
+                  <div className="mailbox-actions">
+                    <button
+                      type="button"
+                      className="link-button"
+                      aria-expanded={filtersOpenId === acc.id}
+                      onClick={() => setFiltersOpenId((current) => (current === acc.id ? null : acc.id))}
+                    >
+                      Фильтры
+                    </button>
+                    <button
+                      type="button"
+                      className={confirmDeleteId === acc.id ? 'remove confirm' : 'remove'}
+                      disabled={deletingId === acc.id}
+                      onClick={() => handleDelete(acc)}
+                      onBlur={() => setConfirmDeleteId((current) => (current === acc.id ? null : current))}
+                    >
+                      {deletingId === acc.id ? 'Отключаем…' : confirmDeleteId === acc.id ? 'Отключить?' : 'Отключить'}
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  className={confirmDeleteId === acc.id ? 'remove confirm' : 'remove'}
-                  disabled={deletingId === acc.id}
-                  onClick={() => handleDelete(acc)}
-                  onBlur={() => setConfirmDeleteId((current) => (current === acc.id ? null : current))}
-                >
-                  {deletingId === acc.id ? 'Отключаем…' : confirmDeleteId === acc.id ? 'Отключить?' : 'Отключить'}
-                </button>
+                {filtersOpenId === acc.id && (
+                  <FiltersPanel
+                    initial={acc.filters ?? EMPTY_FILTERS}
+                    onSave={(filters) => handleSaveFilters(acc, filters)}
+                    onClose={() => setFiltersOpenId(null)}
+                  />
+                )}
               </li>
             ))}
           </ul>

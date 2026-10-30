@@ -2,6 +2,7 @@ package io.github.lightsmit.service
 
 import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.config.MailAccountKeys
+import io.github.lightsmit.config.MailFilters
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
@@ -51,6 +52,21 @@ class MailAccountService(
 
     fun health(accountId: Long): MailboxHealth =
         healthMonitor.health(accountId)
+
+    /** Сохраняет фильтры ящика и сразу применяет их. null - ящик не найден или чужой. */
+    suspend fun updateFilters(ownerChatId: Long, accountId: Long, filters: MailFilters): MailAccountConfig? {
+        val normalized = MailFilters(
+            paused = filters.paused,
+            skipBulk = filters.skipBulk,
+            blockedSenders = MailFilterEngine.normalizeSenders(filters.blockedSenders),
+            blockedSubjectWords = MailFilterEngine.normalizeWords(filters.blockedSubjectWords),
+            allowedSenders = MailFilterEngine.normalizeSenders(filters.allowedSenders),
+        )
+        val updated = repository.updateFilters(accountId, ownerChatId, normalized) ?: return null
+        supervisor.refresh(updated)
+        logger.info("Filters of mailbox {} (id {}) updated by owner {}: {}", updated.username, accountId, ownerChatId, normalized)
+        return updated
+    }
 
     suspend fun add(ownerChatId: Long, request: NewMailAccount): AddMailAccountResult {
         val username = request.username.trim().let { value ->

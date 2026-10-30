@@ -349,7 +349,7 @@ class TelegramUpdatePoller(
             appendLine("📬 Ваши ящики")
             accounts.forEach { account ->
                 val health = service.health(account.id)
-                val (mark, status) = when (health.status) {
+                val (mark, status) = if (account.filters.paused) "⏸" to "на паузе" else when (health.status) {
                     MailboxStatus.OK -> "🟢" to "письма приходят"
                     MailboxStatus.CONNECTING -> "🟡" to "подключается"
                     MailboxStatus.ERROR -> "🔴" to (health.problem?.replaceFirstChar(Char::lowercase) ?: "не удается подключиться")

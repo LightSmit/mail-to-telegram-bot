@@ -41,6 +41,11 @@ class MailboxSupervisor(
         logger.info("Started watching mailbox {} (id {}) for owner {}", account.username, account.id, account.ownerChatId)
     }
 
+    /** Применяет новые настройки ящика (фильтры) без перезапуска слежения. */
+    fun refresh(account: MailAccountConfig) {
+        registry.replaceIfPresent(account)
+    }
+
     /** Прекращает слежение. Возвращает ящик, если он отслеживался. */
     suspend fun stop(accountId: Long): MailAccountConfig? = mutex.withLock {
         stopLocked(accountId)

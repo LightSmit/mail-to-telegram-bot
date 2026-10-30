@@ -137,6 +137,8 @@ class ImapMailClient(
         val fetchProfile = FetchProfile().apply {
             add(FetchProfile.Item.ENVELOPE)
             add(UIDFolder.FetchProfileItem.UID)
+            // Заголовки, по которым узнаем рассылки (для фильтра "не присылать рассылки")
+            BULK_HEADERS.forEach { header -> add(header) }
         }
         inbox.fetch(messages, fetchProfile)
 
@@ -170,7 +172,26 @@ class ImapMailClient(
             body = null,
             attachments = emptyList(),
             skippedAttachments = emptyList(),
+            senderAddress = senderAddress(message),
+            isBulk = isBulk(message),
         )
+    }
+
+    private fun senderAddress(message: Message): String? {
+        return runCatching {
+            (message.from?.firstOrNull() as? InternetAddress)?.address?.trim()?.lowercase()
+        }.getOrNull()
+    }
+
+    private fun isBulk(message: Message): Boolean {
+        return runCatching {
+            fun header(name: String): String? = message.getHeader(name)?.firstOrNull()?.trim()?.lowercase()
+
+            header("List-Unsubscribe") != null ||
+                header("List-Id") != null ||
+                header("Precedence") in setOf("bulk", "list", "junk") ||
+                header("Auto-Submitted").let { value -> value != null && value != "no" }
+        }.getOrDefault(false)
     }
 
     private fun createFullSummary(
@@ -279,6 +300,7 @@ class ImapMailClient(
     }
 
     private companion object {
+        val BULK_HEADERS = listOf("List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted")
         const val METADATA_TIMEOUT_MILLIS = 30_000
         const val CONTENT_TIMEOUT_MILLIS = 180_000
     }

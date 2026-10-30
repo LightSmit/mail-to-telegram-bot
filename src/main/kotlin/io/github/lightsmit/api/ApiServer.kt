@@ -1,5 +1,6 @@
 package io.github.lightsmit.api
 
+import io.github.lightsmit.config.MailFilters
 import io.github.lightsmit.service.AddMailAccountResult
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.service.NewMailAccount
@@ -33,7 +34,21 @@ data class AccountResponseDto(
     // CONNECTING, OK или ERROR; problem - понятное описание ошибки
     val status: String = "CONNECTING",
     val problem: String? = null,
+    val filters: FiltersDto = FiltersDto(),
 )
+
+@Serializable
+data class FiltersDto(
+    val paused: Boolean = false,
+    val skipBulk: Boolean = false,
+    val blockedSenders: List<String> = emptyList(),
+    val blockedSubjectWords: List<String> = emptyList(),
+    val allowedSenders: List<String> = emptyList(),
+)
+
+private fun MailFilters.toDto() = FiltersDto(paused, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders)
+
+private fun FiltersDto.toModel() = MailFilters(paused, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders)
 
 @Serializable
 data class AddAccountRequestDto(
@@ -64,6 +79,7 @@ class ApiServer(
                 allowMethod(HttpMethod.Get)
                 allowMethod(HttpMethod.Post)
                 allowMethod(HttpMethod.Delete)
+                allowMethod(HttpMethod.Put)
             }
 
             install(ContentNegotiation) {
@@ -132,6 +148,7 @@ class ApiServer(
                                 host = account.host,
                                 status = health.status.name,
                                 problem = health.problem,
+                                filters = account.filters.toDto(),
                             )
                         }
                         call.respond(response)
@@ -170,6 +187,26 @@ class ApiServer(
                                     HttpStatusCode.Conflict,
                                     mapOf("error" to "Можно подключить не больше ${result.limit} ящиков"),
                                 )
+                        }
+                    }
+
+                    // Фильтры ящика: пауза, рассылки, отправители, слова в теме
+                    put("/accounts/{id}/filters") {
+                        val ownerId = call.attributes[UserIdKey]
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+
+                        if (accountId == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный ящик"))
+                            return@put
+                        }
+
+                        val request = call.receive<FiltersDto>()
+                        val updated = accountService.updateFilters(ownerId, accountId, request.toModel())
+
+                        if (updated == null) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Ящик не найден"))
+                        } else {
+                            call.respond(HttpStatusCode.OK, updated.filters.toDto())
                         }
                     }
 

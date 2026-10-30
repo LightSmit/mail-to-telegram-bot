@@ -1,6 +1,7 @@
 package io.github.lightsmit.storage
 
 import io.github.lightsmit.config.MailAccountConfig
+import io.github.lightsmit.config.MailFilters
 import io.github.lightsmit.security.CryptoHelper
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -30,8 +31,61 @@ class MailAccountRepository {
                     """.trimIndent()
                 )
             }
+
+            // Фильтры писем (добавлены позже: дописываем колонки в существующую таблицу)
+            ensureColumn(connection, "paused", "INTEGER NOT NULL DEFAULT 0")
+            ensureColumn(connection, "skip_bulk", "INTEGER NOT NULL DEFAULT 0")
+            ensureColumn(connection, "blocked_senders", "TEXT NOT NULL DEFAULT ''")
+            ensureColumn(connection, "blocked_subject_words", "TEXT NOT NULL DEFAULT ''")
+            ensureColumn(connection, "allowed_senders", "TEXT NOT NULL DEFAULT ''")
         }
     }
+
+    private fun ensureColumn(connection: Connection, column: String, definition: String) {
+        val exists = connection.createStatement().use { statement ->
+            statement.executeQuery("PRAGMA table_info(mail_accounts)").use { rs ->
+                var found = false
+                while (rs.next()) {
+                    if (rs.getString("name") == column) found = true
+                }
+                found
+            }
+        }
+        if (!exists) {
+            connection.createStatement().use { statement ->
+                statement.executeUpdate("ALTER TABLE mail_accounts ADD COLUMN $column $definition")
+            }
+        }
+    }
+
+    /** Сохраняет фильтры ящика владельца. Возвращает обновленный ящик или null, если он не найден или чужой. */
+    suspend fun updateFilters(id: Long, ownerId: Long, filters: MailFilters): MailAccountConfig? =
+        withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                val updated = connection.prepareStatement(
+                    """
+                    UPDATE mail_accounts
+                    SET paused = ?, skip_bulk = ?, blocked_senders = ?, blocked_subject_words = ?, allowed_senders = ?
+                    WHERE id = ? AND owner_id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setInt(1, if (filters.paused) 1 else 0)
+                    statement.setInt(2, if (filters.skipBulk) 1 else 0)
+                    statement.setString(3, filters.blockedSenders.joinToString("\n"))
+                    statement.setString(4, filters.blockedSubjectWords.joinToString("\n"))
+                    statement.setString(5, filters.allowedSenders.joinToString("\n"))
+                    statement.setLong(6, id)
+                    statement.setLong(7, ownerId)
+                    statement.executeUpdate()
+                }
+                if (updated == 0) return@withContext null
+
+                connection.prepareStatement("SELECT * FROM mail_accounts WHERE id = ?").use { statement ->
+                    statement.setLong(1, id)
+                    statement.executeQuery().use { rs -> if (rs.next()) rs.toAccountOrNull() else null }
+                }
+            }
+        }
 
     suspend fun findAll(): List<MailAccountConfig> = withContext(DatabaseManager.dispatcher) {
         query("SELECT * FROM mail_accounts ORDER BY id") { }
@@ -176,6 +230,9 @@ class MailAccountRepository {
 
     // Запись, которую не удалось расшифровать (например, после смены ENCRYPTION_KEY),
     // пропускаем с предупреждением, чтобы один ящик не ронял весь бот.
+    private fun String?.splitLines(): List<String> =
+        this.orEmpty().split('\n').map(String::trim).filter(String::isNotEmpty)
+
     private fun ResultSet.toAccountOrNull(): MailAccountConfig? {
         val id = getLong("id")
         return try {
@@ -187,6 +244,13 @@ class MailAccountRepository {
                 password = CryptoHelper.decrypt(getString("password_encrypted")),
                 ownerChatId = getLong("owner_id"),
                 id = id,
+                filters = MailFilters(
+                    paused = getInt("paused") == 1,
+                    skipBulk = getInt("skip_bulk") == 1,
+                    blockedSenders = getString("blocked_senders").splitLines(),
+                    blockedSubjectWords = getString("blocked_subject_words").splitLines(),
+                    allowedSenders = getString("allowed_senders").splitLines(),
+                ),
             )
         } catch (exception: Exception) {
             logger.warn("Skipping mail account {}: cannot decrypt password ({})", id, exception.javaClass.simpleName)

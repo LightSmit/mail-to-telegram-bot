@@ -188,6 +188,7 @@ fun main() = runBlocking {
     val mailOutboxRepository = MailNotificationOutboxRepository()
     val mailAccountRepository = MailAccountRepository()
     val botUserRepository = BotUserRepository()
+    botUserRepository.backfillFromMailboxOwners()
 
     val accountRegistry = MailAccountRegistry()
 

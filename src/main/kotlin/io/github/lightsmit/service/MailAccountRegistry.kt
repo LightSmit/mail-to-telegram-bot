@@ -17,6 +17,11 @@ class MailAccountRegistry {
         accountsByKey[MailAccountKeys.accountKey(account)] = account
     }
 
+    /** Обновляет настройки ящика, если за ним уже следят (например, изменили фильтры). */
+    fun replaceIfPresent(account: MailAccountConfig) {
+        accountsByKey.computeIfPresent(MailAccountKeys.accountKey(account)) { _, _ -> account }
+    }
+
     fun remove(account: MailAccountConfig) {
         accountsByKey.remove(MailAccountKeys.accountKey(account))
     }

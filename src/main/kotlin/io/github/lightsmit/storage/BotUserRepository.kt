@@ -40,6 +40,22 @@ class BotUserRepository {
         }
     }
 
+    /** Заносит владельцев ящиков, которых еще нет в таблице (они пришли до учета пользователей). */
+    suspend fun backfillFromMailboxOwners(now: Instant = Instant.now()): Int = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT OR IGNORE INTO bot_users (user_id, first_seen_at, last_seen_at)
+                SELECT DISTINCT owner_id, ?, ? FROM mail_accounts
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, now.toEpochMilli())
+                statement.setLong(2, now.toEpochMilli())
+                statement.executeUpdate()
+            }
+        }
+    }
+
     suspend fun markBlocked(userId: Long) = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement("UPDATE bot_users SET blocked = 1 WHERE user_id = ?").use { statement ->
