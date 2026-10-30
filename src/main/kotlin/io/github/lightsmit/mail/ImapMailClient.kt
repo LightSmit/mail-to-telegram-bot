@@ -2,6 +2,7 @@ package io.github.lightsmit.mail
 
 import io.github.lightsmit.config.MailAccountConfig
 import jakarta.mail.FetchProfile
+import jakarta.mail.Flags
 import jakarta.mail.Folder
 import jakarta.mail.Message
 import jakarta.mail.UIDFolder
@@ -219,9 +220,32 @@ class ImapMailClient(
         return uidFolder.getUID(inbox.getMessage(inbox.messageCount))
     }
 
+    /**
+     * Отмечает письмо прочитанным в самом ящике (флаг \Seen).
+     * false - письмо не найдено (удалено, перемещено или сменилась нумерация).
+     */
+    suspend fun markSeen(
+        account: MailAccountConfig,
+        expectedUidValidity: Long,
+        uid: Long,
+    ): Boolean = withContext(Dispatchers.IO) {
+        withInbox(account, METADATA_TIMEOUT_MILLIS, Folder.READ_WRITE) { _, uidFolder ->
+            if (uidFolder.uidValidity != expectedUidValidity) {
+                return@withInbox false
+            }
+
+            val message = uidFolder.getMessageByUID(uid)
+                ?: return@withInbox false
+
+            message.setFlag(Flags.Flag.SEEN, true)
+            true
+        }
+    }
+
     private fun <T> withInbox(
         account: MailAccountConfig,
         readTimeoutMillis: Int,
+        mode: Int = Folder.READ_ONLY,
         block: (Folder, UIDFolder) -> T,
     ): T {
         val session = ImapSessionFactory.create(
@@ -240,7 +264,7 @@ class ImapMailClient(
 
             val inbox = store.getFolder("INBOX")
             try {
-                inbox.open(Folder.READ_ONLY)
+                inbox.open(mode)
                 val uidFolder = inbox as? UIDFolder
                     ?: error(
                         "Mailbox ${account.name} does not support IMAP UID",

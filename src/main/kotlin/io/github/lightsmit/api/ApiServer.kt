@@ -48,6 +48,8 @@ class ApiServer(
     private val port: Int = 8080,
     private val botToken: String,
     private val accountService: MailAccountService,
+    // Вызывается для каждого авторизованного запроса: учет пользователей
+    private val onUserSeen: suspend (Long) -> Unit = {},
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -115,6 +117,7 @@ class ApiServer(
 
                         // Сохраняем user_id в контекст запроса
                         call.attributes.put(UserIdKey, userId)
+                        runCatching { onUserSeen(userId) }
                     }
 
                     // Ящики текущего пользователя

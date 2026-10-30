@@ -516,21 +516,24 @@ class TelegramClient(
             put(
                 "inline_keyboard",
                 buildJsonArray {
-                    add(
-                        buildJsonArray {
-                            buttons.forEach { button ->
-                                add(
-                                    buildJsonObject {
-                                        put("text", button.text)
-                                        put(
-                                            "callback_data",
-                                            button.callbackData,
-                                        )
-                                    },
-                                )
-                            }
-                        },
-                    )
+                    // Не больше двух кнопок в строке: на телефоне длинные подписи обрезаются
+                    buttons.chunked(2).forEach { row ->
+                        add(
+                            buildJsonArray {
+                                row.forEach { button ->
+                                    add(
+                                        buildJsonObject {
+                                            put("text", button.text)
+                                            put(
+                                                "callback_data",
+                                                button.callbackData,
+                                            )
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                    }
                 },
             )
         }

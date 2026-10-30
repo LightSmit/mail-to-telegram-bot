@@ -462,6 +462,27 @@ class MailForwardingService(
         )
     }
 
+    /** Отмечает письмо прочитанным в ящике. false - письмо не найдено. */
+    suspend fun markAsRead(
+        account: MailAccountConfig,
+        expectedUidValidity: Long,
+        uid: Long,
+    ): Boolean {
+        val marked = imapClient.markSeen(
+            account = account,
+            expectedUidValidity = expectedUidValidity,
+            uid = uid,
+        )
+
+        logger.info(
+            "Mark as read for email UID {} from mailbox {}: {}",
+            uid,
+            account.username,
+            if (marked) "done" else "not found",
+        )
+        return marked
+    }
+
     suspend fun sendAttachments(
         account: MailAccountConfig,
         expectedUidValidity: Long,
@@ -815,6 +836,24 @@ class MailForwardingService(
                     uid = uid,
                 ),
             ),
+            readButton(account, uidValidity, uid),
+        )
+    }
+
+    // Отметить письмо прочитанным в самом ящике
+    private fun readButton(
+        account: MailAccountConfig,
+        uidValidity: Long,
+        uid: Long,
+    ): TelegramInlineButton {
+        return TelegramInlineButton(
+            text = "✅ Прочитано",
+            callbackData = MailViewCallbackCodec.encode(
+                action = MailViewAction.READ,
+                account = account,
+                uidValidity = uidValidity,
+                uid = uid,
+            ),
         )
     }
 
@@ -852,6 +891,8 @@ class MailForwardingService(
                     ),
                 )
             }
+
+            add(readButton(account, uidValidity, uid))
         }
     }
 
@@ -889,6 +930,8 @@ class MailForwardingService(
                     ),
                 )
             }
+
+            add(readButton(account, uidValidity, uid))
         }
     }
 

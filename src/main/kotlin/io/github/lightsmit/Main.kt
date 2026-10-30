@@ -5,6 +5,8 @@ import io.github.lightsmit.config.Environment
 import io.github.lightsmit.config.MailAccountConfigLoader
 import io.github.lightsmit.mail.ImapIdleWatcher
 import io.github.lightsmit.mail.ImapMailClient
+import io.github.lightsmit.service.AdminService
+import io.github.lightsmit.service.BackupService
 import io.github.lightsmit.service.EmailContentLoader
 import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
@@ -15,6 +17,7 @@ import io.github.lightsmit.service.MailNotificationOutboxWorker
 import io.github.lightsmit.service.TelegramDeliveryFailureClassifier
 import io.github.lightsmit.security.CryptoHelper
 import io.github.lightsmit.service.TelegramUpdatePoller
+import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.DatabaseManager
 import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
@@ -38,6 +41,19 @@ fun main() = runBlocking {
     val legacyOwnerChatId = Environment
         .get("TELEGRAM_CHAT_ID")
         ?.let { value -> value.toLongOrNull() ?: error("TELEGRAM_CHAT_ID must be a valid integer") }
+
+    // Администраторы: ADMIN_IDS (через запятую) + владелец из TELEGRAM_CHAT_ID
+    val adminChatIds = buildSet {
+        Environment.get("ADMIN_IDS")
+            ?.split(',', ' ', ';')
+            ?.mapNotNull { value -> value.trim().takeIf(String::isNotEmpty) }
+            ?.forEach { value -> add(value.toLongOrNull() ?: error("ADMIN_IDS must contain Telegram user IDs")) }
+        legacyOwnerChatId?.let(::add)
+    }
+
+    val backupHour = Environment.get("BACKUP_HOUR")?.toIntOrNull() ?: 4
+    val backupKeep = Environment.get("BACKUP_KEEP")?.toIntOrNull() ?: 7
+    val backupSendToAdmins = Environment.get("BACKUP_SEND_TO_ADMINS")?.lowercase() != "false"
 
     val maxAccountsPerOwner = Environment
         .get("MAX_MAILBOXES_PER_USER")
@@ -171,6 +187,7 @@ fun main() = runBlocking {
     val mailStateRepository = MailStateRepository()
     val mailOutboxRepository = MailNotificationOutboxRepository()
     val mailAccountRepository = MailAccountRepository()
+    val botUserRepository = BotUserRepository()
 
     val accountRegistry = MailAccountRegistry()
 
@@ -227,10 +244,30 @@ fun main() = runBlocking {
     // уведомления посчитаются уведомлениями удаленных ящиков
     val watchedMailboxes = accountService.startAll()
 
+    val backupService = BackupService(
+        backupDirectory = (databasePath.toAbsolutePath().parent ?: Path.of(".")).resolve("backups"),
+        telegramClient = telegramMediaClient,
+        adminChatIds = adminChatIds,
+        dailyHour = backupHour,
+        keepCopies = backupKeep,
+        sendToAdmins = backupSendToAdmins,
+    )
+
+    val adminService = AdminService(
+        adminChatIds = adminChatIds,
+        botUsers = botUserRepository,
+        accounts = mailAccountRepository,
+        outbox = mailOutboxRepository,
+        healthMonitor = healthMonitor,
+        backupService = backupService,
+        telegramClient = telegramControlClient,
+    )
+
     val apiServer = ApiServer(
         port = Environment.get("API_PORT")?.toIntOrNull() ?: 8080,
         botToken = telegramToken,
         accountService = accountService,
+        onUserSeen = { userId -> botUserRepository.touch(userId) },
     )
     apiServer.start()
 
@@ -249,6 +286,8 @@ fun main() = runBlocking {
             stateRepository = TelegramUpdateStateRepository(),
             miniAppUrl = miniAppUrl,
             accountService = accountService,
+            botUsers = botUserRepository,
+            adminService = adminService,
         )
 
         println("Watched mailboxes: $watchedMailboxes (limit per user: $maxAccountsPerOwner)")
@@ -263,6 +302,7 @@ fun main() = runBlocking {
             },
         )
         println("Persistent notification outbox worker enabled")
+        println("Admins: ${adminChatIds.size}, daily backup at $backupHour:00, keeping $backupKeep copies")
         println("Waiting for new emails...")
 
         supervisorScope {
@@ -275,7 +315,12 @@ fun main() = runBlocking {
                 launch { mailOutboxWorker.run() }
             }
 
-            (listOf(telegramUpdateJob) + mailOutboxJobs).joinAll()
+            // Ежедневный бэкап базы (BACKUP_HOUR по времени сервера)
+            val backupJob = launch {
+                backupService.runSchedule()
+            }
+
+            (listOf(telegramUpdateJob, backupJob) + mailOutboxJobs).joinAll()
         }
     } finally {
         mailboxSupervisor.close()

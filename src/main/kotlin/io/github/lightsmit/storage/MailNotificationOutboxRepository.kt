@@ -362,6 +362,23 @@ class MailNotificationOutboxRepository {
         }
     }
 
+    /** Сколько записей с этой операцией и статусом обновлено начиная с момента since (для статистики). */
+    suspend fun countSince(
+        operation: MailOutboxOperation,
+        status: MailOutboxStatus,
+        since: Instant,
+    ): Long = withContext(DatabaseManager.dispatcher) {
+        val sql = "SELECT COUNT(*) FROM mail_notification_outbox WHERE operation = ? AND status = ? AND updated_at >= ?"
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement(sql).use { statement ->
+                statement.setString(1, operation.name)
+                statement.setString(2, status.name)
+                statement.setLong(3, since.toEpochMilli())
+                statement.executeQuery().use { result -> if (result.next()) result.getLong(1) else 0 }
+            }
+        }
+    }
+
     /**
      * Переносит записи ящика на новый ключ и код (миграция на ключи с владельцем).
      * Возвращает число перенесенных записей.

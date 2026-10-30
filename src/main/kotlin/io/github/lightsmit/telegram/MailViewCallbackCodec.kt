@@ -10,7 +10,8 @@ enum class MailViewAction(
 ) {
     TEXT("t"),
     ATTACHMENTS("a"),
-    BACK("b");
+    BACK("b"),
+    READ("r");
 
     companion object {
         fun fromCode(code: String): MailViewAction? {

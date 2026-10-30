@@ -1,5 +1,6 @@
 package io.github.lightsmit.service
 
+import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.telegram.MailViewAction
 import io.github.lightsmit.telegram.MailViewCallbackCodec
@@ -27,6 +28,10 @@ class TelegramUpdatePoller(
     private val miniAppUrl: String? = null,
     // Для команды /mailboxes: список ящиков пользователя и их статус
     private val accountService: MailAccountService? = null,
+    // Учет пользователей бота (статистика, рассылки)
+    private val botUsers: BotUserRepository? = null,
+    // Команды администратора: /admin, /broadcast, /backup
+    private val adminService: AdminService? = null,
 ) {
 
     private val logger =
@@ -76,6 +81,8 @@ class TelegramUpdatePoller(
     private suspend fun handleCallbackQuery(
         update: TelegramCallbackQueryUpdate,
     ) {
+        touchUser(update.fromUserId)
+
         // Кнопки работают только в личном чате с ботом: письма приходят туда
         if (update.chatId != update.fromUserId) {
             answerSafely(
@@ -178,6 +185,23 @@ class TelegramUpdatePoller(
                     }
                 }
 
+                MailViewAction.READ -> {
+                    val marked = forwardingService.markAsRead(
+                        account = account,
+                        expectedUidValidity = request.uidValidity,
+                        uid = request.uid,
+                    )
+                    answerSafely(
+                        callbackQueryId = update.callbackQueryId,
+                        text = if (marked) {
+                            "✅ Отмечено прочитанным в ящике"
+                        } else {
+                            "Письмо не найдено: его могли удалить или переместить"
+                        },
+                        showAlert = !marked,
+                    )
+                }
+
                 MailViewAction.BACK -> {
                     performActionWithAcknowledgement(
                         callbackQueryId = update.callbackQueryId,
@@ -222,12 +246,19 @@ class TelegramUpdatePoller(
         message: TelegramMessageUpdate,
     ) {
         if (message.chatType != "private") return
+        touchUser(message.fromUserId)
 
-        val command = message.text
-            ?.trim()
-            ?.substringBefore(' ')
-            ?.substringBefore('@')
-            ?.lowercase()
+        val fullText = message.text?.trim().orEmpty()
+        val firstToken = fullText.substringBefore(' ').substringBefore('\n')
+        val command = firstToken
+            .substringBefore('@')
+            .lowercase()
+            .takeIf { fullText.isNotEmpty() }
+
+        val admin = adminService?.takeIf { service -> service.isAdmin(message.fromUserId) }
+        if (admin != null && command != null && handleAdminCommand(admin, message.chatId, message.fromUserId, command, fullText.removePrefix(firstToken).trim())) {
+            return
+        }
 
         val text = when (command) {
             "/start" -> START_TEXT
@@ -252,6 +283,57 @@ class TelegramUpdatePoller(
             throw exception
         } catch (exception: Exception) {
             logger.warn("Failed to answer message from {}: {}", message.fromUserId, exception.javaClass.simpleName)
+        }
+    }
+
+    // true - команда администратора обработана
+    private suspend fun handleAdminCommand(
+        admin: AdminService,
+        chatId: Long,
+        adminId: Long,
+        command: String,
+        argument: String,
+    ): Boolean {
+        val reply: String = try {
+            when (command) {
+                "/admin", "/stats" -> admin.statsText()
+                "/broadcast" -> admin.prepareBroadcast(adminId, argument)
+                "/broadcast_cancel" -> admin.cancelBroadcast(adminId)
+                "/broadcast_send" -> {
+                    sendPlain(chatId, "Начинаю рассылку. Пришлю итог, когда закончу.")
+                    admin.sendBroadcast(adminId)
+                }
+                "/backup" -> admin.backupText()
+                else -> return false
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Admin command {} failed: {}", command, exception.javaClass.simpleName)
+            "Команда не выполнена: ${exception.javaClass.simpleName}. Подробности в логе сервера."
+        }
+
+        sendPlain(chatId, reply)
+        return true
+    }
+
+    private suspend fun sendPlain(chatId: Long, text: String) {
+        try {
+            controlClient.sendMessage(chatId = chatId, text = text)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to send message to {}: {}", chatId, exception.javaClass.simpleName)
+        }
+    }
+
+    private suspend fun touchUser(userId: Long) {
+        try {
+            botUsers?.touch(userId)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.debug("Failed to record bot user {}: {}", userId, exception.javaClass.simpleName)
         }
     }
 

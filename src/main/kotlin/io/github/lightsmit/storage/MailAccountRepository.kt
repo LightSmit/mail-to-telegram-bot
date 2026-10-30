@@ -41,6 +41,17 @@ class MailAccountRepository {
         query("SELECT * FROM mail_accounts WHERE owner_id = ? ORDER BY id") { setLong(1, ownerId) }
     }
 
+    /** Сколько разных пользователей подключили хотя бы один ящик. */
+    suspend fun countOwners(): Long = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(DISTINCT owner_id) FROM mail_accounts").use { rs ->
+                    if (rs.next()) rs.getLong(1) else 0
+                }
+            }
+        }
+    }
+
     suspend fun countByOwnerId(ownerId: Long): Int = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement("SELECT COUNT(*) FROM mail_accounts WHERE owner_id = ?").use { statement ->
