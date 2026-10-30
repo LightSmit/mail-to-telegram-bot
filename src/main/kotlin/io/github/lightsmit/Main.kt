@@ -94,6 +94,16 @@ fun main() = runBlocking {
         "IMAP_SAFETY_POLL_SECONDS must be between 5 and 3600"
     }
 
+    // Проверка ящика NOOP по открытому IDLE-соединению: ловит письма, о которых
+    // сервер не сообщил по IDLE вовремя (0 - отключить)
+    val noopIntervalSeconds = Environment
+        .get("IMAP_NOOP_SECONDS")
+        ?.toLongOrNull()
+        ?: 5L
+    require(noopIntervalSeconds == 0L || noopIntervalSeconds in 2L..300L) {
+        "IMAP_NOOP_SECONDS must be 0 or between 2 and 300"
+    }
+
     Files.createDirectories(attachmentTempDirectory)
     Files.list(attachmentTempDirectory).use { paths ->
         paths.forEach { path ->
@@ -117,6 +127,23 @@ fun main() = runBlocking {
         token = telegramToken,
         proxyUrl = telegramProxyUrl,
     )
+
+    // Команды бота для подсказок в Telegram при вводе "/"
+    launch {
+        try {
+            telegramControlClient.setMyCommands(
+                listOf(
+                    "start" to "Начать и открыть приложение",
+                    "mailboxes" to "Мои ящики и их состояние",
+                    "help" to "Как подключить почту",
+                ),
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            println("Telegram setMyCommands failed: ${exception.javaClass.simpleName}")
+        }
+    }
 
     // Диагностика: какому боту принадлежит токен. Mini App должен открываться
     // именно из этого бота, иначе проверка подписи initData не пройдёт (401).
@@ -167,6 +194,7 @@ fun main() = runBlocking {
         onSafetyMailboxCheck = forwardingService::processAccount,
         reconnectDelaySeconds = reconnectDelaySeconds,
         safetyPollSeconds = safetyPollSeconds,
+        noopIntervalSeconds = noopIntervalSeconds,
         onMailboxConnected = healthMonitor::onConnected,
         onMailboxFailure = healthMonitor::onFailure,
     )
@@ -220,6 +248,7 @@ fun main() = runBlocking {
             forwardingService = forwardingService,
             stateRepository = TelegramUpdateStateRepository(),
             miniAppUrl = miniAppUrl,
+            accountService = accountService,
         )
 
         println("Watched mailboxes: $watchedMailboxes (limit per user: $maxAccountsPerOwner)")

@@ -155,6 +155,31 @@ class TelegramClient(
         return extractMessageId(root)
     }
 
+    /** Регистрирует команды бота: Telegram показывает их подсказками при вводе "/". */
+    suspend fun setMyCommands(
+        commands: List<Pair<String, String>>,
+    ) {
+        val payload = buildJsonArray {
+            commands.forEach { (command, description) ->
+                add(
+                    buildJsonObject {
+                        put("command", command)
+                        put("description", description)
+                    },
+                )
+            }
+        }
+
+        executeOnce("setMyCommands") {
+            httpClient.submitForm(
+                url = "$baseUrl/setMyCommands",
+                formParameters = Parameters.build {
+                    append("commands", payload.toString())
+                },
+            )
+        }
+    }
+
     /** Сообщение с кнопкой, которая открывает Mini App прямо в Telegram (с подписанными данными). */
     suspend fun sendMessageWithWebAppButton(
         chatId: Long,

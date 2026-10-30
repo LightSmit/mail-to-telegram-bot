@@ -25,6 +25,8 @@ class TelegramUpdatePoller(
     private val stateRepository: TelegramUpdateStateRepository,
     // Адрес Mini App для кнопки в приветствии; null - кнопку не показываем
     private val miniAppUrl: String? = null,
+    // Для команды /mailboxes: список ящиков пользователя и их статус
+    private val accountService: MailAccountService? = null,
 ) {
 
     private val logger =
@@ -214,7 +216,7 @@ class TelegramUpdatePoller(
         }
     }
 
-    // Бот не переписывается: на /start и /help отвечает инструкцией,
+    // Бот не переписывается: отвечает на команды /start, /help, /mailboxes,
     // на остальное - короткой подсказкой. Только в личном чате.
     private suspend fun handleMessage(
         message: TelegramMessageUpdate,
@@ -228,9 +230,11 @@ class TelegramUpdatePoller(
             ?.lowercase()
 
         val text = when (command) {
-            "/start", "/help" -> WELCOME_TEXT
+            "/start" -> START_TEXT
+            "/help" -> HELP_TEXT
+            "/mailboxes" -> mailboxesText(message.fromUserId)
             else -> "Я не отвечаю на сообщения, зато пересылаю сюда новые письма 🙂\n\n" +
-                "Подключить или удалить ящик можно в приложении. Инструкция: /help"
+                "Команды: /mailboxes - мои ящики, /help - как подключить почту."
         }
 
         try {
@@ -248,6 +252,35 @@ class TelegramUpdatePoller(
             throw exception
         } catch (exception: Exception) {
             logger.warn("Failed to answer message from {}: {}", message.fromUserId, exception.javaClass.simpleName)
+        }
+    }
+
+    private suspend fun mailboxesText(ownerChatId: Long): String {
+        val service = accountService ?: return "Список ящиков открывается в приложении."
+        val accounts = service.list(ownerChatId)
+
+        if (accounts.isEmpty()) {
+            return "У вас пока нет подключённых ящиков. Подключите первый в приложении, инструкция там же."
+        }
+
+        return buildString {
+            appendLine("📬 Ваши ящики")
+            accounts.forEach { account ->
+                val health = service.health(account.id)
+                val (mark, status) = when (health.status) {
+                    MailboxStatus.OK -> "🟢" to "письма приходят"
+                    MailboxStatus.CONNECTING -> "🟡" to "подключается"
+                    MailboxStatus.ERROR -> "🔴" to (health.problem?.replaceFirstChar(Char::lowercase) ?: "не удаётся подключиться")
+                }
+                appendLine()
+                append(mark).append(' ').append(account.username)
+                if (account.name != account.username) append(" (").append(account.name).append(')')
+                appendLine()
+                append("    ").append(status)
+            }
+            appendLine()
+            appendLine()
+            append("Подключить или отключить ящик можно в приложении.")
         }
     }
 
@@ -300,13 +333,31 @@ class TelegramUpdatePoller(
     }
 
     private companion object {
-        val WELCOME_TEXT = """
+        val START_TEXT = """
             👋 Привет! Я пересылаю новые письма из ваших почтовых ящиков прямо сюда, в Telegram.
 
-            Как подключить ящик:
-            1. Откройте приложение кнопкой ниже (или кнопкой меню слева от поля ввода).
-            2. Создайте в настройках почты пароль приложения. Это НЕ ваш обычный пароль от почты, а отдельный код, который выдаёт сам почтовый сервис. Пошаговая инструкция для каждого сервиса есть в приложении.
-            3. Введите адрес почты и пароль приложения. Бот проверит вход и начнёт присылать новые письма.
+            Нажмите «Открыть приложение», чтобы подключить первый ящик. Понадобится адрес почты и пароль приложения, инструкция для вашего почтового сервиса будет там же.
+
+            /help - подробно о том, как всё работает
+            /mailboxes - мои ящики и их состояние
+        """.trimIndent()
+
+        val HELP_TEXT = """
+            📖 Как это работает
+
+            Я подключаюсь к вашему ящику по протоколу IMAP и присылаю сюда карточку каждого нового письма: от кого, тема, дата и есть ли вложения. Старые письма не пересылаются.
+
+            Как подключить ящик
+            1. Откройте приложение кнопкой ниже.
+            2. Введите адрес почты, сервис определится сам.
+            3. Создайте в настройках почты пароль приложения по инструкции в приложении и вставьте его. Обычный пароль от почты не подойдёт: почтовые сервисы не пускают по нему сторонние программы.
+            4. Нажмите «Подключить ящик». Я проверю вход и напишу, что ящик подключён.
+
+            Кнопки под письмом
+            📄 Текст - показать текст письма
+            📎 Вложения - прислать файлы из письма
+
+            Если ящик перестанет работать (например, вы сменили пароль от почты), я напишу об этом. Отключить ящик можно в приложении: пароль приложения при этом стоит удалить и в настройках почты.
 
             Поддерживаются Mail.ru, Яндекс, Gmail, Рамблер, iCloud и другие ящики с доступом по IMAP.
         """.trimIndent()

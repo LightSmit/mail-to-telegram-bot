@@ -3,6 +3,7 @@ package io.github.lightsmit.mail
 import io.github.lightsmit.config.MailAccountConfig
 import jakarta.mail.Folder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -23,6 +24,8 @@ class ImapIdleWatcher(
         suspend (MailAccountConfig) -> Unit,
     private val reconnectDelaySeconds: Long,
     private val safetyPollSeconds: Long,
+    // Как часто проверять ящик командой NOOP по уже открытому IDLE-соединению (0 - не проверять)
+    private val noopIntervalSeconds: Long = 5,
     // Сообщают монитору здоровья ящиков: подключение удалось / сорвалось
     private val onMailboxConnected: (MailAccountConfig) -> Unit = {},
     private val onMailboxFailure: (MailAccountConfig, Exception) -> Unit = { _, _ -> },
@@ -125,24 +128,44 @@ class ImapIdleWatcher(
 
             onIdleMailboxChanged(account, openedInbox)
 
-            while (currentCoroutineContext().isActive) {
-                runInterruptible(Dispatchers.IO) {
-                    openedInbox.idle(true)
+            coroutineScope {
+                // Некоторые серверы (заметно у Gmail) сообщают о новом письме по IDLE
+                // с опозданием на десятки секунд. Раз в несколько секунд из другого
+                // потока обращаемся к папке: это прерывает IDLE и отправляет NOOP по
+                // тому же соединению, без нового входа в ящик. После этого основной
+                // цикл проверяет, нет ли новых писем, и снова уходит в IDLE.
+                val noopJob = if (noopIntervalSeconds > 0) {
+                    launch {
+                        while (isActive) {
+                            delay(noopIntervalSeconds * 1_000)
+                            runInterruptible(Dispatchers.IO) {
+                                openedInbox.messageCount
+                            }
+                        }
+                    }
+                } else {
+                    null
                 }
 
-                if (!currentCoroutineContext().isActive) break
+                try {
+                    while (currentCoroutineContext().isActive) {
+                        runInterruptible(Dispatchers.IO) {
+                            openedInbox.idle(true)
+                        }
 
-                logger.info(
-                    "IMAP IDLE event received for {}",
-                    account.username,
-                )
-                val timer = TimeSource.Monotonic.markNow()
-                onIdleMailboxChanged(account, openedInbox)
-                logger.info(
-                    "IMAP IDLE event processed for {} in {} ms",
-                    account.username,
-                    timer.elapsedNow().inWholeMilliseconds,
-                )
+                        if (!currentCoroutineContext().isActive) break
+
+                        val timer = TimeSource.Monotonic.markNow()
+                        onIdleMailboxChanged(account, openedInbox)
+                        logger.debug(
+                            "IMAP IDLE wake-up processed for {} in {} ms",
+                            account.username,
+                            timer.elapsedNow().inWholeMilliseconds,
+                        )
+                    }
+                } finally {
+                    noopJob?.cancel()
+                }
             }
 
             return true
