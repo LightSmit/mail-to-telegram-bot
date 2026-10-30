@@ -1,5 +1,6 @@
 package io.github.lightsmit.service
 
+import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.telegram.MailViewAction
@@ -32,6 +33,8 @@ class TelegramUpdatePoller(
     private val botUsers: BotUserRepository? = null,
     // Команды администратора: /admin, /broadcast, /backup
     private val adminService: AdminService? = null,
+    // Ответ на письмо из Telegram; null - кнопка "Ответить" не работает
+    private val replyService: MailReplyService? = null,
 ) {
 
     private val logger =
@@ -202,6 +205,10 @@ class TelegramUpdatePoller(
                     )
                 }
 
+                MailViewAction.REPLY -> {
+                    startReply(update.callbackQueryId, account, request.uidValidity, request.uid)
+                }
+
                 MailViewAction.BACK -> {
                     performActionWithAcknowledgement(
                         callbackQueryId = update.callbackQueryId,
@@ -260,6 +267,31 @@ class TelegramUpdatePoller(
             return
         }
 
+        // Ответ на письмо: ждем текст после нажатия "Ответить"
+        val replies = replyService
+        if (replies != null && replies.isWaiting(message.fromUserId)) {
+            when {
+                command == "/cancel" -> {
+                    replies.cancel(message.fromUserId)
+                    sendPlain(message.chatId, "Ответ отменен.")
+                    return
+                }
+                message.text == null -> {
+                    sendPlain(message.chatId, "Пока можно ответить только текстом. Напишите ответ или отправьте /cancel.")
+                    return
+                }
+                !fullText.startsWith("/") -> {
+                    sendReply(replies, message.chatId, message.fromUserId, message.text)
+                    return
+                }
+            }
+        }
+
+        if (command == "/cancel") {
+            sendPlain(message.chatId, "Сейчас нечего отменять.")
+            return
+        }
+
         val text = when (command) {
             "/start" -> START_TEXT
             "/help" -> HELP_TEXT
@@ -315,6 +347,64 @@ class TelegramUpdatePoller(
 
         sendPlain(chatId, reply)
         return true
+    }
+
+    private suspend fun startReply(
+        callbackQueryId: String,
+        account: MailAccountConfig,
+        uidValidity: Long,
+        uid: Long,
+    ) {
+        val replies = replyService
+        if (replies == null) {
+            answerSafely(callbackQueryId, "Ответ из Telegram пока недоступен", showAlert = true)
+            return
+        }
+
+        when (val result = replies.start(account, uidValidity, uid)) {
+            is MailReplyService.StartResult.Ready -> {
+                answerSafely(callbackQueryId, null, showAlert = false)
+                controlClient.sendMessageForceReply(
+                    chatId = account.ownerChatId,
+                    text = "↩️ Ответ на «${result.subject.take(200)}»\n" +
+                        "Кому: ${result.recipients.take(300)}\n" +
+                        "С ящика: ${account.username}\n\n" +
+                        "Напишите текст ответа следующим сообщением. /cancel - отменить.",
+                    placeholder = "Текст ответа",
+                )
+            }
+            MailReplyService.StartResult.NotFound -> answerSafely(
+                callbackQueryId, "Письмо не найдено: его могли удалить или переместить", showAlert = true,
+            )
+            MailReplyService.StartResult.NoRecipient -> answerSafely(
+                callbackQueryId, "В письме нет адреса для ответа", showAlert = true,
+            )
+            MailReplyService.StartResult.Unsupported -> answerSafely(
+                callbackQueryId, "Для этого почтового сервиса ответ из Telegram пока не поддерживается", showAlert = true,
+            )
+        }
+    }
+
+    private suspend fun sendReply(
+        replies: MailReplyService,
+        chatId: Long,
+        userId: Long,
+        body: String,
+    ) {
+        val text = when (val result = replies.send(userId, body)) {
+            is MailReplyService.SendResult.Sent -> "✅ Ответ отправлен: ${result.recipients}"
+            MailReplyService.SendResult.NoPending ->
+                "Время на ответ вышло. Нажмите «↩️ Ответить» под письмом еще раз."
+            MailReplyService.SendResult.TooLong ->
+                "Слишком длинный ответ: не больше ${MailReplyService.MAX_BODY_LENGTH} символов. Сократите текст и отправьте снова."
+            MailReplyService.SendResult.MailboxGone ->
+                "Этот ящик больше не подключен, ответ не отправлен."
+            MailReplyService.SendResult.AuthFailed ->
+                "⚠️ Почта не приняла пароль приложения для отправки писем. Проверьте, что пароль приложения разрешает отправку (SMTP), и подключите ящик заново."
+            MailReplyService.SendResult.Failed ->
+                "⚠️ Не удалось отправить ответ: почтовый сервер не отвечает. Отправьте текст еще раз или /cancel."
+        }
+        sendPlain(chatId, text)
     }
 
     private suspend fun sendPlain(chatId: Long, text: String) {
@@ -438,6 +528,8 @@ class TelegramUpdatePoller(
             Кнопки под письмом
             📄 Текст - показать текст письма
             📎 Вложения - прислать файлы из письма
+            ↩️ Ответить - ответить на письмо прямо отсюда: напишите текст, и я отправлю его с вашего ящика
+            ✅ Прочитано - отметить письмо прочитанным в почте
 
             Если ящик перестанет работать (например, вы сменили пароль от почты), я напишу об этом. Отключить ящик можно в приложении: пароль приложения при этом стоит удалить и в настройках почты.
 

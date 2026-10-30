@@ -263,6 +263,41 @@ class ImapMailClient(
         }
     }
 
+    /** Данные для ответа на письмо: кому, тема и заголовки цепочки. null - письмо не найдено. */
+    suspend fun fetchReplyContext(
+        account: MailAccountConfig,
+        expectedUidValidity: Long,
+        uid: Long,
+    ): ReplyContext? = withContext(Dispatchers.IO) {
+        withInbox(account, METADATA_TIMEOUT_MILLIS) { _, uidFolder ->
+            if (uidFolder.uidValidity != expectedUidValidity) {
+                return@withInbox null
+            }
+
+            val message = uidFolder.getMessageByUID(uid)
+                ?: return@withInbox null
+
+            // getReplyTo возвращает From, если заголовка Reply-To нет
+            val recipients = runCatching { message.replyTo?.toList() }.getOrNull()
+                .orEmpty()
+                .filterIsInstance<InternetAddress>()
+                .filter { address -> !address.address.isNullOrBlank() }
+
+            fun header(name: String): String? =
+                runCatching { message.getHeader(name)?.firstOrNull() }.getOrNull()
+                    ?.replace(WHITESPACE, " ")
+                    ?.trim()
+                    ?.takeIf(String::isNotEmpty)
+
+            ReplyContext(
+                recipients = recipients,
+                subject = runCatching { message.subject }.getOrNull().orEmpty(),
+                messageId = header("Message-ID"),
+                references = header("References"),
+            )
+        }
+    }
+
     private fun <T> withInbox(
         account: MailAccountConfig,
         readTimeoutMillis: Int,
@@ -302,6 +337,7 @@ class ImapMailClient(
     private companion object {
         val BULK_HEADERS = listOf("List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted")
         const val METADATA_TIMEOUT_MILLIS = 30_000
+        val WHITESPACE = Regex("\\s+")
         const val CONTENT_TIMEOUT_MILLIS = 180_000
     }
 }

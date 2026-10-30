@@ -863,7 +863,25 @@ class MailForwardingService(
                     uid = uid,
                 ),
             ),
+            replyButton(account, uidValidity, uid),
             readButton(account, uidValidity, uid),
+        )
+    }
+
+    // Ответить на письмо: следующий текст пользователя уйдет ответом с его ящика
+    private fun replyButton(
+        account: MailAccountConfig,
+        uidValidity: Long,
+        uid: Long,
+    ): TelegramInlineButton {
+        return TelegramInlineButton(
+            text = "↩️ Ответить",
+            callbackData = MailViewCallbackCodec.encode(
+                action = MailViewAction.REPLY,
+                account = account,
+                uidValidity = uidValidity,
+                uid = uid,
+            ),
         )
     }
 
@@ -919,6 +937,7 @@ class MailForwardingService(
                 )
             }
 
+            add(replyButton(account, uidValidity, uid))
             add(readButton(account, uidValidity, uid))
         }
     }
@@ -958,6 +977,7 @@ class MailForwardingService(
                 )
             }
 
+            add(replyButton(account, uidValidity, uid))
             add(readButton(account, uidValidity, uid))
         }
     }

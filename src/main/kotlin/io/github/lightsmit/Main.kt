@@ -5,12 +5,14 @@ import io.github.lightsmit.config.Environment
 import io.github.lightsmit.config.MailAccountConfigLoader
 import io.github.lightsmit.mail.ImapIdleWatcher
 import io.github.lightsmit.mail.ImapMailClient
+import io.github.lightsmit.mail.SmtpMailSender
 import io.github.lightsmit.service.AdminService
 import io.github.lightsmit.service.BackupService
 import io.github.lightsmit.service.EmailContentLoader
 import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.service.MailboxHealthMonitor
+import io.github.lightsmit.service.MailReplyService
 import io.github.lightsmit.service.MailboxSupervisor
 import io.github.lightsmit.service.MailForwardingService
 import io.github.lightsmit.service.MailNotificationOutboxWorker
@@ -289,6 +291,11 @@ fun main() = runBlocking {
             accountService = accountService,
             botUsers = botUserRepository,
             adminService = adminService,
+            replyService = MailReplyService(
+                registry = accountRegistry,
+                imapClient = imapClient,
+                smtpSender = SmtpMailSender(),
+            ),
         )
 
         println("Watched mailboxes: $watchedMailboxes (limit per user: $maxAccountsPerOwner)")

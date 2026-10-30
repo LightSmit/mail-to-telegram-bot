@@ -155,6 +155,30 @@ class TelegramClient(
         return extractMessageId(root)
     }
 
+    /** Сообщение, после которого Telegram сразу открывает ответ на него (поле ввода с подсказкой). */
+    suspend fun sendMessageForceReply(
+        chatId: Long,
+        text: String,
+        placeholder: String,
+    ): Long {
+        val replyMarkup = buildJsonObject {
+            put("force_reply", true)
+            put("input_field_placeholder", placeholder.take(64))
+        }
+        val root = executeWithRetry("sendMessage") {
+            httpClient.submitForm(
+                url = "$baseUrl/sendMessage",
+                formParameters = Parameters.build {
+                    append("chat_id", chatId.toString())
+                    append("text", text)
+                    append("reply_markup", replyMarkup.toString())
+                },
+            )
+        }
+
+        return extractMessageId(root)
+    }
+
     /** Регистрирует команды бота: Telegram показывает их подсказками при вводе "/". */
     suspend fun setMyCommands(
         commands: List<Pair<String, String>>,
