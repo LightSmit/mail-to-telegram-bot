@@ -24,9 +24,9 @@ const REFRESH_INTERVAL_MS = 15000;
 
 function describeError(error: unknown): string {
   if (error instanceof DOMException && error.name === 'AbortError') {
-    return 'Сервер не ответил вовремя. Попробуйте ещё раз.';
+    return 'Сервер не ответил вовремя. Попробуйте еще раз.';
   }
-  return 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.';
+  return 'Нет связи с сервером. Проверьте интернет и попробуйте еще раз.';
 }
 
 // Для 401 показываем, пришли ли вообще данные от Telegram
@@ -55,7 +55,7 @@ function statusLabel(account: Account): string {
     case 'OK':
       return 'Письма приходят';
     case 'ERROR':
-      return account.problem ?? 'Не удаётся подключиться';
+      return account.problem ?? 'Не удается подключиться';
     default:
       return 'Подключается…';
   }
@@ -148,7 +148,7 @@ function App() {
     }
 
     setSubmitting(true);
-    setNotice({ kind: 'info', text: 'Проверяем вход в почту. Это займёт несколько секунд.' });
+    setNotice({ kind: 'info', text: 'Проверяем вход в почту. Это займет несколько секунд.' });
     try {
       const response = await request('/accounts', 'POST', {
         name: name.trim(),
@@ -159,7 +159,7 @@ function App() {
       }, ADD_ACCOUNT_TIMEOUT_MS);
 
       if (response.ok) {
-        setNotice({ kind: 'ok', text: 'Ящик подключён. Новые письма будут приходить в чат с ботом.' });
+        setNotice({ kind: 'ok', text: 'Ящик подключен. Новые письма будут приходить в чат с ботом.' });
         setEmail(''); setPassword(''); setName(''); setProviderId(''); setProviderTouched(false); setCustomHost('');
         await fetchAccounts();
       } else {
@@ -184,7 +184,7 @@ function App() {
     try {
       const response = await request(`/accounts/${account.id}`, 'DELETE');
       if (response.ok) {
-        setNotice({ kind: 'ok', text: `Ящик ${account.email} отключён.` });
+        setNotice({ kind: 'ok', text: `Ящик ${account.email} отключен.` });
         await fetchAccounts();
       } else {
         setNotice({ kind: 'error', text: await errorText(response, 'Не удалось отключить ящик') });
@@ -295,7 +295,7 @@ function App() {
             <h3 id="app-password-title">Нужен пароль приложения, а не пароль от почты</h3>
             <p>
               Почтовые сервисы не пускают сторонние программы по обычному паролю. Создайте отдельный
-              пароль приложения: это займёт минуту, а отозвать его можно в любой момент, не меняя пароль от почты.
+              пароль приложения: это займет минуту, а отозвать его можно в любой момент, не меняя пароль от почты.
             </p>
             {steps ? (
               <ol className="steps">

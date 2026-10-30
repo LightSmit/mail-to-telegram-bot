@@ -80,7 +80,7 @@ class TelegramUpdatePoller(
         if (update.chatId != update.fromUserId) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
-                text = "Доступ запрещён",
+                text = "Доступ запрещен",
                 showAlert = true,
             )
             return
@@ -107,7 +107,7 @@ class TelegramUpdatePoller(
         if (account == null) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
-                text = "Почтовый ящик больше не подключён",
+                text = "Почтовый ящик больше не подключен",
                 showAlert = true,
             )
             return
@@ -260,7 +260,7 @@ class TelegramUpdatePoller(
         val accounts = service.list(ownerChatId)
 
         if (accounts.isEmpty()) {
-            return "У вас пока нет подключённых ящиков. Подключите первый в приложении, инструкция там же."
+            return "У вас пока нет подключенных ящиков. Подключите первый в приложении, инструкция там же."
         }
 
         return buildString {
@@ -270,7 +270,7 @@ class TelegramUpdatePoller(
                 val (mark, status) = when (health.status) {
                     MailboxStatus.OK -> "🟢" to "письма приходят"
                     MailboxStatus.CONNECTING -> "🟡" to "подключается"
-                    MailboxStatus.ERROR -> "🔴" to (health.problem?.replaceFirstChar(Char::lowercase) ?: "не удаётся подключиться")
+                    MailboxStatus.ERROR -> "🔴" to (health.problem?.replaceFirstChar(Char::lowercase) ?: "не удается подключиться")
                 }
                 appendLine()
                 append(mark).append(' ').append(account.username)
@@ -338,7 +338,7 @@ class TelegramUpdatePoller(
 
             Нажмите «Открыть приложение», чтобы подключить первый ящик. Понадобится адрес почты и пароль приложения, инструкция для вашего почтового сервиса будет там же.
 
-            /help - подробно о том, как всё работает
+            /help - подробно о том, как все работает
             /mailboxes - мои ящики и их состояние
         """.trimIndent()
 
@@ -350,8 +350,8 @@ class TelegramUpdatePoller(
             Как подключить ящик
             1. Откройте приложение кнопкой ниже.
             2. Введите адрес почты, сервис определится сам.
-            3. Создайте в настройках почты пароль приложения по инструкции в приложении и вставьте его. Обычный пароль от почты не подойдёт: почтовые сервисы не пускают по нему сторонние программы.
-            4. Нажмите «Подключить ящик». Я проверю вход и напишу, что ящик подключён.
+            3. Создайте в настройках почты пароль приложения по инструкции в приложении и вставьте его. Обычный пароль от почты не подойдет: почтовые сервисы не пускают по нему сторонние программы.
+            4. Нажмите «Подключить ящик». Я проверю вход и напишу, что ящик подключен.
 
             Кнопки под письмом
             📄 Текст - показать текст письма

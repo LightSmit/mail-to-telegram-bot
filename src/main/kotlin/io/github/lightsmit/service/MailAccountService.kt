@@ -172,7 +172,7 @@ class MailAccountService(
         }
 
         if (addresses.isEmpty() || addresses.any { address -> !MailHostPolicy.isPublicAddress(address) }) {
-            "Адрес сервера $host не разрешён"
+            "Адрес сервера $host не разрешен"
         } else {
             null
         }
@@ -193,7 +193,7 @@ class MailAccountService(
             throw exception
         } catch (exception: AuthenticationFailedException) {
             logger.info("Login check failed for {}: authentication rejected", account.username)
-            "Почта отклонила вход. Проверьте адрес и пароль приложения, а также что доступ по IMAP включён в настройках ящика"
+            "Почта отклонила вход. Проверьте адрес и пароль приложения, а также что доступ по IMAP включен в настройках ящика"
         } catch (exception: Exception) {
             logger.info("Login check failed for {}: {} ({})", account.username, exception.javaClass.simpleName, exception.message)
             "Не удалось подключиться к ${account.host}. Проверьте адрес сервера"

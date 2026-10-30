@@ -227,7 +227,7 @@ select:focus {
   border-color: var(--accent);
 }
 
-/* Главный блок: про пароль приложения. Обрамлён полоской авиапочты */
+/* Главный блок: про пароль приложения. Обрамлен полоской авиапочты */
 .app-password {
   position: relative;
   padding: 18px 16px 16px;

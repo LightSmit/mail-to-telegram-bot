@@ -146,7 +146,7 @@ fun main() = runBlocking {
     }
 
     // Диагностика: какому боту принадлежит токен. Mini App должен открываться
-    // именно из этого бота, иначе проверка подписи initData не пройдёт (401).
+    // именно из этого бота, иначе проверка подписи initData не пройдет (401).
     launch {
         try {
             val username = telegramControlClient.getBotUsername()
@@ -224,7 +224,7 @@ fun main() = runBlocking {
     }
 
     // Ящики должны быть в реестре до запуска воркеров outbox, иначе ожидающие
-    // уведомления посчитаются уведомлениями удалённых ящиков
+    // уведомления посчитаются уведомлениями удаленных ящиков
     val watchedMailboxes = accountService.startAll()
 
     val apiServer = ApiServer(

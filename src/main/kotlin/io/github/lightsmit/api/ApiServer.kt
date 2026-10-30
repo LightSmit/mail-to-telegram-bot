@@ -71,7 +71,7 @@ class ApiServer(
             // Лог каждого запроса: метод, путь, статус, время
             install(CallLogging)
 
-            // Любое необработанное исключение логируем и отдаём как JSON 500
+            // Любое необработанное исключение логируем и отдаем как JSON 500
             install(StatusPages) {
                 exception<Throwable> { call, cause ->
                     call.application.environment.log.error(

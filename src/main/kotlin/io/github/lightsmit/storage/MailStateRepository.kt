@@ -78,7 +78,7 @@ class MailStateRepository {
         }
     }
 
-    /** Переносит позицию чтения на новый ключ, если для нового ключа её ещё нет. */
+    /** Переносит позицию чтения на новый ключ, если для нового ключа ее еще нет. */
     suspend fun renameKey(
         oldAccountKey: String,
         newAccountKey: String,
@@ -100,7 +100,7 @@ class MailStateRepository {
         }
     }
 
-    /** Забывает позицию чтения (ящик удалён: при повторном добавлении начнём с последнего письма). */
+    /** Забывает позицию чтения (ящик удален: при повторном добавлении начнем с последнего письма). */
     suspend fun delete(accountKey: String) = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->
             connection.prepareStatement("DELETE FROM mail_account_state WHERE account_key = ?").use { statement ->

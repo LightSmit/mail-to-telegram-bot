@@ -64,7 +64,7 @@ class MailAccountRepository {
 
     /**
      * Добавляет ящик или обновляет существующий (тот же владелец и логин).
-     * Возвращает сохранённую запись с id и владельцем.
+     * Возвращает сохраненную запись с id и владельцем.
      */
     suspend fun upsert(ownerId: Long, config: MailAccountConfig): MailAccountConfig =
         withContext(DatabaseManager.dispatcher) {
@@ -89,7 +89,7 @@ class MailAccountRepository {
             }
         }
 
-    /** Добавляет ящик, только если у владельца ещё нет ящика с таким логином. */
+    /** Добавляет ящик, только если у владельца еще нет ящика с таким логином. */
     suspend fun insertIfAbsent(ownerId: Long, config: MailAccountConfig): Boolean =
         withContext(DatabaseManager.dispatcher) {
             DatabaseManager.dataSource.connection.use { connection ->
@@ -106,7 +106,7 @@ class MailAccountRepository {
             }
         }
 
-    /** Удаляет ящик владельца. Возвращает удалённую запись или null, если её нет (или она чужая). */
+    /** Удаляет ящик владельца. Возвращает удаленную запись или null, если ее нет (или она чужая). */
     suspend fun delete(id: Long, ownerId: Long): MailAccountConfig? = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->
             val existing = connection.prepareStatement(

@@ -774,7 +774,7 @@ class MailForwardingService(
                 telegramControlClient.sendMessage(
                     chatId = account.ownerChatId,
                     text = buildString {
-                        appendLine("✅ Почтовый ящик подключён")
+                        appendLine("✅ Почтовый ящик подключен")
                         appendLine()
                         appendLine("Название: ${account.name}")
                         appendLine("Адрес: ${account.username}")

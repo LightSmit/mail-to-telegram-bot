@@ -46,7 +46,7 @@ class MailboxSupervisor(
         stopLocked(accountId)
     }
 
-    // Не ждём завершения: блокирующий IMAP IDLE может не реагировать на отмену
+    // Не ждем завершения: блокирующий IMAP IDLE может не реагировать на отмену
     // до таймаута сокета. Ящик сразу убирается из реестра, поэтому новые письма
     // по нему уже не доставляются.
     private fun stopLocked(accountId: Long): MailAccountConfig? {

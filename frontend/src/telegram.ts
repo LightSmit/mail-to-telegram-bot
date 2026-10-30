@@ -2,7 +2,7 @@ import WebApp from '@twa-dev/sdk'
 
 // Официальный скрипт Telegram (telegram-web-app.js) может не загрузиться,
 // например, если telegram.org недоступен у пользователя. Тогда объект WebApp
-// пустой, хотя Telegram всё равно передаёт подписанные данные в адресе
+// пустой, хотя Telegram все равно передает подписанные данные в адресе
 // страницы: #tgWebAppData=...  Читаем их сами как запасной вариант.
 
 type TelegramGlobal = { Telegram?: { WebApp?: { initData?: string } } };

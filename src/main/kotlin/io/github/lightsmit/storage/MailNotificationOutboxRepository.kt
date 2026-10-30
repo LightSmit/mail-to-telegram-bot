@@ -364,7 +364,7 @@ class MailNotificationOutboxRepository {
 
     /**
      * Переносит записи ящика на новый ключ и код (миграция на ключи с владельцем).
-     * Возвращает число перенесённых записей.
+     * Возвращает число перенесенных записей.
      */
     suspend fun rekeyAccount(
         oldAccountKey: String,

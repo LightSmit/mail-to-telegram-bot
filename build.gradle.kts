@@ -10,7 +10,7 @@ repositories {
     mavenCentral()
 }
 
-// Единая версия Ktor для клиента и сервера. Смешивание 2.x и 3.x даёт
+// Единая версия Ktor для клиента и сервера. Смешивание 2.x и 3.x дает
 // NoSuchMethodError в рантайме (ContentConverter.serializeNullable).
 val ktorVersion = "3.5.1"
 

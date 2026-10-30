@@ -23,7 +23,7 @@ data class MailboxHealth(
 /**
  * Следит, работает ли подключение к каждому ящику. Если ящик перестал
  * отвечать (сменили пароль, удалили пароль приложения, сервер недоступен),
- * один раз пишет владельцу и ещё раз - когда ящик снова заработает.
+ * один раз пишет владельцу и еще раз - когда ящик снова заработает.
  */
 class MailboxHealthMonitor(
     private val telegramClient: TelegramClient,
@@ -75,7 +75,7 @@ class MailboxHealthMonitor(
         val reason = if (isAuthFailure) {
             "почта отклонила пароль приложения (его могли удалить, или сменился пароль от почты)"
         } else {
-            "не удаётся подключиться к серверу ${account.host}"
+            "не удается подключиться к серверу ${account.host}"
         }
 
         val state = states.computeIfAbsent(account.id) { State() }
@@ -108,7 +108,7 @@ class MailboxHealthMonitor(
             send(
                 account,
                 buildString {
-                    appendLine("⚠️ Не удаётся проверить ящик «${account.name}» (${account.username})")
+                    appendLine("⚠️ Не удается проверить ящик «${account.name}» (${account.username})")
                     appendLine()
                     appendLine("Причина: $reason.")
                     appendLine()
@@ -119,7 +119,7 @@ class MailboxHealthMonitor(
         }
     }
 
-    /** Ящик удалён или добавлен заново: начинаем наблюдение с чистого листа. */
+    /** Ящик удален или добавлен заново: начинаем наблюдение с чистого листа. */
     fun forget(accountId: Long) {
         states.remove(accountId)
     }

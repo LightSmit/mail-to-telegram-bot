@@ -34,4 +34,4 @@ git pull && docker compose up -d --build
 docker run --rm -v mail-to-telegram-bot_mail-bot-data:/data -v "$PWD":/backup alpine \
   tar czf /backup/mail-bot-data-$(date +%F).tar.gz /data
 ```
-Ключ `ENCRYPTION_KEY` храни отдельно: без него сохранённые пароли ящиков не расшифровать.
+Ключ `ENCRYPTION_KEY` храни отдельно: без него сохраненные пароли ящиков не расшифровать.
