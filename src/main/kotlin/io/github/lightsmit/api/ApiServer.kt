@@ -83,7 +83,9 @@ class ApiServer(
             }
 
             install(ContentNegotiation) {
-                json(Json { ignoreUnknownKeys = true })
+                // encodeDefaults: пустые списки и false тоже попадают в ответ,
+                // иначе приложение получает объект без полей и падает
+                json(Json { ignoreUnknownKeys = true; encodeDefaults = true })
             }
 
             // Лог каждого запроса: метод, путь, статус, время

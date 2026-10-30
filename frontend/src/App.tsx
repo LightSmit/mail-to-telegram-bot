@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 import { initData, initDataSource, telegramScriptLoaded } from './telegram'
-import { EMPTY_FILTERS, FiltersPanel, type MailFilters } from './FiltersPanel'
+import { FiltersPanel, withDefaults, type MailFilters } from './FiltersPanel'
 import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
@@ -180,7 +180,7 @@ function App() {
     try {
       const response = await request(`/accounts/${account.id}/filters`, 'PUT', filters);
       if (response.ok) {
-        const saved: MailFilters = await response.json();
+        const saved = withDefaults(await response.json());
         setAccounts((current) => current.map((item) => (item.id === account.id ? { ...item, filters: saved } : item)));
         setNotice({ kind: 'ok', text: `Фильтры для ${account.email} сохранены.` });
         return true;
@@ -274,7 +274,7 @@ function App() {
                 </div>
                 {filtersOpenId === acc.id && (
                   <FiltersPanel
-                    initial={acc.filters ?? EMPTY_FILTERS}
+                    initial={withDefaults(acc.filters)}
                     onSave={(filters) => handleSaveFilters(acc, filters)}
                     onClose={() => setFiltersOpenId(null)}
                   />

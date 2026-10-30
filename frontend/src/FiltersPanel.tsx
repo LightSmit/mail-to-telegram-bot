@@ -8,13 +8,16 @@ export interface MailFilters {
   allowedSenders: string[];
 }
 
-export const EMPTY_FILTERS: MailFilters = {
-  paused: false,
-  skipBulk: false,
-  blockedSenders: [],
-  blockedSubjectWords: [],
-  allowedSenders: [],
-};
+/** Дополняет недостающие поля значениями по умолчанию (на случай неполного ответа сервера). */
+export function withDefaults(filters?: Partial<MailFilters> | null): MailFilters {
+  return {
+    paused: filters?.paused ?? false,
+    skipBulk: filters?.skipBulk ?? false,
+    blockedSenders: filters?.blockedSenders ?? [],
+    blockedSubjectWords: filters?.blockedSubjectWords ?? [],
+    allowedSenders: filters?.allowedSenders ?? [],
+  };
+}
 
 // По одному значению в строке; запятые и точки с запятой тоже разделяют
 function toList(text: string): string[] {
@@ -30,12 +33,13 @@ interface Props {
   onClose: () => void;
 }
 
-export function FiltersPanel({ initial, onSave, onClose }: Props) {
+export function FiltersPanel({ initial: rawInitial, onSave, onClose }: Props) {
+  const initial = withDefaults(rawInitial);
   const [paused, setPaused] = useState(initial.paused);
   const [skipBulk, setSkipBulk] = useState(initial.skipBulk);
   const [senders, setSenders] = useState(initial.blockedSenders.join('\n'));
   const [words, setWords] = useState(initial.blockedSubjectWords.join('\n'));
-  const [allowed, setAllowed] = useState((initial.allowedSenders ?? []).join('\n'));
+  const [allowed, setAllowed] = useState(initial.allowedSenders.join('\n'));
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
