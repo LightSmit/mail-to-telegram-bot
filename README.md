@@ -20,7 +20,7 @@ Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iClou
 - Update the app password without reconnecting the mailbox: filters and position are kept.
 - **Mail browser:** Inbox and Sent of every connected mailbox, server-side search by subject, sender and recipient, "unread" and "with attachments" filters, sorting, reading emails, marking as read, sending attachments to the chat. Emails are read from the mailbox on request and are not stored on the server.
 - Light and dark themes follow the Telegram theme.
-- Russian and English interface: the bot and the Mini App follow the user's Telegram language. Admin commands are in Russian.
+- Russian and English interface: the bot and the Mini App follow the user's Telegram language, or the language chosen with `/language` or the RU / EN switch in the app. Admin commands are in Russian.
 
 **Filters (per mailbox)**
 - Pause.
@@ -142,6 +142,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `/start` | everyone | Welcome and the "Open app" button |
 | `/help` | everyone | How it works and how to connect a mailbox |
 | `/mailboxes` | everyone | Your mailboxes and their status |
+| `/language` | everyone | Choose the bot language (Russian or English) |
 | `/delete_my_data` | everyone | Delete all your data from the bot (with confirmation) |
 | `/admin`, `/stats` | admins | Statistics |
 | `/broadcast text` | admins | Prepare a broadcast; `/broadcast_send` sends it, `/broadcast_cancel` cancels |

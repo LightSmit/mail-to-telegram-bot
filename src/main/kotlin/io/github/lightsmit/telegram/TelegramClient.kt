@@ -169,6 +169,8 @@ class TelegramClient(
         commands: List<Pair<String, String>>,
         // null - команды по умолчанию, "en" - для пользователей с английским Telegram и т.д.
         languageCode: String? = null,
+        // Команды только для одного чата (язык, выбранный пользователем вручную)
+        chatId: Long? = null,
     ) {
         val payload = buildJsonArray {
             commands.forEach { (command, description) ->
@@ -187,6 +189,7 @@ class TelegramClient(
                 formParameters = Parameters.build {
                     append("commands", payload.toString())
                     languageCode?.let { code -> append("language_code", code) }
+                    chatId?.let { id -> append("scope", """{"type":"chat","chat_id":$id}""") }
                 },
             )
         }
@@ -422,10 +425,10 @@ class TelegramClient(
                     messages += TelegramMessageUpdate(
                         updateId = updateId,
                         chatId = chatId,
-                        chatType = chat?.get("type")?.jsonPrimitive?.contentOrNull,
+                        chatType = chat["type"]?.jsonPrimitive?.contentOrNull,
                         fromUserId = fromUserId,
                         text = message["text"]?.jsonPrimitive?.contentOrNull,
-                        languageCode = from?.get("language_code")?.jsonPrimitive?.contentOrNull,
+                        languageCode = from["language_code"]?.jsonPrimitive?.contentOrNull,
                     )
                 }
                 continue
@@ -473,7 +476,7 @@ class TelegramClient(
                 chatId = chatId,
                 messageId = messageId,
                 data = data,
-                languageCode = from?.get("language_code")?.jsonPrimitive?.contentOrNull,
+                languageCode = from["language_code"]?.jsonPrimitive?.contentOrNull,
             )
         }
 

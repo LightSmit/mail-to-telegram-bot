@@ -160,6 +160,7 @@ fun main() = runBlocking {
                         "start" to texts.commandStart,
                         "mailboxes" to texts.commandMailboxes,
                         "help" to texts.commandHelp,
+                        "language" to texts.commandLanguage,
                     ),
                     languageCode = languageCode,
                 )
@@ -282,6 +283,8 @@ fun main() = runBlocking {
         botToken = telegramToken,
         accountService = accountService,
         onUserSeen = { userId, languageCode -> botUserRepository.touch(userId, languageCode) },
+        resolveLanguage = { userId, languageCode -> botUserRepository.resolve(userId, languageCode) },
+        setLanguage = { userId, lang -> botUserRepository.setLanguage(userId, lang) },
         notificationSettings = NotificationSettingsService(
             repository = userSettingsRepository,
             outboxRepository = mailOutboxRepository,

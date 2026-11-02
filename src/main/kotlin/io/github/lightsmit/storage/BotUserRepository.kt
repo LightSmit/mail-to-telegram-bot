@@ -8,8 +8,11 @@ import java.util.concurrent.ConcurrentHashMap
 /** Все, кто хоть раз писал боту или открывал приложение: для статистики, рассылок и языка интерфейса. */
 class BotUserRepository {
 
+    /** Язык пользователя и выбран ли он вручную (тогда язык Telegram его не меняет). */
+    private data class LanguageChoice(val lang: Lang, val manual: Boolean)
+
     // Язык нужен при каждом уведомлении о письме: держим в памяти
-    private val languages = ConcurrentHashMap<Long, Lang>()
+    private val languages = ConcurrentHashMap<Long, LanguageChoice>()
 
     init {
         DatabaseManager.dataSource.connection.use { connection ->
@@ -26,17 +29,20 @@ class BotUserRepository {
                 )
             }
 
-            // Язык Telegram пользователя (добавлен позже)
-            val hasLanguage = connection.createStatement().use { statement ->
+            // Язык интерфейса (добавлен позже): из Telegram или выбранный вручную (/language)
+            val columns = connection.createStatement().use { statement ->
                 statement.executeQuery("PRAGMA table_info(bot_users)").use { rs ->
-                    var found = false
-                    while (rs.next()) if (rs.getString("name") == "language") found = true
-                    found
+                    buildSet { while (rs.next()) add(rs.getString("name")) }
                 }
             }
-            if (!hasLanguage) {
+            if ("language" !in columns) {
                 connection.createStatement().use { statement ->
                     statement.executeUpdate("ALTER TABLE bot_users ADD COLUMN language TEXT")
+                }
+            }
+            if ("language_manual" !in columns) {
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate("ALTER TABLE bot_users ADD COLUMN language_manual INTEGER NOT NULL DEFAULT 0")
                 }
             }
         }
@@ -53,7 +59,10 @@ class BotUserRepository {
                     ON CONFLICT(user_id) DO UPDATE SET
                         last_seen_at = excluded.last_seen_at,
                         blocked = 0,
-                        language = COALESCE(excluded.language, bot_users.language)
+                        language = CASE
+                            WHEN bot_users.language_manual = 1 THEN bot_users.language
+                            ELSE COALESCE(excluded.language, bot_users.language)
+                        END
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, userId)
@@ -64,23 +73,67 @@ class BotUserRepository {
                 }
             }
         }
-        language?.let { value -> languages[userId] = value }
+        if (language != null) {
+            // Пока выбор не загружен из базы, не угадываем: возможно, язык выбран вручную
+            languages.computeIfPresent(userId) { _, current ->
+                if (current.manual) current else LanguageChoice(language, manual = false)
+            }
+        }
     }
 
-    /** Язык интерфейса пользователя: последний известный из Telegram, по умолчанию русский. */
-    suspend fun language(userId: Long): Lang {
-        languages[userId]?.let { language -> return language }
-        val stored = withContext(DatabaseManager.dispatcher) {
+    /** Язык, выбранный пользователем вручную: дальше язык Telegram его не меняет. */
+    suspend fun setLanguage(userId: Long, lang: Lang, now: Instant = Instant.now()) {
+        withContext(DatabaseManager.dispatcher) {
             DatabaseManager.dataSource.connection.use { connection ->
-                connection.prepareStatement("SELECT language FROM bot_users WHERE user_id = ?").use { statement ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO bot_users (user_id, first_seen_at, last_seen_at, language, language_manual) VALUES (?, ?, ?, ?, 1)
+                    ON CONFLICT(user_id) DO UPDATE SET language = excluded.language, language_manual = 1
+                    """.trimIndent(),
+                ).use { statement ->
                     statement.setLong(1, userId)
-                    statement.executeQuery().use { rs -> if (rs.next()) rs.getString(1) else null }
+                    statement.setLong(2, now.toEpochMilli())
+                    statement.setLong(3, now.toEpochMilli())
+                    statement.setString(4, lang.name)
+                    statement.executeUpdate()
                 }
             }
         }
-        val language = stored?.let { name -> runCatching { Lang.valueOf(name) }.getOrNull() } ?: Lang.RU
-        languages[userId] = language
-        return language
+        languages[userId] = LanguageChoice(lang, manual = true)
+    }
+
+    /** Язык интерфейса пользователя: выбранный вручную, иначе последний известный из Telegram, по умолчанию русский. */
+    suspend fun language(userId: Long): Lang = choice(userId).lang
+
+    /**
+     * Язык для ответа на конкретное сообщение: ручной выбор важнее всего,
+     * затем язык из этого сообщения Telegram, затем сохраненный.
+     */
+    suspend fun resolve(userId: Long, languageCode: String?): Lang {
+        val stored = choice(userId)
+        if (stored.manual) return stored.lang
+        return languageCode?.takeIf(String::isNotBlank)?.let(Lang::fromCode) ?: stored.lang
+    }
+
+    private suspend fun choice(userId: Long): LanguageChoice {
+        languages[userId]?.let { cached -> return cached }
+        val loaded = withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement("SELECT language, language_manual FROM bot_users WHERE user_id = ?").use { statement ->
+                    statement.setLong(1, userId)
+                    statement.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            val lang = rs.getString(1)?.let { name -> runCatching { Lang.valueOf(name) }.getOrNull() } ?: Lang.RU
+                            LanguageChoice(lang, manual = rs.getInt(2) == 1)
+                        } else {
+                            LanguageChoice(Lang.RU, manual = false)
+                        }
+                    }
+                }
+            }
+        }
+        languages[userId] = loaded
+        return loaded
     }
 
     /** Заносит владельцев ящиков, которых еще нет в таблице (они пришли до учета пользователей). */

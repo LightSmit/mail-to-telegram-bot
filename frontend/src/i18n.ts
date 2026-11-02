@@ -17,9 +17,29 @@ function telegramLanguageCode(): string | undefined {
   }
 }
 
+const STORAGE_KEY = 'ui-lang';
+
+// Сначала язык, выбранный вручную (RU / EN в приложении или /language в боте), потом язык Telegram
 function detectLang(): Lang {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved === 'ru' || saved === 'en') return saved;
+  } catch {
+    // хранилище недоступно
+  }
   const code = (telegramLanguageCode() ?? navigator.language ?? 'ru').toLowerCase().split('-')[0];
   return ['ru', 'uk', 'be', 'kk'].includes(code) ? 'ru' : 'en';
+}
+
+/** Запоминает язык на этом устройстве; применяется после перезагрузки приложения. */
+export function rememberLang(value: Lang): boolean {
+  try {
+    localStorage.setItem(STORAGE_KEY, value);
+    return localStorage.getItem(STORAGE_KEY) === value;
+  } catch {
+    // хранилище недоступно: перезагрузка не поможет, остаемся на текущем языке
+    return false;
+  }
 }
 
 export const lang: Lang = detectLang();
@@ -32,6 +52,7 @@ const ru = {
   reopenFromChat: (prefix: string) => `${prefix}: закройте приложение и откройте его из чата с ботом.`,
   openFromTelegram: 'Откройте приложение из чата с ботом в Telegram: без этого вход невозможен.',
   close: 'Закрыть',
+  languageLabel: 'Язык',
   // Шапка и список ящиков
   title: 'Почта в Telegram',
   lede: 'Новые письма из ваших ящиков приходят в чат с ботом.',
@@ -181,6 +202,7 @@ const en: Dictionary = {
   reopenFromChat: (prefix: string) => `${prefix}: close the app and open it again from the chat with the bot.`,
   openFromTelegram: 'Open the app from the chat with the bot in Telegram: signing in is not possible otherwise.',
   close: 'Close',
+  languageLabel: 'Language',
   title: 'Email in Telegram',
   lede: 'New emails from your mailboxes arrive in the chat with the bot.',
   myMailboxes: 'My mailboxes',

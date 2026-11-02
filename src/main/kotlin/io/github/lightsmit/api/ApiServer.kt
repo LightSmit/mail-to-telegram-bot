@@ -146,6 +146,11 @@ private fun MailMessageView.toDto() = MailMessageDto(
 )
 
 @Serializable
+data class LanguageDto(
+    val language: String,
+)
+
+@Serializable
 data class UpdatePasswordRequestDto(
     val appPassword: String,
 )
@@ -165,6 +170,9 @@ class ApiServer(
     private val accountService: MailAccountService,
     // Вызывается для каждого авторизованного запроса: учет пользователей
     private val onUserSeen: suspend (Long, String?) -> Unit = { _, _ -> },
+    // Язык интерфейса: выбранный вручную или из Telegram
+    private val resolveLanguage: suspend (Long, String?) -> Lang = { _, code -> Lang.fromCode(code) },
+    private val setLanguage: suspend (Long, Lang) -> Unit = { _, _ -> },
     // Тихие часы и сводка; null - раздел в приложении не работает
     private val notificationSettings: NotificationSettingsService? = null,
     // Просмотр писем ящика в приложении
@@ -246,8 +254,11 @@ class ApiServer(
 
                         // Сохраняем user_id в контекст запроса
                         call.attributes.put(UserIdKey, userId)
-                        call.attributes.put(LangKey, Lang.fromCode(user.second))
                         runCatching { onUserSeen(userId, user.second) }
+                        call.attributes.put(
+                            LangKey,
+                            runCatching { resolveLanguage(userId, user.second) }.getOrElse { Lang.fromCode(user.second) },
+                        )
                     }
 
                     // Ящики текущего пользователя
@@ -450,6 +461,26 @@ class ApiServer(
 
                         val result = browser.sendAttachments(call.attributes[UserIdKey], accountId, uidValidity, uid)
                         if (result is BrowseResult.Ok) call.respond(mapOf("status" to "sending")) else respondBrowseError(call, result)
+                    }
+
+                    // Язык интерфейса: какой сейчас и смена вручную (кнопка RU / EN в приложении)
+                    get("/language") {
+                        call.respond(LanguageDto(call.attributes[LangKey].name.lowercase()))
+                    }
+
+                    put("/language") {
+                        val request = call.receive<LanguageDto>()
+                        val lang = when (request.language.lowercase()) {
+                            "ru" -> Lang.RU
+                            "en" -> Lang.EN
+                            else -> null
+                        }
+                        if (lang == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            return@put
+                        }
+                        setLanguage(call.attributes[UserIdKey], lang)
+                        call.respond(LanguageDto(lang.name.lowercase()))
                     }
 
                     // Удалить все свои данные: ящики, настройки, историю

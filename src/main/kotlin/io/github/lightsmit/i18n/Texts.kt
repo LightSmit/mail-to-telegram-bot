@@ -30,6 +30,10 @@ interface Texts {
     val commandStart: String
     val commandMailboxes: String
     val commandHelp: String
+    val commandLanguage: String
+
+    // Выбор языка
+    val languageSet: String
 
     // /mailboxes
     val mailboxesTitle: String
@@ -150,6 +154,7 @@ object RuTexts : Texts {
 
         /help - подробно о том, как все работает
         /mailboxes - мои ящики и их состояние
+        /language - язык / language
     """.trimIndent()
 
     override fun help(replyEnabled: Boolean) = buildString {
@@ -185,6 +190,9 @@ object RuTexts : Texts {
     override val commandStart = "Начать и открыть приложение"
     override val commandMailboxes = "Мои ящики и их состояние"
     override val commandHelp = "Как подключить почту"
+    override val commandLanguage = "Язык / Language"
+
+    override val languageSet = "✅ Язык бота: русский. Сменить - /language"
 
     override val mailboxesTitle = "📬 Ваши ящики"
     override val mailboxesEmpty = "У вас пока нет подключенных ящиков. Подключите первый в приложении, инструкция там же."
@@ -329,6 +337,7 @@ object EnTexts : Texts {
 
         /help - how everything works
         /mailboxes - my mailboxes and their status
+        /language - language / язык
     """.trimIndent()
 
     override fun help(replyEnabled: Boolean) = buildString {
@@ -364,6 +373,9 @@ object EnTexts : Texts {
     override val commandStart = "Start and open the app"
     override val commandMailboxes = "My mailboxes and their status"
     override val commandHelp = "How to connect email"
+    override val commandLanguage = "Language / Язык"
+
+    override val languageSet = "✅ Bot language: English. Change - /language"
 
     override val mailboxesTitle = "📬 Your mailboxes"
     override val mailboxesEmpty = "You have no connected mailboxes yet. Connect the first one in the app, instructions are there."
@@ -491,3 +503,6 @@ object EnTexts : Texts {
 
 /** Причина, по которой вложение не отправлено: файл больше лимита. */
 const val SKIP_TOO_LARGE = "too_large"
+
+/** Вопрос "какой язык" одинаков для всех: человек мог не понять текущий язык бота. */
+const val LANGUAGE_PROMPT = "🌐 Выберите язык бота / Choose the bot language"

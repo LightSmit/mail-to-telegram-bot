@@ -2,7 +2,9 @@ package io.github.lightsmit.service
 
 import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.i18n.Lang
+import io.github.lightsmit.i18n.LANGUAGE_PROMPT
 import io.github.lightsmit.i18n.Texts
+import io.github.lightsmit.telegram.TelegramInlineButton
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.telegram.MailViewAction
@@ -98,6 +100,11 @@ class TelegramUpdatePoller(
                 text = t.accessDenied,
                 showAlert = true,
             )
+            return
+        }
+
+        update.data?.takeIf { data -> data.startsWith(LANGUAGE_CALLBACK_PREFIX) }?.let { data ->
+            chooseLanguage(update, data.removePrefix(LANGUAGE_CALLBACK_PREFIX))
             return
         }
 
@@ -299,6 +306,11 @@ class TelegramUpdatePoller(
             return
         }
 
+        if (command == "/language") {
+            askLanguage(message.chatId)
+            return
+        }
+
         val text = when (command) {
             "/start" -> t.start()
             "/help" -> t.help(replyEnabled = replyService != null)
@@ -440,11 +452,72 @@ class TelegramUpdatePoller(
     }
 
     // Язык: из текущего сообщения Telegram, иначе последний известный
+    // Язык ответа: выбранный вручную (/language), иначе из этого сообщения Telegram, иначе сохраненный
     private suspend fun textsFor(userId: Long, languageCode: String?): Texts {
-        val lang = languageCode?.takeIf(String::isNotBlank)?.let(Lang::fromCode)
-            ?: runCatching { botUsers?.language(userId) }.getOrNull()
-            ?: Lang.RU
-        return lang.texts
+        val users = botUsers ?: return Lang.fromCode(languageCode).texts
+        return runCatching { users.resolve(userId, languageCode) }.getOrElse { Lang.fromCode(languageCode) }.texts
+    }
+
+    /** Кнопки выбора языка; вопрос на двух языках, чтобы его понял любой. */
+    private suspend fun askLanguage(chatId: Long) {
+        try {
+            controlClient.sendMessageWithButtons(
+                chatId = chatId,
+                text = LANGUAGE_PROMPT,
+                buttons = listOf(
+                    TelegramInlineButton(text = "🇷🇺 Русский", callbackData = LANGUAGE_CALLBACK_PREFIX + "ru"),
+                    TelegramInlineButton(text = "🇬🇧 English", callbackData = LANGUAGE_CALLBACK_PREFIX + "en"),
+                ),
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to send language choice to {}: {}", chatId, exception.javaClass.simpleName)
+        }
+    }
+
+    // Нажали "Русский" или "English": запоминаем выбор, переводим меню команд в этом чате
+    private suspend fun chooseLanguage(update: TelegramCallbackQueryUpdate, code: String) {
+        val lang = if (code == "en") Lang.EN else Lang.RU
+        val users = botUsers
+        if (users == null) {
+            answerSafely(update.callbackQueryId, null, showAlert = false)
+            return
+        }
+
+        users.setLanguage(update.fromUserId, lang)
+        val texts = lang.texts
+        answerSafely(update.callbackQueryId, texts.languageSet, showAlert = false)
+
+        runCatching {
+            controlClient.setMyCommands(
+                commands = listOf(
+                    "start" to texts.commandStart,
+                    "mailboxes" to texts.commandMailboxes,
+                    "help" to texts.commandHelp,
+                    "language" to texts.commandLanguage,
+                ),
+                chatId = update.fromUserId,
+            )
+        }
+
+        val chatId = update.chatId ?: update.fromUserId
+        try {
+            if (miniAppUrl != null) {
+                controlClient.sendMessageWithWebAppButton(
+                    chatId = chatId,
+                    text = texts.languageSet,
+                    buttonText = texts.openApp,
+                    webAppUrl = miniAppUrl,
+                )
+            } else {
+                controlClient.sendMessage(chatId = chatId, text = texts.languageSet)
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to confirm language for {}: {}", update.fromUserId, exception.javaClass.simpleName)
+        }
     }
 
     private suspend fun touchUser(userId: Long, languageCode: String?) {
@@ -535,6 +608,7 @@ class TelegramUpdatePoller(
     }
 
     private companion object {
+        const val LANGUAGE_CALLBACK_PREFIX = "lang:"
         const val LONG_POLL_TIMEOUT_SECONDS = 25
         const val POLL_RETRY_DELAY_MILLIS = 1_000L
         const val CALLBACK_ANSWER_TIMEOUT_MILLIS = 5_000L

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 import { initData } from './telegram'
-import { t } from './i18n'
+import { lang, rememberLang, t, type Lang } from './i18n'
+import { LanguageSwitch } from './LanguageSwitch'
 import { FiltersPanel, withDefaults, type MailFilters } from './FiltersPanel'
 import { PasswordPanel } from './PasswordPanel'
 import { NotificationsSection, type NotificationSettings } from './NotificationsSection'
@@ -251,6 +252,36 @@ function App() {
     return false;
   };
 
+  const saveLanguage = async (value: Lang): Promise<boolean> => {
+    try {
+      const response = await request('/language', 'PUT', { language: value });
+      if (response.ok) return true;
+      setNotice({ kind: 'error', text: await errorText(response, t.noServer) });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return false;
+  };
+
+  // Язык мог быть выбран в боте (/language) или на другом устройстве: сверяемся с сервером один раз
+  useEffect(() => {
+    if (!initData) return;
+    (async () => {
+      try {
+        const response = await request('/language');
+        if (!response.ok) return;
+        const { language } = await response.json();
+        // Перезагружаемся, только если язык удалось запомнить: иначе была бы бесконечная перезагрузка
+        if ((language === 'ru' || language === 'en') && language !== lang && rememberLang(language)) {
+          window.location.reload();
+        }
+      } catch {
+        // без связи остаемся на текущем языке
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleDelete = async (account: Account) => {
     // Удаление в два нажатия: первое спрашивает подтверждение
     if (confirmDeleteId !== account.id) {
@@ -288,7 +319,10 @@ function App() {
     <main className="app">
       <header className="masthead">
         <div className="airmail-band" aria-hidden="true" />
-        <h1>{t.title}</h1>
+        <div className="title-row">
+          <h1>{t.title}</h1>
+          <LanguageSwitch onChange={saveLanguage} />
+        </div>
         <p className="lede">{t.lede}</p>
       </header>
 

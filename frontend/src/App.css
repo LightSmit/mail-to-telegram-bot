@@ -731,3 +731,37 @@ textarea:focus {
 .danger-hint {
   color: var(--danger);
 }
+
+/* Заголовок и переключатель языка в одной строке */
+.title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lang-switch {
+  display: flex;
+  flex-shrink: 0;
+  margin-top: 4px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.lang-switch button {
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--hint);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lang-switch button[aria-pressed='true'] {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
