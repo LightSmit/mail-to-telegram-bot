@@ -213,6 +213,12 @@ export function MailboxView({ account, request, onClose }: Props) {
         </select>
       </div>
 
+      {query && (
+        <p className="field-hint search-hint">
+          Ищу по любой части темы, имени или адреса в последних 2000 письмах папки, в более старых - по целым словам.
+        </p>
+      )}
+
       {error && <div className="notice notice-error">{error}</div>}
 
       {!error && (

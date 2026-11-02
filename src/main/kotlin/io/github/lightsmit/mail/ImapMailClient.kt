@@ -12,7 +12,6 @@ import jakarta.mail.search.FlagTerm
 import jakarta.mail.search.FromStringTerm
 import jakarta.mail.search.OrTerm
 import jakarta.mail.search.RecipientStringTerm
-import jakarta.mail.search.SearchTerm
 import jakarta.mail.search.SubjectTerm
 import jakarta.mail.internet.InternetAddress
 import kotlinx.coroutines.Dispatchers
@@ -308,7 +307,8 @@ class ImapMailClient(
 
     /**
      * Страница писем для просмотра в приложении, новые сверху.
-     * search - поиск по теме, отправителю и получателю (на стороне почтового сервера).
+     * search - поиск по части темы, отправителя или получателя: бот сам просматривает
+     * последние SEARCH_SCAN_LIMIT писем, а в более старых ищет почтовый сервер (целыми словами).
      */
     suspend fun listMessages(
         account: MailAccountConfig,
@@ -322,26 +322,13 @@ class ImapMailClient(
         require(limit in 1..100) { "Limit must be between 1 and 100" }
 
         withFolder(account, CONTENT_TIMEOUT_MILLIS, Folder.READ_ONLY, role) { folder, uidFolder ->
-            val terms = buildList<SearchTerm> {
-                search?.trim()?.takeIf(String::isNotEmpty)?.let { query ->
-                    add(
-                        OrTerm(
-                            arrayOf(
-                                SubjectTerm(query),
-                                FromStringTerm(query),
-                                RecipientStringTerm(Message.RecipientType.TO, query),
-                            ),
-                        ),
-                    )
-                }
-                if (unreadOnly) add(FlagTerm(Flags(Flags.Flag.SEEN), false))
-            }
+            val query = search?.trim()?.takeIf(String::isNotEmpty)
 
-            // Без условий берем по номерам с конца папки, с условиями - через SEARCH на сервере
-            val found: Array<Message>? = when (terms.size) {
-                0 -> null
-                1 -> folder.search(terms.single())
-                else -> folder.search(AndTerm(terms.toTypedArray()))
+            // Без условий берем по номерам с конца папки
+            val found: List<Message>? = when {
+                query != null -> searchMessages(folder, query, unreadOnly)
+                unreadOnly -> folder.search(FlagTerm(Flags(Flags.Flag.SEEN), false)).toList()
+                else -> null
             }
 
             val total = found?.size ?: folder.messageCount
@@ -350,7 +337,7 @@ class ImapMailClient(
 
             val messages: Array<Message> = when {
                 end <= 0 -> emptyArray()
-                found != null -> found.sortedBy { message -> message.messageNumber }.subList(start, end).toTypedArray()
+                found != null -> found.subList(start, end).toTypedArray()
                 else -> folder.getMessages(start + 1, end)
             }
 
@@ -372,6 +359,62 @@ class ImapMailClient(
             )
         }
     }
+
+    // Серверный IMAP SEARCH у Gmail и Mail.ru ищет только целые слова, а Gmail плохо ищет
+    // по-русски. Поэтому свежие письма проверяем сами по любой части текста.
+    private fun searchMessages(folder: Folder, query: String, unreadOnly: Boolean): List<Message> {
+        val needle = normalizeForSearch(query)
+        val count = folder.messageCount
+        val found = LinkedHashMap<Int, Message>()
+
+        if (count > 0) {
+            val recent = folder.getMessages(maxOf(1, count - SEARCH_SCAN_LIMIT + 1), count)
+            folder.fetch(
+                recent,
+                FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(FetchProfile.Item.FLAGS)
+                },
+            )
+            recent
+                .filter { message -> (!unreadOnly || !isSeen(message)) && matchesSearch(message, needle) }
+                .forEach { message -> found[message.messageNumber] = message }
+        }
+
+        // Письма старше окна: только то, что найдет сам сервер. Ошибка сервера поиск не ломает
+        if (count > SEARCH_SCAN_LIMIT) {
+            val text = OrTerm(
+                arrayOf(
+                    SubjectTerm(query),
+                    FromStringTerm(query),
+                    RecipientStringTerm(Message.RecipientType.TO, query),
+                ),
+            )
+            val term = if (unreadOnly) AndTerm(arrayOf(text, FlagTerm(Flags(Flags.Flag.SEEN), false))) else text
+            runCatching { folder.search(term) }.getOrNull()
+                ?.forEach { message -> found.putIfAbsent(message.messageNumber, message) }
+        }
+
+        return found.values.sortedBy { message -> message.messageNumber }
+    }
+
+    private fun matchesSearch(message: Message, needle: String): Boolean {
+        fun addresses(values: Array<out jakarta.mail.Address>?): List<String> =
+            values.orEmpty().flatMap { address ->
+                val internet = address as? InternetAddress
+                listOfNotNull(internet?.personal, internet?.address ?: address.toString())
+            }
+
+        val haystack = buildList {
+            runCatching { message.subject }.getOrNull()?.let(::add)
+            runCatching { addresses(message.from) }.getOrNull()?.let(::addAll)
+            runCatching { addresses(message.getRecipients(Message.RecipientType.TO)) }.getOrNull()?.let(::addAll)
+        }
+        return haystack.any { value -> normalizeForSearch(value).contains(needle) }
+    }
+
+    private fun isSeen(message: Message): Boolean =
+        runCatching { message.isSet(Flags.Flag.SEEN) }.getOrDefault(true)
 
     /** Письмо целиком для просмотра. Флаг "прочитано" не ставится (ящик открыт только на чтение). */
     suspend fun readMessage(
@@ -494,6 +537,12 @@ class ImapMailClient(
         val WHITESPACE = Regex("\\s+")
         const val CONTENT_TIMEOUT_MILLIS = 180_000
         const val MAX_VIEW_BODY_CHARS = 100_000
+        // Сколько последних писем бот просматривает сам при поиске
+        const val SEARCH_SCAN_LIMIT = 2000
         val SENT_FOLDER_NAMES = setOf("sent", "sent items", "sent messages", "sent mail", "отправленные")
     }
 }
+
+/** Для поиска: без учета регистра, буква \u0451 приравнена к "е", лишние пробелы схлопнуты. */
+internal fun normalizeForSearch(value: String): String =
+    value.lowercase().replace('\u0451', '\u0435').replace(Regex("\\s+"), " ").trim()

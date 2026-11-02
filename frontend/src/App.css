@@ -716,3 +716,8 @@ textarea:focus {
   font-size: 15px;
   line-height: 1.5;
 }
+
+.search-hint {
+  display: block;
+  margin: -4px 0 10px;
+}
