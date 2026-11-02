@@ -4,6 +4,10 @@ import io.github.lightsmit.config.MailFilters
 import io.github.lightsmit.service.AddMailAccountResult
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.service.NewMailAccount
+import io.github.lightsmit.service.NotificationSchedule
+import io.github.lightsmit.service.NotificationSettings
+import io.github.lightsmit.service.NotificationSettingsService
+import io.github.lightsmit.service.UpdatePasswordResult
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -51,6 +55,28 @@ private fun MailFilters.toDto() = FiltersDto(paused, skipBulk, blockedSenders, b
 private fun FiltersDto.toModel() = MailFilters(paused, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders)
 
 @Serializable
+data class NotificationSettingsDto(
+    val timezone: String = "Europe/Moscow",
+    val quietEnabled: Boolean = false,
+    val quietStart: String = "23:00",
+    val quietEnd: String = "08:00",
+    val digestHours: Int = 0,
+)
+
+private fun NotificationSettings.toDto() = NotificationSettingsDto(
+    timezone = timezone,
+    quietEnabled = quietEnabled,
+    quietStart = NotificationSchedule.formatMinutes(quietStartMinutes),
+    quietEnd = NotificationSchedule.formatMinutes(quietEndMinutes),
+    digestHours = digestHours,
+)
+
+@Serializable
+data class UpdatePasswordRequestDto(
+    val appPassword: String,
+)
+
+@Serializable
 data class AddAccountRequestDto(
     val name: String = "",
     val host: String,
@@ -65,6 +91,8 @@ class ApiServer(
     private val accountService: MailAccountService,
     // Вызывается для каждого авторизованного запроса: учет пользователей
     private val onUserSeen: suspend (Long) -> Unit = {},
+    // Тихие часы и сводка; null - раздел в приложении не работает
+    private val notificationSettings: NotificationSettingsService? = null,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -210,6 +238,65 @@ class ApiServer(
                         } else {
                             call.respond(HttpStatusCode.OK, updated.filters.toDto())
                         }
+                    }
+
+                    // Новый пароль приложения: проверяем вход и перезапускаем слежение
+                    put("/accounts/{id}/password") {
+                        val ownerId = call.attributes[UserIdKey]
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+
+                        if (accountId == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный ящик"))
+                            return@put
+                        }
+
+                        val request = call.receive<UpdatePasswordRequestDto>()
+                        when (val result = accountService.updatePassword(ownerId, accountId, request.appPassword)) {
+                            is UpdatePasswordResult.Updated ->
+                                call.respond(HttpStatusCode.OK, mapOf("status" to "updated"))
+                            is UpdatePasswordResult.Rejected ->
+                                call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
+                            UpdatePasswordResult.NotFound ->
+                                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Ящик не найден"))
+                        }
+                    }
+
+                    // Как присылать письма: тихие часы и сводка
+                    get("/settings") {
+                        val service = notificationSettings
+                        if (service == null) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Настройки недоступны"))
+                            return@get
+                        }
+                        call.respond(service.get(call.attributes[UserIdKey]).toDto())
+                    }
+
+                    put("/settings") {
+                        val service = notificationSettings
+                        if (service == null) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Настройки недоступны"))
+                            return@put
+                        }
+
+                        val request = call.receive<NotificationSettingsDto>()
+                        val quietStart = NotificationSchedule.parseMinutes(request.quietStart)
+                        val quietEnd = NotificationSchedule.parseMinutes(request.quietEnd)
+                        if (quietStart == null || quietEnd == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Время укажите в виде ЧЧ:ММ"))
+                            return@put
+                        }
+
+                        val saved = service.save(
+                            userId = call.attributes[UserIdKey],
+                            requested = NotificationSettings(
+                                timezone = request.timezone,
+                                quietEnabled = request.quietEnabled,
+                                quietStartMinutes = quietStart,
+                                quietEndMinutes = quietEnd,
+                                digestHours = request.digestHours,
+                            ),
+                        )
+                        call.respond(saved.toDto())
                     }
 
                     // Удалить свой ящик

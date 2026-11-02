@@ -434,3 +434,36 @@ textarea:focus {
   font-weight: 500;
   cursor: pointer;
 }
+
+/* Настройки ящика: фильтры и пароль одним блоком под строкой ящика */
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.settings .filters {
+  margin-bottom: 0;
+}
+
+/* У ящика с ошибкой входа блок пароля идет первым */
+.settings-broken .password-panel {
+  order: -1;
+}
+
+.password-panel.broken {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+/* Уведомления: отдельная карточка с тем же оформлением, что и фильтры */
+.notify {
+  margin: 0;
+  background: var(--surface);
+}
+
+.time-range {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}

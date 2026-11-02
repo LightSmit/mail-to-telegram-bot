@@ -48,6 +48,9 @@ class MailForwardingService(
     private val contentLoader: EmailContentLoader,
     // Кнопка "Ответить": нужен открытый исходящий SMTP (порты 465/587) на сервере
     private val replyEnabled: Boolean = false,
+    // Тихие часы и сводка: настройки владельца ящика
+    private val notificationSettings: suspend (Long) -> NotificationSettings = { NotificationSettings() },
+    private val clock: () -> Instant = Instant::now,
 ) : AutoCloseable {
 
     private val logger =
@@ -62,6 +65,10 @@ class MailForwardingService(
         ConcurrentHashMap<String, Mutex>()
 
     private val textViewMessageIds = ConcurrentHashMap<String, ActiveView>()
+
+    // Когда пользователю последний раз пришла карточка письма: в режиме сводки
+    // звук только у первой карточки пачки
+    private val lastCardSentAt = ConcurrentHashMap<Long, Instant>()
 
     private val dateFormatter = DateTimeFormatter
         .ofPattern("dd.MM.yyyy, HH:mm")
@@ -150,6 +157,7 @@ class MailForwardingService(
                 uidValidity = item.uidValidity,
                 uid = item.uid,
             ),
+            silent = shouldSendSilently(account.ownerChatId),
         )
     }
 
@@ -178,7 +186,20 @@ class MailForwardingService(
                 uidValidity = item.uidValidity,
                 uid = item.uid,
             ),
+            silent = shouldSendSilently(account.ownerChatId),
         )
+    }
+
+    // Без звука: в тихие часы, а в режиме сводки - все карточки пачки, кроме первой
+    private suspend fun shouldSendSilently(ownerChatId: Long): Boolean {
+        val now = clock()
+        val settings = runCatching { notificationSettings(ownerChatId) }.getOrDefault(NotificationSettings())
+        val previous = lastCardSentAt.put(ownerChatId, now)
+
+        if (NotificationSchedule.isQuiet(settings, now)) return true
+        return settings.digestHours > 0 &&
+            previous != null &&
+            Duration.between(previous, now) < DIGEST_BATCH_WINDOW
     }
 
     private suspend fun enrichSummaryCard(
@@ -745,7 +766,12 @@ class MailForwardingService(
                 continue
             }
 
+            val deliverAt = runCatching { notificationSettings(account.ownerChatId) }
+                .getOrNull()
+                ?.let { settings -> NotificationSchedule.nextDigestAt(settings, clock()) }
+
             val inserted = outboxRepository.enqueue(
+                deliverAt = deliverAt ?: clock(),
                 accountKey = accountKey,
                 accountCode = accountCode,
                 uidValidity = batch.uidValidity,
@@ -1277,5 +1303,10 @@ class MailForwardingService(
 
     override fun close() {
         scope.cancel()
+    }
+
+    private companion object {
+        // Карточки сводки уходят подряд: звук только у первой
+        val DIGEST_BATCH_WINDOW: Duration = Duration.ofMinutes(2)
     }
 }

@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import './App.css'
 import { initData, initDataSource, telegramScriptLoaded } from './telegram'
 import { FiltersPanel, withDefaults, type MailFilters } from './FiltersPanel'
+import { PasswordPanel } from './PasswordPanel'
+import { NotificationsSection, type NotificationSettings } from './NotificationsSection'
 import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
@@ -192,6 +194,45 @@ function App() {
     return false;
   };
 
+  const handleUpdatePassword = async (account: Account, newPassword: string): Promise<boolean> => {
+    setNotice({ kind: 'info', text: `Проверяем вход в ${account.email} с новым паролем…` });
+    try {
+      const response = await request(`/accounts/${account.id}/password`, 'PUT', { appPassword: newPassword }, ADD_ACCOUNT_TIMEOUT_MS);
+      if (response.ok) {
+        setNotice({ kind: 'ok', text: `Пароль для ${account.email} обновлен, ящик снова подключается.` });
+        await fetchAccounts(true);
+        return true;
+      }
+      setNotice({ kind: 'error', text: await errorText(response, 'Не удалось обновить пароль') });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return false;
+  };
+
+  const loadNotificationSettings = async (): Promise<NotificationSettings | null> => {
+    try {
+      const response = await request('/settings');
+      return response.ok ? await response.json() : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const saveNotificationSettings = async (settings: NotificationSettings): Promise<NotificationSettings | null> => {
+    try {
+      const response = await request('/settings', 'PUT', settings);
+      if (response.ok) {
+        setNotice({ kind: 'ok', text: 'Настройки уведомлений сохранены.' });
+        return await response.json();
+      }
+      setNotice({ kind: 'error', text: await errorText(response, 'Не удалось сохранить настройки') });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return null;
+  };
+
   const handleDelete = async (account: Account) => {
     // Удаление в два нажатия: первое спрашивает подтверждение
     if (confirmDeleteId !== account.id) {
@@ -259,7 +300,7 @@ function App() {
                       aria-expanded={filtersOpenId === acc.id}
                       onClick={() => setFiltersOpenId((current) => (current === acc.id ? null : acc.id))}
                     >
-                      Фильтры
+                      {acc.status === 'ERROR' ? 'Исправить' : 'Настройки'}
                     </button>
                     <button
                       type="button"
@@ -273,17 +314,28 @@ function App() {
                   </div>
                 </div>
                 {filtersOpenId === acc.id && (
-                  <FiltersPanel
-                    initial={withDefaults(acc.filters)}
-                    onSave={(filters) => handleSaveFilters(acc, filters)}
-                    onClose={() => setFiltersOpenId(null)}
-                  />
+                  <div className={acc.status === 'ERROR' ? 'settings settings-broken' : 'settings'}>
+                    <FiltersPanel
+                      initial={withDefaults(acc.filters)}
+                      onSave={(filters) => handleSaveFilters(acc, filters)}
+                      onClose={() => setFiltersOpenId(null)}
+                    />
+                    <PasswordPanel
+                      host={acc.host}
+                      broken={acc.status === 'ERROR'}
+                      onSave={(newPassword) => handleUpdatePassword(acc, newPassword)}
+                    />
+                  </div>
                 )}
               </li>
             ))}
           </ul>
         )}
       </section>
+
+      {accounts.length > 0 && (
+        <NotificationsSection load={loadNotificationSettings} save={saveNotificationSettings} />
+      )}
 
       <section className="section" aria-labelledby="add-title">
         <h2 id="add-title" className="section-title">Подключить ящик</h2>

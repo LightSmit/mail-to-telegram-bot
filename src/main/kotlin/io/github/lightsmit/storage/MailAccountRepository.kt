@@ -87,6 +87,38 @@ class MailAccountRepository {
             }
         }
 
+    /** Ящик владельца по id; null - нет такого или он чужой. */
+    suspend fun findByIdAndOwner(id: Long, ownerId: Long): MailAccountConfig? =
+        withContext(DatabaseManager.dispatcher) {
+            query("SELECT * FROM mail_accounts WHERE id = ? AND owner_id = ?") {
+                setLong(1, id)
+                setLong(2, ownerId)
+            }.firstOrNull()
+        }
+
+    /** Меняет пароль приложения (хранится зашифрованным). Фильтры и остальное не трогаются. */
+    suspend fun updatePassword(id: Long, ownerId: Long, password: String): MailAccountConfig? =
+        withContext(DatabaseManager.dispatcher) {
+            val updated = DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    "UPDATE mail_accounts SET password_encrypted = ? WHERE id = ? AND owner_id = ?",
+                ).use { statement ->
+                    statement.setString(1, CryptoHelper.encrypt(password))
+                    statement.setLong(2, id)
+                    statement.setLong(3, ownerId)
+                    statement.executeUpdate()
+                }
+            }
+            if (updated == 0) {
+                null
+            } else {
+                query("SELECT * FROM mail_accounts WHERE id = ? AND owner_id = ?") {
+                    setLong(1, id)
+                    setLong(2, ownerId)
+                }.firstOrNull()
+            }
+        }
+
     suspend fun findAll(): List<MailAccountConfig> = withContext(DatabaseManager.dispatcher) {
         query("SELECT * FROM mail_accounts ORDER BY id") { }
     }

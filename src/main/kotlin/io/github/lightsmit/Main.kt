@@ -13,6 +13,7 @@ import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.service.MailboxHealthMonitor
 import io.github.lightsmit.service.MailReplyService
+import io.github.lightsmit.service.NotificationSettingsService
 import io.github.lightsmit.service.MailboxSupervisor
 import io.github.lightsmit.service.MailForwardingService
 import io.github.lightsmit.service.MailNotificationOutboxWorker
@@ -25,6 +26,7 @@ import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailStateRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
+import io.github.lightsmit.storage.UserSettingsRepository
 import io.github.lightsmit.telegram.MailViewCallbackCodec
 import io.github.lightsmit.telegram.TelegramClient
 import kotlinx.coroutines.CancellationException
@@ -196,6 +198,8 @@ fun main() = runBlocking {
 
     val accountRegistry = MailAccountRegistry()
 
+    val userSettingsRepository = UserSettingsRepository()
+
     val forwardingService = MailForwardingService(
         registry = accountRegistry,
         imapClient = imapClient,
@@ -205,6 +209,7 @@ fun main() = runBlocking {
         outboxRepository = mailOutboxRepository,
         contentLoader = contentLoader,
         replyEnabled = replyEnabled,
+        notificationSettings = { ownerId -> userSettingsRepository.get(ownerId) },
     )
 
     val healthMonitor = MailboxHealthMonitor(
@@ -274,6 +279,10 @@ fun main() = runBlocking {
         botToken = telegramToken,
         accountService = accountService,
         onUserSeen = { userId -> botUserRepository.touch(userId) },
+        notificationSettings = NotificationSettingsService(
+            repository = userSettingsRepository,
+            outboxRepository = mailOutboxRepository,
+        ),
     )
     apiServer.start()
 

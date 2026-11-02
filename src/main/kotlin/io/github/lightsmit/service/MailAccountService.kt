@@ -25,6 +25,12 @@ data class NewMailAccount(
     val password: String,
 )
 
+sealed interface UpdatePasswordResult {
+    data class Updated(val account: MailAccountConfig) : UpdatePasswordResult
+    data class Rejected(val message: String) : UpdatePasswordResult
+    data object NotFound : UpdatePasswordResult
+}
+
 sealed interface AddMailAccountResult {
     data class Added(val account: MailAccountConfig) : AddMailAccountResult
     data class Rejected(val message: String) : AddMailAccountResult
@@ -118,6 +124,32 @@ class MailAccountService(
 
         logger.info("Mailbox {} (id {}) added by owner {}", saved.username, saved.id, ownerChatId)
         return AddMailAccountResult.Added(saved)
+    }
+
+    /**
+     * Новый пароль приложения для подключенного ящика: сначала проверяем вход с ним,
+     * потом сохраняем и перезапускаем слежение. Фильтры и позиция чтения сохраняются.
+     */
+    suspend fun updatePassword(ownerChatId: Long, accountId: Long, rawPassword: String): UpdatePasswordResult {
+        val password = rawPassword.trim()
+        if (password.isEmpty() || password.length > 256) {
+            return UpdatePasswordResult.Rejected("Укажите пароль приложения")
+        }
+
+        val existing = repository.findByIdAndOwner(accountId, ownerChatId)
+            ?: return UpdatePasswordResult.NotFound
+
+        verifyLogin(existing.copy(password = password))?.let { problem ->
+            return UpdatePasswordResult.Rejected(problem)
+        }
+
+        val updated = repository.updatePassword(accountId, ownerChatId, password)
+            ?: return UpdatePasswordResult.NotFound
+
+        healthMonitor.forget(accountId)
+        supervisor.start(updated)
+        logger.info("Password of mailbox {} (id {}) updated by owner {}", updated.username, accountId, ownerChatId)
+        return UpdatePasswordResult.Updated(updated)
     }
 
     /** Удаляет ящик владельца. false - ящика нет или он чужой. */

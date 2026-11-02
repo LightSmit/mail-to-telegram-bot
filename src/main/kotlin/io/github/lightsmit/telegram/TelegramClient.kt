@@ -135,6 +135,8 @@ class TelegramClient(
         chatId: Long,
         text: String,
         buttons: List<TelegramInlineButton>,
+        // true - сообщение придет без звука (тихие часы, сводка)
+        silent: Boolean = false,
     ): Long {
         require(buttons.isNotEmpty()) {
             "At least one Telegram button is required"
@@ -148,6 +150,7 @@ class TelegramClient(
                     append("chat_id", chatId.toString())
                     append("text", text)
                     append("reply_markup", replyMarkup.toString())
+                    if (silent) append("disable_notification", "true")
                 },
             )
         }

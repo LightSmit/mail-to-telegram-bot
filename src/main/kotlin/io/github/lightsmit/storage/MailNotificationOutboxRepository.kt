@@ -107,6 +107,8 @@ class MailNotificationOutboxRepository {
         emailMetadata: MailOutboxEmailMetadata,
         operation: MailOutboxOperation = MailOutboxOperation.SEND_NOTIFICATION,
         now: Instant = Instant.now(),
+        // Когда отправить: сразу или позже (режим сводки)
+        deliverAt: Instant = now,
     ): Boolean = withContext(DatabaseManager.dispatcher) {
         require(accountKey.isNotBlank()) { "Outbox account key must not be blank" }
         require(accountCode.isNotBlank()) { "Outbox account code must not be blank" }
@@ -136,7 +138,7 @@ class MailNotificationOutboxRepository {
                 statement.setNullableInstant(8, emailMetadata.receivedAt)
                 statement.setString(9, operation.name)
                 statement.setString(10, MailOutboxStatus.PENDING.name)
-                statement.setLong(11, timestamp)
+                statement.setLong(11, maxOf(deliverAt.toEpochMilli(), timestamp))
                 statement.setInt(12, if (operation == MailOutboxOperation.SEND_NOTIFICATION) 1 else 0)
                 statement.setLong(13, timestamp)
                 statement.setLong(14, timestamp)
@@ -145,6 +147,30 @@ class MailNotificationOutboxRepository {
             }
         }
     }
+
+    /**
+     * Переносит еще не отправленные уведомления пользователя на новое время
+     * (сменился режим сводки). Ключ ящика начинается с id владельца.
+     */
+    suspend fun rescheduleOwnerPending(ownerId: Long, deliverAt: Instant, now: Instant = Instant.now()): Int =
+        withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    UPDATE mail_notification_outbox
+                    SET next_attempt_at = ?, updated_at = ?
+                    WHERE status = ? AND operation = ? AND account_key LIKE ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, deliverAt.toEpochMilli())
+                    statement.setLong(2, now.toEpochMilli())
+                    statement.setString(3, MailOutboxStatus.PENDING.name)
+                    statement.setString(4, MailOutboxOperation.SEND_NOTIFICATION.name)
+                    statement.setString(5, "$ownerId:%")
+                    statement.executeUpdate()
+                }
+            }
+        }
 
     suspend fun claimNextDue(now: Instant = Instant.now()): MailOutboxItem? = withContext(DatabaseManager.dispatcher) {
         val timestamp = now.toEpochMilli()
