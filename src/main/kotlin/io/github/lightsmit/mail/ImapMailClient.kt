@@ -231,13 +231,13 @@ class ImapMailClient(
                     ?.toUnicodeString()
                     ?: address.toString()
             }
-            ?: "(sender unknown)"
+            ?: UNKNOWN_SENDER
     }
 
     private fun formatSubject(message: Message): String {
         return message.subject
             ?.takeIf { it.isNotBlank() }
-            ?: "(no subject)"
+            ?: NO_SUBJECT
     }
 
     private fun findLatestUid(
@@ -458,10 +458,10 @@ class ImapMailClient(
             uid = uid,
             fromName = sender?.personal?.takeIf(String::isNotBlank)
                 ?: sender?.address
-                ?: "(отправитель неизвестен)",
+                ?: "",
             fromAddress = sender?.address?.lowercase(),
             to = formatRecipients(message, Message.RecipientType.TO),
-            subject = runCatching { message.subject }.getOrNull()?.takeIf(String::isNotBlank) ?: "(без темы)",
+            subject = runCatching { message.subject }.getOrNull()?.takeIf(String::isNotBlank) ?: "",
             date = runCatching { (message.receivedDate ?: message.sentDate)?.toInstant() }.getOrNull(),
             seen = runCatching { message.isSet(Flags.Flag.SEEN) }.getOrDefault(true),
             hasAttachments = runCatching { message.isMimeType("multipart/mixed") }.getOrDefault(false),
@@ -531,15 +531,19 @@ class ImapMailClient(
         }
     }
 
-    private companion object {
-        val BULK_HEADERS = listOf("List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted")
-        const val METADATA_TIMEOUT_MILLIS = 30_000
-        val WHITESPACE = Regex("\\s+")
-        const val CONTENT_TIMEOUT_MILLIS = 180_000
-        const val MAX_VIEW_BODY_CHARS = 100_000
+    companion object {
+        /** Заглушки для писем без темы и отправителя; на язык пользователя их переводит бот. */
+        const val NO_SUBJECT = "(no subject)"
+        const val UNKNOWN_SENDER = "(sender unknown)"
+
+        private val BULK_HEADERS = listOf("List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted")
+        private const val METADATA_TIMEOUT_MILLIS = 30_000
+        private val WHITESPACE = Regex("\\s+")
+        private const val CONTENT_TIMEOUT_MILLIS = 180_000
+        private const val MAX_VIEW_BODY_CHARS = 100_000
         // Сколько последних писем бот просматривает сам при поиске
-        const val SEARCH_SCAN_LIMIT = 2000
-        val SENT_FOLDER_NAMES = setOf("sent", "sent items", "sent messages", "sent mail", "отправленные")
+        private const val SEARCH_SCAN_LIMIT = 2000
+        private val SENT_FOLDER_NAMES = setOf("sent", "sent items", "sent messages", "sent mail", "отправленные")
     }
 }
 

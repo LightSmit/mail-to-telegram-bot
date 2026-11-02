@@ -29,16 +29,11 @@ class MailAccountRegistry {
     fun findByKey(accountKey: String): MailAccountConfig? =
         accountsByKey[accountKey]
 
-    /**
-     * Ящик для нажатой кнопки: только среди ящиков нажавшего пользователя.
-     * Понимает и старые коды кнопок (до перехода на ящики с владельцем).
-     */
+    /** Ящик для нажатой кнопки: только среди ящиков нажавшего пользователя. */
     fun findForCallback(accountCode: String, ownerChatId: Long): MailAccountConfig? =
         accountsByKey.values.firstOrNull { account ->
-            account.ownerChatId == ownerChatId && (
-                MailViewCallbackCodec.accountCode(account) == accountCode ||
-                    MailViewCallbackCodec.legacyAccountCode(account) == accountCode
-                )
+            account.ownerChatId == ownerChatId &&
+                MailViewCallbackCodec.accountCode(account) == accountCode
         }
 
     fun size(): Int = accountsByKey.size

@@ -20,6 +20,7 @@ Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iClou
 - Update the app password without reconnecting the mailbox: filters and position are kept.
 - **Mail browser:** Inbox and Sent of every connected mailbox, server-side search by subject, sender and recipient, "unread" and "with attachments" filters, sorting, reading emails, marking as read, sending attachments to the chat. Emails are read from the mailbox on request and are not stored on the server.
 - Light and dark themes follow the Telegram theme.
+- Russian and English interface: the bot and the Mini App follow the user's Telegram language. Admin commands are in Russian.
 
 **Filters (per mailbox)**
 - Pause.
@@ -43,6 +44,7 @@ Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iClou
 - Mailbox passwords are encrypted with AES-256-GCM. The key lives only in `.env`.
 - Mini App requests are authenticated by Telegram `initData` signature verification; each user sees only their own mailboxes.
 - IMAP servers in private networks are rejected (no SSRF into the server).
+- Users can delete all their data at any time: `/delete_my_data` in the bot or "My data" in the Mini App.
 
 **Prepared but disabled by default**
 - Reply to an email from Telegram via SMTP (`REPLY_ENABLED=true`). Many hosting providers block outgoing SMTP ports 465 and 587; enable it only on a server where they are open.
@@ -123,7 +125,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `TELEGRAM_CHAT_ID` | — | Owner's Telegram ID, always an admin |
 | `ADMIN_IDS` | — | More admins, comma separated |
 | `MAX_MAILBOXES_PER_USER` | `5` | Mailbox limit per user |
-| `IMAP_SAFETY_POLL_SECONDS` | `60` | Safety check over a fresh connection; `15` is recommended for Gmail |
+| `IMAP_SAFETY_POLL_SECONDS` | `15` | Safety check over a fresh connection (each check is a new login) |
 | `IMAP_NOOP_SECONDS` | `5` | NOOP over the open IDLE connection |
 | `IDLE_RECONNECT_DELAY_SECONDS` | `5` | Base reconnect delay (exponential backoff on errors) |
 | `MAX_ATTACHMENT_SIZE_MB` | `45` | Larger attachments are not sent to Telegram |
@@ -140,6 +142,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `/start` | everyone | Welcome and the "Open app" button |
 | `/help` | everyone | How it works and how to connect a mailbox |
 | `/mailboxes` | everyone | Your mailboxes and their status |
+| `/delete_my_data` | everyone | Delete all your data from the bot (with confirmation) |
 | `/admin`, `/stats` | admins | Statistics |
 | `/broadcast text` | admins | Prepare a broadcast; `/broadcast_send` sends it, `/broadcast_cancel` cancels |
 | `/backup` | admins | Make a database backup now |
@@ -191,4 +194,6 @@ deploy/         Caddyfile
 
 ## License
 
-[MIT](LICENSE) © Matvey ([LightSmit](https://github.com/LightSmit))
+Proprietary, all rights reserved. Use, copying or distribution requires written permission of the author, see [LICENSE](LICENSE).
+
+© 2026 Matvey ([LightSmit](https://github.com/LightSmit))

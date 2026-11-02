@@ -37,10 +37,6 @@ export const initData: string = resolveInitData();
 const platform = String((WebApp as { platform?: unknown }).platform ?? '');
 export const telegramScriptLoaded: boolean = platform !== '' && platform !== 'unknown';
 
-/** Откуда взялись данные: для диагностики. */
-export const initDataSource: string =
-  WebApp.initData ? 'sdk' : initData ? 'адрес страницы' : 'нет';
-
 type BackButtonApi = {
   show: () => void;
   hide: () => void;

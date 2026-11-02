@@ -2,7 +2,7 @@ package io.github.lightsmit
 
 import io.github.lightsmit.api.ApiServer
 import io.github.lightsmit.config.Environment
-import io.github.lightsmit.config.MailAccountConfigLoader
+import io.github.lightsmit.i18n.Lang
 import io.github.lightsmit.mail.ImapIdleWatcher
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.mail.SmtpMailSender
@@ -21,6 +21,7 @@ import io.github.lightsmit.service.MailNotificationOutboxWorker
 import io.github.lightsmit.service.TelegramDeliveryFailureClassifier
 import io.github.lightsmit.security.CryptoHelper
 import io.github.lightsmit.service.TelegramUpdatePoller
+import io.github.lightsmit.service.UserDataService
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.DatabaseManager
 import io.github.lightsmit.storage.MailAccountRepository
@@ -35,17 +36,19 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 
 fun main() = runBlocking {
     // Фоновые задачи, запущенные из API (например, отправка вложений в чат)
     val appScope = this
-    println("Mail to Telegram Bot started")
+    val logger = LoggerFactory.getLogger("io.github.lightsmit.Main")
+    logger.info("Mail to Telegram Bot started")
 
     val telegramToken = Environment.require("TELEGRAM_BOT_TOKEN")
-    // Нужен только для разового импорта ящиков из .env (MAIL_ACCOUNT_*) на этот Telegram ID
-    val legacyOwnerChatId = Environment
+    // Владелец бота: всегда администратор
+    val ownerChatId = Environment
         .get("TELEGRAM_CHAT_ID")
         ?.let { value -> value.toLongOrNull() ?: error("TELEGRAM_CHAT_ID must be a valid integer") }
 
@@ -55,7 +58,7 @@ fun main() = runBlocking {
             ?.split(',', ' ', ';')
             ?.mapNotNull { value -> value.trim().takeIf(String::isNotEmpty) }
             ?.forEach { value -> add(value.toLongOrNull() ?: error("ADMIN_IDS must contain Telegram user IDs")) }
-        legacyOwnerChatId?.let(::add)
+        ownerChatId?.let(::add)
     }
 
     val backupHour = Environment.get("BACKUP_HOUR")?.toIntOrNull() ?: 4
@@ -85,7 +88,6 @@ fun main() = runBlocking {
     // Ключ шифрования обязателен: падаем сразу, а не при первом сохранении ящика
     CryptoHelper.requireConfigured()
 
-    // ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ HIKARICP
     DatabaseManager.init(databasePath)
 
     val attachmentTempDirectory = Path.of(
@@ -111,9 +113,6 @@ fun main() = runBlocking {
     val safetyPollSeconds = Environment
         .get("IMAP_SAFETY_POLL_SECONDS")
         ?.toLongOrNull()
-        ?: Environment
-            .get("IDLE_FALLBACK_POLL_SECONDS")
-            ?.toLongOrNull()
         ?: 15L
     require(safetyPollSeconds in 5L..3600L) {
         "IMAP_SAFETY_POLL_SECONDS must be between 5 and 3600"
@@ -136,8 +135,6 @@ fun main() = runBlocking {
         }
     }
 
-    val legacyAccounts = MailAccountConfigLoader.load()
-    // ИСПРАВЛЕНА ОПЕЧАТКА С УМНОЖЕНИЕМ
     val maxAttachmentSizeBytes = maxAttachmentSizeMb * 1024L * 1024L
 
     val telegramControlClient = TelegramClient(
@@ -156,17 +153,21 @@ fun main() = runBlocking {
     // Команды бота для подсказок в Telegram при вводе "/"
     launch {
         try {
-            telegramControlClient.setMyCommands(
-                listOf(
-                    "start" to "Начать и открыть приложение",
-                    "mailboxes" to "Мои ящики и их состояние",
-                    "help" to "Как подключить почту",
-                ),
-            )
+            // По умолчанию русские подсказки, для английского Telegram - английские
+            for ((languageCode, texts) in listOf(null to Lang.RU.texts, "en" to Lang.EN.texts)) {
+                telegramControlClient.setMyCommands(
+                    commands = listOf(
+                        "start" to texts.commandStart,
+                        "mailboxes" to texts.commandMailboxes,
+                        "help" to texts.commandHelp,
+                    ),
+                    languageCode = languageCode,
+                )
+            }
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: Exception) {
-            println("Telegram setMyCommands failed: ${exception.javaClass.simpleName}")
+            logger.warn("Telegram setMyCommands failed: {}", exception.javaClass.simpleName)
         }
     }
 
@@ -175,11 +176,11 @@ fun main() = runBlocking {
     launch {
         try {
             val username = telegramControlClient.getBotUsername()
-            println("Telegram bot for TELEGRAM_BOT_TOKEN: @$username")
+            logger.info("Telegram bot for TELEGRAM_BOT_TOKEN: @{}", username)
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: Exception) {
-            println("Telegram getMe failed: ${exception.javaClass.simpleName}")
+            logger.warn("Telegram getMe failed: {}", exception.javaClass.simpleName)
         }
     }
 
@@ -192,7 +193,6 @@ fun main() = runBlocking {
         accountCode = MailViewCallbackCodec::accountCode,
     )
 
-    // РЕПОЗИТОРИЯМ БОЛЬШЕ НЕ НУЖЕН ПУТЬ К БАЗЕ
     val mailStateRepository = MailStateRepository()
     val mailOutboxRepository = MailNotificationOutboxRepository()
     val mailAccountRepository = MailAccountRepository()
@@ -213,11 +213,13 @@ fun main() = runBlocking {
         contentLoader = contentLoader,
         replyEnabled = replyEnabled,
         notificationSettings = { ownerId -> userSettingsRepository.get(ownerId) },
+        language = botUserRepository::language,
     )
 
     val healthMonitor = MailboxHealthMonitor(
         telegramClient = telegramControlClient,
         miniAppUrl = miniAppUrl,
+        language = botUserRepository::language,
     )
 
     val idleWatcher = ImapIdleWatcher(
@@ -245,15 +247,6 @@ fun main() = runBlocking {
         healthMonitor = healthMonitor,
     )
 
-    // Разовый перенос ящиков из .env в базу (повторный запуск ничего не дублирует)
-    if (legacyAccounts.isNotEmpty()) {
-        val owner = legacyOwnerChatId
-            ?: error("TELEGRAM_CHAT_ID is required to import MAIL_ACCOUNT_* mailboxes from .env")
-        val imported = accountService.importLegacyAccounts(legacyAccounts, owner)
-        println("Mailboxes from .env imported into the database: $imported of ${legacyAccounts.size}")
-        println("Remove MAIL_ACCOUNT_* from .env: mailboxes are now managed in the Mini App")
-    }
-
     // Ящики должны быть в реестре до запуска воркеров outbox, иначе ожидающие
     // уведомления посчитаются уведомлениями удаленных ящиков
     val watchedMailboxes = accountService.startAll()
@@ -277,15 +270,23 @@ fun main() = runBlocking {
         telegramClient = telegramControlClient,
     )
 
+    val userDataService = UserDataService(
+        accountService = accountService,
+        settingsRepository = userSettingsRepository,
+        botUsers = botUserRepository,
+        backupKeepDays = backupKeep,
+    )
+
     val apiServer = ApiServer(
         port = Environment.get("API_PORT")?.toIntOrNull() ?: 8080,
         botToken = telegramToken,
         accountService = accountService,
-        onUserSeen = { userId -> botUserRepository.touch(userId) },
+        onUserSeen = { userId, languageCode -> botUserRepository.touch(userId, languageCode) },
         notificationSettings = NotificationSettingsService(
             repository = userSettingsRepository,
             outboxRepository = mailOutboxRepository,
         ),
+        userData = userDataService,
         mailBrowser = MailBrowserService(
             repository = mailAccountRepository,
             imapClient = imapClient,
@@ -316,6 +317,7 @@ fun main() = runBlocking {
             accountService = accountService,
             botUsers = botUserRepository,
             adminService = adminService,
+            userData = userDataService,
             replyService = if (replyEnabled) {
                 MailReplyService(
                     registry = accountRegistry,
@@ -327,20 +329,17 @@ fun main() = runBlocking {
             },
         )
 
-        println("Watched mailboxes: $watchedMailboxes (limit per user: $maxAccountsPerOwner)")
-        println("Maximum attachment size: $maxAttachmentSizeMb MB")
-        println("Real-time IMAP IDLE monitoring enabled")
-        println("IMAP safety polling interval: $safetyPollSeconds seconds")
-        println(
-            if (telegramProxyUrl.isNullOrBlank()) {
-                "Telegram proxy: disabled"
-            } else {
-                "Telegram proxy: enabled"
-            },
+        logger.info("Watched mailboxes: {} (limit per user: {})", watchedMailboxes, maxAccountsPerOwner)
+        logger.info(
+            "IMAP safety poll: {} s, NOOP: {} s, max attachment: {} MB, Telegram proxy: {}, replies: {}",
+            safetyPollSeconds,
+            noopIntervalSeconds,
+            maxAttachmentSizeMb,
+            if (telegramProxyUrl.isNullOrBlank()) "off" else "on",
+            if (replyEnabled) "on" else "off",
         )
-        println("Persistent notification outbox worker enabled")
-        println("Admins: ${adminChatIds.size}, daily backup at $backupHour:00, keeping $backupKeep copies")
-        println("Waiting for new emails...")
+        logger.info("Admins: {}, daily backup at {}:00, keeping {} copies", adminChatIds.size, backupHour, backupKeep)
+        logger.info("Waiting for new emails...")
 
         supervisorScope {
             val telegramUpdateJob = launch {

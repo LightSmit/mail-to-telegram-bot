@@ -21,7 +21,7 @@ class ReplyFormatTest {
         assertEquals("Re: Отчет", ReplyFormat.subject("Re: Отчет"))
         assertEquals("RE: Отчет", ReplyFormat.subject("RE: Отчет"))
         assertEquals("Ответ: Отчет", ReplyFormat.subject("Ответ: Отчет"))
-        assertEquals("Re: (без темы)", ReplyFormat.subject("  "))
+        assertEquals("Re:", ReplyFormat.subject("  "))
         assertEquals("Re: две строки", ReplyFormat.subject("две\r\nстроки"))
     }
 

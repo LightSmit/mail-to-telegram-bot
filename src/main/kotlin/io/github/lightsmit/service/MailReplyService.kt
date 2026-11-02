@@ -65,7 +65,7 @@ class MailReplyService(
         logger.info("Reply started for email UID {} from mailbox {}", uid, account.username)
 
         return StartResult.Ready(
-            subject = context.subject.ifBlank { "(без темы)" },
+            subject = context.subject,
             recipients = ReplyFormat.recipientsText(context),
         )
     }

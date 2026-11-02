@@ -1,6 +1,8 @@
 package io.github.lightsmit.service
 
 import io.github.lightsmit.config.MailAccountConfig
+import io.github.lightsmit.i18n.Lang
+import io.github.lightsmit.i18n.Texts
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.telegram.MailViewAction
@@ -35,6 +37,8 @@ class TelegramUpdatePoller(
     private val adminService: AdminService? = null,
     // Ответ на письмо из Telegram; null - кнопка "Ответить" не работает
     private val replyService: MailReplyService? = null,
+    // Удаление всех данных пользователя по команде /delete_my_data
+    private val userData: UserDataService? = null,
 ) {
 
     private val logger =
@@ -84,13 +88,14 @@ class TelegramUpdatePoller(
     private suspend fun handleCallbackQuery(
         update: TelegramCallbackQueryUpdate,
     ) {
-        touchUser(update.fromUserId)
+        touchUser(update.fromUserId, update.languageCode)
+        val t = textsFor(update.fromUserId, update.languageCode)
 
         // Кнопки работают только в личном чате с ботом: письма приходят туда
         if (update.chatId != update.fromUserId) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
-                text = "Доступ запрещен",
+                text = t.accessDenied,
                 showAlert = true,
             )
             return
@@ -102,7 +107,7 @@ class TelegramUpdatePoller(
         if (request == null) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
-                text = "Некорректная кнопка",
+                text = t.badButton,
                 showAlert = true,
             )
             return
@@ -117,7 +122,7 @@ class TelegramUpdatePoller(
         if (account == null) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
-                text = "Почтовый ящик больше не подключен",
+                text = t.mailboxGone,
                 showAlert = true,
             )
             return
@@ -132,7 +137,7 @@ class TelegramUpdatePoller(
         ) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
-                text = "Не удалось определить сообщение",
+                text = t.cannotFindMessage,
                 showAlert = true,
             )
             return
@@ -151,7 +156,7 @@ class TelegramUpdatePoller(
         if (!inProgressEmails.add(emailKey)) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
-                text = "Письмо уже обрабатывается",
+                text = t.alreadyProcessing,
                 showAlert = false,
             )
             return
@@ -162,7 +167,7 @@ class TelegramUpdatePoller(
                 MailViewAction.TEXT -> {
                     performActionWithAcknowledgement(
                         callbackQueryId = update.callbackQueryId,
-                        text = "Открываю текст…",
+                        text = t.openingText,
                     ) {
                         forwardingService.openTextView(
                             account = account,
@@ -178,7 +183,7 @@ class TelegramUpdatePoller(
                 MailViewAction.ATTACHMENTS -> {
                     performActionWithAcknowledgement(
                         callbackQueryId = update.callbackQueryId,
-                        text = "Отправляю вложения…",
+                        text = t.sendingAttachmentsShort,
                     ) {
                         forwardingService.sendAttachments(
                             account = account,
@@ -196,17 +201,13 @@ class TelegramUpdatePoller(
                     )
                     answerSafely(
                         callbackQueryId = update.callbackQueryId,
-                        text = if (marked) {
-                            "✅ Отмечено прочитанным в ящике"
-                        } else {
-                            "Письмо не найдено: его могли удалить или переместить"
-                        },
+                        text = if (marked) t.markedRead else t.messageGone,
                         showAlert = !marked,
                     )
                 }
 
                 MailViewAction.REPLY -> {
-                    startReply(update.callbackQueryId, account, request.uidValidity, request.uid)
+                    startReply(update.callbackQueryId, account, request.uidValidity, request.uid, t)
                 }
 
                 MailViewAction.BACK -> {
@@ -239,7 +240,7 @@ class TelegramUpdatePoller(
             runCatching {
                 controlClient.sendMessage(
                     chatId = account.ownerChatId,
-                    text = "⚠️ Не удалось выполнить действие. Повторите попытку.",
+                    text = t.actionFailed,
                 )
             }
         } finally {
@@ -253,7 +254,8 @@ class TelegramUpdatePoller(
         message: TelegramMessageUpdate,
     ) {
         if (message.chatType != "private") return
-        touchUser(message.fromUserId)
+        touchUser(message.fromUserId, message.languageCode)
+        val t = textsFor(message.fromUserId, message.languageCode)
 
         val fullText = message.text?.trim().orEmpty()
         val firstToken = fullText.substringBefore(' ').substringBefore('\n')
@@ -273,31 +275,35 @@ class TelegramUpdatePoller(
             when {
                 command == "/cancel" -> {
                     replies.cancel(message.fromUserId)
-                    sendPlain(message.chatId, "Ответ отменен.")
+                    sendPlain(message.chatId, t.replyCancelled)
                     return
                 }
                 message.text == null -> {
-                    sendPlain(message.chatId, "Пока можно ответить только текстом. Напишите ответ или отправьте /cancel.")
+                    sendPlain(message.chatId, t.replyTextOnly)
                     return
                 }
                 !fullText.startsWith("/") -> {
-                    sendReply(replies, message.chatId, message.fromUserId, message.text)
+                    sendReply(replies, message.chatId, message.fromUserId, message.text, t)
                     return
                 }
             }
         }
 
         if (command == "/cancel") {
-            sendPlain(message.chatId, "Сейчас нечего отменять.")
+            sendPlain(message.chatId, t.nothingToCancel)
+            return
+        }
+
+        if (command == "/delete_my_data" || command == "/delete_my_data_confirm") {
+            handleDeleteData(message.chatId, message.fromUserId, confirmed = command == "/delete_my_data_confirm", t = t)
             return
         }
 
         val text = when (command) {
-            "/start" -> START_TEXT
-            "/help" -> if (replyService != null) HELP_TEXT else HELP_TEXT.lines().filterNot { line -> line.startsWith("↩️") }.joinToString("\n")
-            "/mailboxes" -> mailboxesText(message.fromUserId)
-            else -> "Я не отвечаю на сообщения, зато пересылаю сюда новые письма 🙂\n\n" +
-                "Команды: /mailboxes - мои ящики, /help - как подключить почту."
+            "/start" -> t.start()
+            "/help" -> t.help(replyEnabled = replyService != null)
+            "/mailboxes" -> mailboxesText(message.fromUserId, t)
+            else -> t.defaultReply
         }
 
         try {
@@ -305,7 +311,7 @@ class TelegramUpdatePoller(
                 controlClient.sendMessageWithWebAppButton(
                     chatId = message.chatId,
                     text = text,
-                    buttonText = "📬 Открыть приложение",
+                    buttonText = t.openApp,
                     webAppUrl = miniAppUrl,
                 )
             } else {
@@ -354,10 +360,11 @@ class TelegramUpdatePoller(
         account: MailAccountConfig,
         uidValidity: Long,
         uid: Long,
+        t: Texts,
     ) {
         val replies = replyService
         if (replies == null) {
-            answerSafely(callbackQueryId, "Ответ на письма из Telegram временно отключен", showAlert = true)
+            answerSafely(callbackQueryId, t.replyDisabled, showAlert = true)
             return
         }
 
@@ -366,21 +373,22 @@ class TelegramUpdatePoller(
                 answerSafely(callbackQueryId, null, showAlert = false)
                 controlClient.sendMessageForceReply(
                     chatId = account.ownerChatId,
-                    text = "↩️ Ответ на «${result.subject.take(200)}»\n" +
-                        "Кому: ${result.recipients.take(300)}\n" +
-                        "С ящика: ${account.username}\n\n" +
-                        "Напишите текст ответа следующим сообщением. /cancel - отменить.",
-                    placeholder = "Текст ответа",
+                    text = t.replyPrompt(
+                        subject = result.subject.ifBlank { t.noSubject }.take(200),
+                        recipients = result.recipients.take(300),
+                        mailbox = account.username,
+                    ),
+                    placeholder = t.replyPlaceholder,
                 )
             }
             MailReplyService.StartResult.NotFound -> answerSafely(
-                callbackQueryId, "Письмо не найдено: его могли удалить или переместить", showAlert = true,
+                callbackQueryId, t.messageGone, showAlert = true,
             )
             MailReplyService.StartResult.NoRecipient -> answerSafely(
-                callbackQueryId, "В письме нет адреса для ответа", showAlert = true,
+                callbackQueryId, t.replyNoRecipient, showAlert = true,
             )
             MailReplyService.StartResult.Unsupported -> answerSafely(
-                callbackQueryId, "Для этого почтового сервиса ответ из Telegram пока не поддерживается", showAlert = true,
+                callbackQueryId, t.replyUnsupported, showAlert = true,
             )
         }
     }
@@ -390,19 +398,33 @@ class TelegramUpdatePoller(
         chatId: Long,
         userId: Long,
         body: String,
+        t: Texts,
     ) {
         val text = when (val result = replies.send(userId, body)) {
-            is MailReplyService.SendResult.Sent -> "✅ Ответ отправлен: ${result.recipients}"
-            MailReplyService.SendResult.NoPending ->
-                "Время на ответ вышло. Нажмите «↩️ Ответить» под письмом еще раз."
-            MailReplyService.SendResult.TooLong ->
-                "Слишком длинный ответ: не больше ${MailReplyService.MAX_BODY_LENGTH} символов. Сократите текст и отправьте снова."
-            MailReplyService.SendResult.MailboxGone ->
-                "Этот ящик больше не подключен, ответ не отправлен."
-            MailReplyService.SendResult.AuthFailed ->
-                "⚠️ Почта не приняла пароль приложения для отправки писем. Проверьте, что пароль приложения разрешает отправку (SMTP), и подключите ящик заново."
-            MailReplyService.SendResult.Failed ->
-                "⚠️ Не удалось связаться с почтовым сервером для отправки. Попробуйте отправить текст еще раз позже или /cancel."
+            is MailReplyService.SendResult.Sent -> t.replySent(result.recipients)
+            MailReplyService.SendResult.NoPending -> t.replyExpired
+            MailReplyService.SendResult.TooLong -> t.replyTooLong(MailReplyService.MAX_BODY_LENGTH)
+            MailReplyService.SendResult.MailboxGone -> t.replyMailboxGone
+            MailReplyService.SendResult.AuthFailed -> t.replyAuthFailed
+            MailReplyService.SendResult.Failed -> t.replyFailed
+        }
+        sendPlain(chatId, text)
+    }
+
+    // Сначала предупреждение, удаление - только отдельной командой подтверждения
+    private suspend fun handleDeleteData(chatId: Long, userId: Long, confirmed: Boolean, t: Texts) {
+        val service = userData ?: return
+        val text = try {
+            if (!confirmed) {
+                t.deleteWarning(service.mailboxCount(userId))
+            } else {
+                t.deleteDone(service.deleteAll(userId), service.backupKeepDays)
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to delete data of user {}: {}", userId, exception.javaClass.simpleName)
+            t.deleteFailed
         }
         sendPlain(chatId, text)
     }
@@ -417,9 +439,17 @@ class TelegramUpdatePoller(
         }
     }
 
-    private suspend fun touchUser(userId: Long) {
+    // Язык: из текущего сообщения Telegram, иначе последний известный
+    private suspend fun textsFor(userId: Long, languageCode: String?): Texts {
+        val lang = languageCode?.takeIf(String::isNotBlank)?.let(Lang::fromCode)
+            ?: runCatching { botUsers?.language(userId) }.getOrNull()
+            ?: Lang.RU
+        return lang.texts
+    }
+
+    private suspend fun touchUser(userId: Long, languageCode: String?) {
         try {
-            botUsers?.touch(userId)
+            botUsers?.touch(userId, languageCode)
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: Exception) {
@@ -427,22 +457,22 @@ class TelegramUpdatePoller(
         }
     }
 
-    private suspend fun mailboxesText(ownerChatId: Long): String {
-        val service = accountService ?: return "Список ящиков открывается в приложении."
+    private suspend fun mailboxesText(ownerChatId: Long, t: Texts): String {
+        val service = accountService ?: return t.mailboxesAppOnly
         val accounts = service.list(ownerChatId)
 
         if (accounts.isEmpty()) {
-            return "У вас пока нет подключенных ящиков. Подключите первый в приложении, инструкция там же."
+            return t.mailboxesEmpty
         }
 
         return buildString {
-            appendLine("📬 Ваши ящики")
+            appendLine(t.mailboxesTitle)
             accounts.forEach { account ->
                 val health = service.health(account.id)
-                val (mark, status) = if (account.filters.paused) "⏸" to "на паузе" else when (health.status) {
-                    MailboxStatus.OK -> "🟢" to "письма приходят"
-                    MailboxStatus.CONNECTING -> "🟡" to "подключается"
-                    MailboxStatus.ERROR -> "🔴" to (health.problem?.replaceFirstChar(Char::lowercase) ?: "не удается подключиться")
+                val (mark, status) = if (account.filters.paused) "⏸" to t.statusPaused else when (health.status) {
+                    MailboxStatus.OK -> "🟢" to t.statusOk
+                    MailboxStatus.CONNECTING -> "🟡" to t.statusConnecting
+                    MailboxStatus.ERROR -> "🔴" to (health.problem?.text(t)?.replaceFirstChar(Char::lowercase) ?: t.statusErrorFallback)
                 }
                 appendLine()
                 append(mark).append(' ').append(account.username)
@@ -452,7 +482,7 @@ class TelegramUpdatePoller(
             }
             appendLine()
             appendLine()
-            append("Подключить или отключить ящик можно в приложении.")
+            append(t.mailboxesFooter)
         }
     }
 
@@ -505,41 +535,6 @@ class TelegramUpdatePoller(
     }
 
     private companion object {
-        val START_TEXT = """
-            👋 Привет! Я пересылаю новые письма из ваших почтовых ящиков прямо сюда, в Telegram.
-
-            Нажмите «Открыть приложение», чтобы подключить первый ящик. Понадобится адрес почты и пароль приложения, инструкция для вашего почтового сервиса будет там же.
-
-            /help - подробно о том, как все работает
-            /mailboxes - мои ящики и их состояние
-        """.trimIndent()
-
-        val HELP_TEXT = """
-            📖 Как это работает
-
-            Я подключаюсь к вашему ящику по протоколу IMAP и присылаю сюда карточку каждого нового письма: от кого, тема, дата и есть ли вложения. Старые письма не пересылаются.
-
-            Как подключить ящик
-            1. Откройте приложение кнопкой ниже.
-            2. Введите адрес почты, сервис определится сам.
-            3. Создайте в настройках почты пароль приложения по инструкции в приложении и вставьте его. Обычный пароль от почты не подойдет: почтовые сервисы не пускают по нему сторонние программы.
-            4. Нажмите «Подключить ящик». Я проверю вход и напишу, что ящик подключен.
-
-            Кнопки под письмом
-            📄 Текст - показать текст письма
-            📎 Вложения - прислать файлы из письма
-            ↩️ Ответить - ответить на письмо прямо отсюда: напишите текст, и я отправлю его с вашего ящика
-            ✅ Прочитано - отметить письмо прочитанным в почте
-
-            В приложении можно открыть любой ящик и посмотреть его письма: входящие и отправленные, с поиском и фильтрами.
-
-            Тихие часы (письма без звука) и сводку (письма пачкой раз в несколько часов) можно включить в приложении, раздел «Уведомления».
-
-            Если ящик перестанет работать (например, вы сменили пароль от почты), я напишу об этом. Отключить ящик можно в приложении: пароль приложения при этом стоит удалить и в настройках почты.
-
-            Поддерживаются Mail.ru, Яндекс, Gmail, Рамблер, iCloud и другие ящики с доступом по IMAP.
-        """.trimIndent()
-
         const val LONG_POLL_TIMEOUT_SECONDS = 25
         const val POLL_RETRY_DELAY_MILLIS = 1_000L
         const val CALLBACK_ANSWER_TIMEOUT_MILLIS = 5_000L

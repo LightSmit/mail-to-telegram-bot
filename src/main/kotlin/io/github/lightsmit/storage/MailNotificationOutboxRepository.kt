@@ -405,21 +405,11 @@ class MailNotificationOutboxRepository {
         }
     }
 
-    /**
-     * Переносит записи ящика на новый ключ и код (миграция на ключи с владельцем).
-     * Возвращает число перенесенных записей.
-     */
-    suspend fun rekeyAccount(
-        oldAccountKey: String,
-        newAccountKey: String,
-        newAccountCode: String,
-    ): Int = withContext(DatabaseManager.dispatcher) {
-        val sql = "UPDATE OR IGNORE mail_notification_outbox SET account_key = ?, account_code = ? WHERE account_key = ?"
+    /** Удаляет все уведомления пользователя (по просьбе удалить его данные). Ключ ящика начинается с id владельца. */
+    suspend fun deleteOwner(ownerId: Long): Int = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->
-            connection.prepareStatement(sql).use { statement ->
-                statement.setString(1, newAccountKey)
-                statement.setString(2, newAccountCode)
-                statement.setString(3, oldAccountKey)
+            connection.prepareStatement("DELETE FROM mail_notification_outbox WHERE account_key LIKE ?").use { statement ->
+                statement.setString(1, "$ownerId:%")
                 statement.executeUpdate()
             }
         }

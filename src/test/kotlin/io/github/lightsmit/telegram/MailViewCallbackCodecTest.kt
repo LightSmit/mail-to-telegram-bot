@@ -38,13 +38,12 @@ class MailViewCallbackCodecTest {
     }
 
     @Test
-    fun `registry finds mailbox only for its owner and understands legacy codes`() {
+    fun `registry finds mailbox only for its owner`() {
         val registry = MailAccountRegistry()
         val owned = account(owner = 42)
         registry.put(owned)
 
         assertEquals(owned, registry.findForCallback(MailViewCallbackCodec.accountCode(owned), 42))
-        assertEquals(owned, registry.findForCallback(MailViewCallbackCodec.legacyAccountCode(owned), 42))
         assertNull(registry.findForCallback(MailViewCallbackCodec.accountCode(owned), 43))
     }
 

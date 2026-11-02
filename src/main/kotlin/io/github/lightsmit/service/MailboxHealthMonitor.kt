@@ -1,6 +1,8 @@
 package io.github.lightsmit.service
 
 import io.github.lightsmit.config.MailAccountConfig
+import io.github.lightsmit.i18n.Lang
+import io.github.lightsmit.i18n.Texts
 import io.github.lightsmit.telegram.TelegramClient
 import jakarta.mail.AuthenticationFailedException
 import kotlinx.coroutines.CoroutineScope
@@ -15,9 +17,20 @@ import java.util.concurrent.ConcurrentHashMap
 
 enum class MailboxStatus { CONNECTING, OK, ERROR }
 
+/** Что случилось с ящиком. Текст для пользователя - на его языке, см. [text]. */
+sealed interface MailboxProblem {
+    data object Auth : MailboxProblem
+    data class Connect(val host: String) : MailboxProblem
+
+    fun text(texts: Texts): String = when (this) {
+        Auth -> texts.problemAuth
+        is Connect -> texts.problemConnect(host)
+    }
+}
+
 data class MailboxHealth(
     val status: MailboxStatus,
-    val problem: String? = null,
+    val problem: MailboxProblem? = null,
 )
 
 /**
@@ -28,6 +41,8 @@ data class MailboxHealth(
 class MailboxHealthMonitor(
     private val telegramClient: TelegramClient,
     private val miniAppUrl: String?,
+    // Язык владельца ящика для сообщений
+    private val language: suspend (Long) -> Lang = { Lang.RU },
     private val clock: () -> Instant = Instant::now,
 ) : AutoCloseable {
 
@@ -36,7 +51,7 @@ class MailboxHealthMonitor(
 
     private class State {
         var status = MailboxStatus.CONNECTING
-        var problem: String? = null
+        var problem: MailboxProblem? = null
         var consecutiveFailures = 0
         var consecutiveAuthFailures = 0
         var firstFailureAt: Instant? = null
@@ -65,18 +80,14 @@ class MailboxHealthMonitor(
         }
 
         if (shouldNotifyRecovery) {
-            send(account, "✅ Ящик «${account.name}» (${account.username}) снова работает. Новые письма будут приходить, как обычно.")
+            send(account) { texts -> texts.mailboxRecovered(account.name, account.username) }
         }
     }
 
     /** Ошибка подключения или проверки ящика. */
     fun onFailure(account: MailAccountConfig, exception: Exception) {
         val isAuthFailure = exception.isAuthenticationFailure()
-        val reason = if (isAuthFailure) {
-            "почта отклонила пароль приложения (его могли удалить, или сменился пароль от почты)"
-        } else {
-            "не удается подключиться к серверу ${account.host}"
-        }
+        val problem = if (isAuthFailure) MailboxProblem.Auth else MailboxProblem.Connect(account.host)
 
         val state = states.computeIfAbsent(account.id) { State() }
         val shouldNotify = synchronized(state) {
@@ -92,7 +103,7 @@ class MailboxHealthMonitor(
             // На карточке в приложении показываем проблему сразу после пары неудач подряд
             if (broken || state.consecutiveFailures >= 2) {
                 state.status = MailboxStatus.ERROR
-                state.problem = reason.replaceFirstChar(Char::uppercase)
+                state.problem = problem
             }
 
             if (broken && !state.ownerNotified) {
@@ -105,17 +116,7 @@ class MailboxHealthMonitor(
 
         if (shouldNotify) {
             logger.warn("Mailbox {} (id {}) is failing; notifying owner {}", account.username, account.id, account.ownerChatId)
-            send(
-                account,
-                buildString {
-                    appendLine("⚠️ Не удается проверить ящик «${account.name}» (${account.username})")
-                    appendLine()
-                    appendLine("Причина: $reason.")
-                    appendLine()
-                    appendLine("Если вы меняли пароль от почты или удаляли пароль приложения, создайте новый пароль приложения и введите его в приложении: «Настройки» у этого ящика, раздел «Пароль приложения». Фильтры при этом сохранятся.")
-                    append("Бот продолжит попытки и напишет, когда ящик снова заработает.")
-                },
-            )
+            send(account) { texts -> texts.mailboxFailing(account.name, account.username, problem.text(texts)) }
         }
     }
 
@@ -124,14 +125,16 @@ class MailboxHealthMonitor(
         states.remove(accountId)
     }
 
-    private fun send(account: MailAccountConfig, text: String) {
+    private fun send(account: MailAccountConfig, message: (Texts) -> String) {
         scope.launch {
             runCatching {
+                val texts = language(account.ownerChatId).texts
+                val text = message(texts)
                 if (miniAppUrl != null) {
                     telegramClient.sendMessageWithWebAppButton(
                         chatId = account.ownerChatId,
                         text = text,
-                        buttonText = "Открыть приложение",
+                        buttonText = texts.openApp,
                         webAppUrl = miniAppUrl,
                     )
                 } else {

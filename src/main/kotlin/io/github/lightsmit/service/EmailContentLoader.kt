@@ -90,24 +90,6 @@ class EmailContentLoader(
         return prefetch(account, uidValidity, uid).await()
     }
 
-    fun release(
-        account: MailAccountConfig,
-        uidValidity: Long,
-        uid: Long,
-    ) {
-        val key = CachedEmailKey(
-            accountCode = accountCode(account),
-            uidValidity = uidValidity,
-            uid = uid,
-        )
-
-        val deferred = entries.remove(key) ?: return
-        scope.launch {
-            val message = runCatching { deferred.await() }.getOrNull()
-            message?.let(::deleteAttachments)
-        }
-    }
-
     private suspend fun fetchWithRetry(
         account: MailAccountConfig,
         uidValidity: Long,

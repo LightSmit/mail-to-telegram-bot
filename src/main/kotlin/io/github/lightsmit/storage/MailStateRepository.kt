@@ -78,28 +78,6 @@ class MailStateRepository {
         }
     }
 
-    /** Переносит позицию чтения на новый ключ, если для нового ключа ее еще нет. */
-    suspend fun renameKey(
-        oldAccountKey: String,
-        newAccountKey: String,
-    ): Boolean = withContext(DatabaseManager.dispatcher) {
-        val sql = """
-            UPDATE mail_account_state
-            SET account_key = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE account_key = ?
-              AND NOT EXISTS (SELECT 1 FROM mail_account_state WHERE account_key = ?)
-        """.trimIndent()
-
-        DatabaseManager.dataSource.connection.use { connection ->
-            connection.prepareStatement(sql).use { statement ->
-                statement.setString(1, newAccountKey)
-                statement.setString(2, oldAccountKey)
-                statement.setString(3, newAccountKey)
-                statement.executeUpdate() > 0
-            }
-        }
-    }
-
     /** Забывает позицию чтения (ящик удален: при повторном добавлении начнем с последнего письма). */
     suspend fun delete(accountKey: String) = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->

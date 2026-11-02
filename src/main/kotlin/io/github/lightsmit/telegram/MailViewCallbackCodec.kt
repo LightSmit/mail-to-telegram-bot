@@ -122,22 +122,6 @@ object MailViewCallbackCodec {
         return shortHash(source)
     }
 
-    /**
-     * Код из однопользовательской версии (без владельца). Кнопки под письмами,
-     * отправленными до перехода на мультитенантность, содержат именно его.
-     */
-    fun legacyAccountCode(
-        account: MailAccountConfig,
-    ): String {
-        val source = buildString {
-            append(account.host.lowercase())
-            append('\n')
-            append(account.username.lowercase())
-        }
-
-        return shortHash(source)
-    }
-
     private fun shortHash(
         source: String,
     ): String {

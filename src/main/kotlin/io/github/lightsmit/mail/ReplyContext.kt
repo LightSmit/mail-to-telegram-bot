@@ -19,7 +19,7 @@ object ReplyFormat {
     /** "Re: тема" без повторного "Re:", если он уже есть. */
     fun subject(original: String): String {
         val clean = original.replace(lineBreaks, " ").trim()
-        if (clean.isEmpty()) return "Re: (без темы)"
+        if (clean.isEmpty() || clean == ImapMailClient.NO_SUBJECT) return "Re:"
         return if (replyPrefix.containsMatchIn(clean)) clean else "Re: $clean"
     }
 

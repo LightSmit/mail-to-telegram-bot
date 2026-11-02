@@ -3,6 +3,7 @@ package io.github.lightsmit.mail
 import jakarta.mail.Multipart
 import jakarta.mail.Part
 import jakarta.mail.internet.MimeUtility
+import io.github.lightsmit.i18n.SKIP_TOO_LARGE
 import org.jsoup.Jsoup
 import java.nio.file.Files
 import java.nio.file.Path
@@ -229,7 +230,7 @@ object EmailContentExtractor {
             skippedAttachments += SkippedAttachment(
                 fileName = fileName,
                 reason =
-                    "размер превышает установленный предел",
+                    SKIP_TOO_LARGE,
             )
 
             return
@@ -279,7 +280,7 @@ object EmailContentExtractor {
             skippedAttachments += SkippedAttachment(
                 fileName = fileName,
                 reason =
-                    "размер превышает установленный предел",
+                    SKIP_TOO_LARGE,
             )
 
             return

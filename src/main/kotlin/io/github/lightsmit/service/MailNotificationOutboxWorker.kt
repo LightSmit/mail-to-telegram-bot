@@ -55,7 +55,6 @@ class MailNotificationOutboxWorker(
         }
     }
 
-    // ДОБАВЛЕН МОДИФИКАТОР suspend
     suspend fun recoverInterrupted(): Int {
         val recoveredCount = repository.recoverInterrupted(
             now = nowProvider(),
@@ -104,7 +103,6 @@ class MailNotificationOutboxWorker(
         return true
     }
 
-    // ДОБАВЛЕН МОДИФИКАТОР suspend
     private suspend fun handleDeliveryFailure(
         item: MailOutboxItem,
         exception: Exception,

@@ -27,13 +27,11 @@ object TelegramAuthValidator {
     }
 
     /**
+     * Проверяет подпись initData из Telegram.WebApp.
      * @param initData Строка, полученная из Telegram.WebApp.initData
      * @param botToken Токен бота от BotFather
      * @param maxAgeSeconds Максимальный возраст авторизации (защита от replay-атак)
      */
-    fun validate(initData: String, botToken: String, maxAgeSeconds: Long = 86400): Boolean =
-        inspect(initData, botToken, maxAgeSeconds).ok
-
     fun inspect(initData: String, botToken: String, maxAgeSeconds: Long = 86400): Result {
         if (initData.isBlank()) return Result(Failure.EMPTY_INIT_DATA)
 

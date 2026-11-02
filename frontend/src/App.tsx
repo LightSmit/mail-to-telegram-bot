@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import './App.css'
-import { initData, initDataSource, telegramScriptLoaded } from './telegram'
+import { initData } from './telegram'
+import { t } from './i18n'
 import { FiltersPanel, withDefaults, type MailFilters } from './FiltersPanel'
 import { PasswordPanel } from './PasswordPanel'
 import { NotificationsSection, type NotificationSettings } from './NotificationsSection'
 import { MailboxView } from './MailboxView'
-import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider } from './providers'
+import { DataSection } from './DataSection'
+import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider, providerHint, providerSteps, providerTitle } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
 
@@ -29,17 +31,15 @@ const REFRESH_INTERVAL_MS = 15000;
 
 function describeError(error: unknown): string {
   if (error instanceof DOMException && error.name === 'AbortError') {
-    return 'Сервер не ответил вовремя. Попробуйте еще раз.';
+    return t.serverTimeout;
   }
-  return 'Нет связи с сервером. Проверьте интернет и попробуйте еще раз.';
+  return t.noConnection;
 }
 
-// Для 401 показываем, пришли ли вообще данные от Telegram
+// 401: Telegram не передал данные входа (приложение открыто не из чата с ботом)
 function httpError(prefix: string, status: number): string {
-  if (status !== 401) return `${prefix} (HTTP ${status})`;
-  const hashLength = window.location.hash.length;
-  return `${prefix}: Telegram не передал данные входа. Закройте приложение и откройте его из чата с ботом. ` +
-    `(данные: ${initData.length} симв., источник: ${initDataSource}, скрипт Telegram: ${telegramScriptLoaded ? 'да' : 'нет'}, hash: ${hashLength})`;
+  if (status === 401) return t.reopenFromChat(prefix);
+  return `${prefix} (HTTP ${status})`;
 }
 
 // Сервер присылает понятный текст ошибки в поле error
@@ -56,14 +56,14 @@ async function errorText(response: Response, prefix: string): Promise<string> {
 }
 
 function statusLabel(account: Account): string {
-  if (account.filters?.paused) return 'На паузе: письма не приходят';
+  if (account.filters?.paused) return t.statusPaused;
   switch (account.status) {
     case 'OK':
-      return 'Письма приходят';
+      return t.statusOk;
     case 'ERROR':
-      return account.problem ?? 'Не удается подключиться';
+      return account.problem ?? t.statusError;
     default:
-      return 'Подключается…';
+      return t.statusConnecting;
   }
 }
 
@@ -77,7 +77,7 @@ function App() {
   // Открытый ящик: просмотр его писем вместо главного экрана
   const [browsingId, setBrowsingId] = useState<number | null>(null);
   const [notice, setNotice] = useState<Notice>(
-    initData ? null : { kind: 'error', text: 'Откройте приложение из чата с ботом в Telegram: без этого вход невозможен.' }
+    initData ? null : { kind: 'error', text: t.openFromTelegram }
   );
 
   // Форма
@@ -120,7 +120,7 @@ function App() {
       if (response.ok) {
         setAccounts(await response.json());
       } else if (!silent) {
-        setNotice({ kind: 'error', text: await errorText(response, 'Не удалось загрузить ящики') });
+        setNotice({ kind: 'error', text: await errorText(response, t.loadMailboxesFailed) });
       }
     } catch (error) {
       if (!silent) setNotice({ kind: 'error', text: describeError(error) });
@@ -147,17 +147,17 @@ function App() {
   const provider = findProvider(providerId);
   const isCustom = providerId === CUSTOM_PROVIDER_ID;
   const host = isCustom ? customHost.trim() : provider?.host ?? '';
-  const steps = provider?.steps ?? (isCustom ? CUSTOM_STEPS : null);
+  const steps = provider ? providerSteps(provider) : isCustom ? CUSTOM_STEPS : null;
 
   const handleAddAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!host) {
-      setNotice({ kind: 'error', text: 'Выберите почтовый сервис или укажите IMAP-сервер.' });
+      setNotice({ kind: 'error', text: t.chooseProvider });
       return;
     }
 
     setSubmitting(true);
-    setNotice({ kind: 'info', text: 'Проверяем вход в почту. Это займет несколько секунд.' });
+    setNotice({ kind: 'info', text: t.checkingLogin });
     try {
       const response = await request('/accounts', 'POST', {
         name: name.trim(),
@@ -168,11 +168,11 @@ function App() {
       }, ADD_ACCOUNT_TIMEOUT_MS);
 
       if (response.ok) {
-        setNotice({ kind: 'ok', text: 'Ящик подключен. Новые письма будут приходить в чат с ботом.' });
+        setNotice({ kind: 'ok', text: t.mailboxAdded });
         setEmail(''); setPassword(''); setName(''); setProviderId(''); setProviderTouched(false); setCustomHost('');
         await fetchAccounts();
       } else {
-        setNotice({ kind: 'error', text: await errorText(response, 'Не удалось подключить ящик') });
+        setNotice({ kind: 'error', text: await errorText(response, t.addFailed) });
       }
     } catch (error) {
       setNotice({ kind: 'error', text: describeError(error) });
@@ -187,10 +187,10 @@ function App() {
       if (response.ok) {
         const saved = withDefaults(await response.json());
         setAccounts((current) => current.map((item) => (item.id === account.id ? { ...item, filters: saved } : item)));
-        setNotice({ kind: 'ok', text: `Фильтры для ${account.email} сохранены.` });
+        setNotice({ kind: 'ok', text: t.filtersSaved(account.email) });
         return true;
       }
-      setNotice({ kind: 'error', text: await errorText(response, 'Не удалось сохранить фильтры') });
+      setNotice({ kind: 'error', text: await errorText(response, t.filtersFailed) });
     } catch (error) {
       setNotice({ kind: 'error', text: describeError(error) });
     }
@@ -198,15 +198,15 @@ function App() {
   };
 
   const handleUpdatePassword = async (account: Account, newPassword: string): Promise<boolean> => {
-    setNotice({ kind: 'info', text: `Проверяем вход в ${account.email} с новым паролем…` });
+    setNotice({ kind: 'info', text: t.checkingPassword(account.email) });
     try {
       const response = await request(`/accounts/${account.id}/password`, 'PUT', { appPassword: newPassword }, ADD_ACCOUNT_TIMEOUT_MS);
       if (response.ok) {
-        setNotice({ kind: 'ok', text: `Пароль для ${account.email} обновлен, ящик снова подключается.` });
+        setNotice({ kind: 'ok', text: t.passwordUpdated(account.email) });
         await fetchAccounts(true);
         return true;
       }
-      setNotice({ kind: 'error', text: await errorText(response, 'Не удалось обновить пароль') });
+      setNotice({ kind: 'error', text: await errorText(response, t.passwordFailed) });
     } catch (error) {
       setNotice({ kind: 'error', text: describeError(error) });
     }
@@ -226,14 +226,29 @@ function App() {
     try {
       const response = await request('/settings', 'PUT', settings);
       if (response.ok) {
-        setNotice({ kind: 'ok', text: 'Настройки уведомлений сохранены.' });
+        setNotice({ kind: 'ok', text: t.notifySaved });
         return await response.json();
       }
-      setNotice({ kind: 'error', text: await errorText(response, 'Не удалось сохранить настройки') });
+      setNotice({ kind: 'error', text: await errorText(response, t.notifyFailed) });
     } catch (error) {
       setNotice({ kind: 'error', text: describeError(error) });
     }
     return null;
+  };
+
+  const handleDeleteAllData = async (): Promise<boolean> => {
+    try {
+      const response = await request('/me', 'DELETE');
+      if (response.ok) {
+        setAccounts([]);
+        setNotice({ kind: 'ok', text: t.dataDeleted });
+        return true;
+      }
+      setNotice({ kind: 'error', text: await errorText(response, t.dataDeleteFailed) });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return false;
   };
 
   const handleDelete = async (account: Account) => {
@@ -248,10 +263,10 @@ function App() {
     try {
       const response = await request(`/accounts/${account.id}`, 'DELETE');
       if (response.ok) {
-        setNotice({ kind: 'ok', text: `Ящик ${account.email} отключен.` });
+        setNotice({ kind: 'ok', text: t.mailboxRemoved(account.email) });
         await fetchAccounts();
       } else {
-        setNotice({ kind: 'error', text: await errorText(response, 'Не удалось отключить ящик') });
+        setNotice({ kind: 'error', text: await errorText(response, t.removeFailed) });
       }
     } catch (error) {
       setNotice({ kind: 'error', text: describeError(error) });
@@ -273,8 +288,8 @@ function App() {
     <main className="app">
       <header className="masthead">
         <div className="airmail-band" aria-hidden="true" />
-        <h1>Почта в Telegram</h1>
-        <p className="lede">Новые письма из ваших ящиков приходят в чат с ботом.</p>
+        <h1>{t.title}</h1>
+        <p className="lede">{t.lede}</p>
       </header>
 
       {notice && (
@@ -285,13 +300,13 @@ function App() {
 
       <section className="section" aria-labelledby="mailboxes-title">
         <h2 id="mailboxes-title" className="section-title">
-          Мои ящики{accounts.length > 0 && <span className="count">{accounts.length}</span>}
+          {t.myMailboxes}{accounts.length > 0 && <span className="count">{accounts.length}</span>}
         </h2>
 
         {loading ? (
-          <p className="empty">Загружаем ящики…</p>
+          <p className="empty">{t.loadingMailboxes}</p>
         ) : accounts.length === 0 ? (
-          <p className="empty">Пока ни одного ящика. Подключите первый ниже, и новые письма начнут приходить в этот чат.</p>
+          <p className="empty">{t.noMailboxes}</p>
         ) : (
           <ul className="mailbox-list">
             {accounts.map((acc) => (
@@ -302,14 +317,14 @@ function App() {
                     type="button"
                     className="mailbox-info mailbox-open"
                     onClick={() => setBrowsingId(acc.id)}
-                    aria-label={`Открыть письма ящика ${acc.email}`}
+                    aria-label={t.openMailbox(acc.email)}
                   >
                     <span className="mailbox-name">{acc.name !== acc.email ? acc.name : acc.email}</span>
                     {acc.name !== acc.email && <span className="mailbox-address">{acc.email}</span>}
                     <span className={`mailbox-status status-text-${acc.filters?.paused ? 'paused' : (acc.status ?? 'CONNECTING').toLowerCase()}`}>
                       {statusLabel(acc)}
                     </span>
-                    <span className="mailbox-open-hint">Письма ›</span>
+                    <span className="mailbox-open-hint">{t.emailsLink}</span>
                   </button>
                   <div className="mailbox-actions">
                     <button
@@ -318,7 +333,7 @@ function App() {
                       aria-expanded={filtersOpenId === acc.id}
                       onClick={() => setFiltersOpenId((current) => (current === acc.id ? null : acc.id))}
                     >
-                      {acc.status === 'ERROR' ? 'Исправить' : 'Настройки'}
+                      {acc.status === 'ERROR' ? t.fix : t.settings}
                     </button>
                     <button
                       type="button"
@@ -327,7 +342,7 @@ function App() {
                       onClick={() => handleDelete(acc)}
                       onBlur={() => setConfirmDeleteId((current) => (current === acc.id ? null : current))}
                     >
-                      {deletingId === acc.id ? 'Отключаем…' : confirmDeleteId === acc.id ? 'Отключить?' : 'Отключить'}
+                      {deletingId === acc.id ? t.disconnecting : confirmDeleteId === acc.id ? t.disconnectConfirm : t.disconnect}
                     </button>
                   </div>
                 </div>
@@ -356,11 +371,11 @@ function App() {
       )}
 
       <section className="section" aria-labelledby="add-title">
-        <h2 id="add-title" className="section-title">Подключить ящик</h2>
+        <h2 id="add-title" className="section-title">{t.addTitle}</h2>
 
         <form onSubmit={handleAddAccount} className="add-form">
           <label className="field">
-            <span className="field-label">Адрес почты</span>
+            <span className="field-label">{t.emailLabel}</span>
             <input
               type="email"
               inputMode="email"
@@ -373,23 +388,23 @@ function App() {
           </label>
 
           <label className="field">
-            <span className="field-label">Почтовый сервис</span>
+            <span className="field-label">{t.providerLabel}</span>
             <select
               value={providerId}
               onChange={e => { setProviderId(e.target.value); setProviderTouched(true); }}
               required
             >
-              <option value="" disabled>Выберите сервис</option>
+              <option value="" disabled>{t.chooseProviderOption}</option>
               {PROVIDERS.map((item) => (
-                <option key={item.id} value={item.id}>{item.title}</option>
+                <option key={item.id} value={item.id}>{providerTitle(item)}</option>
               ))}
-              <option value={CUSTOM_PROVIDER_ID}>Другой сервис</option>
+              <option value={CUSTOM_PROVIDER_ID}>{t.otherProvider}</option>
             </select>
           </label>
 
           {isCustom && (
             <label className="field">
-              <span className="field-label">IMAP-сервер</span>
+              <span className="field-label">{t.imapServer}</span>
               <input
                 placeholder="imap.example.com"
                 autoComplete="off"
@@ -401,22 +416,19 @@ function App() {
           )}
 
           <aside className="app-password" aria-labelledby="app-password-title">
-            <h3 id="app-password-title">Нужен пароль приложения, а не пароль от почты</h3>
-            <p>
-              Почтовые сервисы не пускают сторонние программы по обычному паролю. Создайте отдельный
-              пароль приложения: это займет минуту, а отозвать его можно в любой момент, не меняя пароль от почты.
-            </p>
+            <h3 id="app-password-title">{t.appPasswordTitle}</h3>
+            <p>{t.appPasswordLede}</p>
             {steps ? (
               <ol className="steps">
                 {steps.map((step) => <li key={step}>{step}</li>)}
               </ol>
             ) : (
-              <p className="steps-placeholder">Введите адрес почты, и здесь появится инструкция для вашего сервиса.</p>
+              <p className="steps-placeholder">{t.stepsPlaceholder}</p>
             )}
           </aside>
 
           <label className="field">
-            <span className="field-label">Пароль приложения</span>
+            <span className="field-label">{t.appPasswordLabel}</span>
             <input
               type="password"
               autoComplete="off"
@@ -424,19 +436,21 @@ function App() {
               onChange={e => setPassword(e.target.value)}
               required
             />
-            {provider && <span className="field-hint">{provider.passwordHint}</span>}
+            {provider && <span className="field-hint">{providerHint(provider)}</span>}
           </label>
 
           <label className="field">
-            <span className="field-label">Название <span className="optional">(необязательно)</span></span>
-            <input placeholder="Например, «Работа»" value={name} onChange={e => setName(e.target.value)} />
+            <span className="field-label">{t.nameLabel} <span className="optional">{t.optional}</span></span>
+            <input placeholder={t.namePlaceholder} value={name} onChange={e => setName(e.target.value)} />
           </label>
 
           <button type="submit" className="primary" disabled={submitting}>
-            {submitting ? 'Проверяем вход…' : 'Подключить ящик'}
+            {submitting ? t.checkingShort : t.connect}
           </button>
         </form>
       </section>
+
+      {accounts.length > 0 && <DataSection onDelete={handleDeleteAllData} />}
     </main>
   )
 }

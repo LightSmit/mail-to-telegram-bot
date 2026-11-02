@@ -186,23 +186,6 @@ class MailAccountRepository {
             }
         }
 
-    /** Добавляет ящик, только если у владельца еще нет ящика с таким логином. */
-    suspend fun insertIfAbsent(ownerId: Long, config: MailAccountConfig): Boolean =
-        withContext(DatabaseManager.dispatcher) {
-            DatabaseManager.dataSource.connection.use { connection ->
-                connection.prepareStatement(
-                    """
-                    INSERT INTO mail_accounts (owner_id, name, host, port, username, password_encrypted)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(owner_id, username) DO NOTHING
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.bindAccount(ownerId, config)
-                    statement.executeUpdate() > 0
-                }
-            }
-        }
-
     /** Удаляет ящик владельца. Возвращает удаленную запись или null, если ее нет (или она чужая). */
     suspend fun delete(id: Long, ownerId: Long): MailAccountConfig? = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { t } from './i18n'
 
 export interface MailFilters {
   paused: boolean;
@@ -61,10 +62,8 @@ export function FiltersPanel({ initial: rawInitial, onSave, onClose }: Props) {
         <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} />
         <span className="toggle-track" aria-hidden="true" />
         <span className="toggle-text">
-          <span className="toggle-title">Пауза</span>
-          <span className="toggle-hint">
-            Письма из ящика не приходят. Письма, пришедшие во время паузы, после ее снятия тоже не придут.
-          </span>
+          <span className="toggle-title">{t.pause}</span>
+          <span className="toggle-hint">{t.pauseHint}</span>
         </span>
       </label>
 
@@ -72,54 +71,50 @@ export function FiltersPanel({ initial: rawInitial, onSave, onClose }: Props) {
         <input type="checkbox" checked={skipBulk} onChange={(e) => setSkipBulk(e.target.checked)} />
         <span className="toggle-track" aria-hidden="true" />
         <span className="toggle-text">
-          <span className="toggle-title">Не присылать рассылки</span>
-          <span className="toggle-hint">
-            Новости, акции и уведомления сервисов: письма со ссылкой «Отписаться», а также автоответы.
-          </span>
+          <span className="toggle-title">{t.skipBulk}</span>
+          <span className="toggle-hint">{t.skipBulkHint}</span>
         </span>
       </label>
 
       <label className="field">
-        <span className="field-label">Присылать только от</span>
+        <span className="field-label">{t.onlyFrom}</span>
         <textarea
           rows={3}
           placeholder={'boss@company.ru\nbank.ru'}
           value={allowed}
           onChange={(e) => setAllowed(e.target.value)}
         />
-        <span className="field-hint">
-          Один или несколько адресов или доменов, по одному в строке. Если поле пустое, приходят письма от всех.
-        </span>
+        <span className="field-hint">{t.onlyFromHint}</span>
       </label>
 
       <label className="field">
-        <span className="field-label">Не присылать письма от</span>
+        <span className="field-label">{t.notFrom}</span>
         <textarea
           rows={3}
           placeholder={'news@shop.ru\nexample.com'}
           value={senders}
           onChange={(e) => setSenders(e.target.value)}
         />
-        <span className="field-hint">Адрес или домен целиком, по одному в строке.</span>
+        <span className="field-hint">{t.notFromHint}</span>
       </label>
 
       <label className="field">
-        <span className="field-label">Не присылать, если в теме есть</span>
+        <span className="field-label">{t.notSubject}</span>
         <textarea
           rows={3}
-          placeholder={'скидка\nвебинар'}
+          placeholder={t.subjectPlaceholder}
           value={words}
           onChange={(e) => setWords(e.target.value)}
         />
-        <span className="field-hint">Слова или фразы, по одной в строке. Заглавные и строчные буквы не различаются.</span>
+        <span className="field-hint">{t.notSubjectHint}</span>
       </label>
 
       <div className="filters-actions">
         <button type="button" className="primary" disabled={saving} onClick={save}>
-          {saving ? 'Сохраняем…' : 'Сохранить фильтры'}
+          {saving ? t.saving : t.saveFilters}
         </button>
         <button type="button" className="secondary" disabled={saving} onClick={onClose}>
-          Закрыть
+          {t.close}
         </button>
       </div>
     </div>

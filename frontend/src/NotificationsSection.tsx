@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { t } from './i18n'
 
 export interface NotificationSettings {
   timezone: string;
@@ -8,14 +9,8 @@ export interface NotificationSettings {
   digestHours: number;
 }
 
-const DIGEST_OPTIONS: { hours: number; label: string }[] = [
-  { hours: 0, label: 'Сразу, каждое письмо' },
-  { hours: 1, label: 'Сводкой раз в час' },
-  { hours: 3, label: 'Сводкой раз в 3 часа' },
-  { hours: 6, label: 'Сводкой раз в 6 часов' },
-  { hours: 12, label: 'Сводкой дважды в день (9:00 и 21:00)' },
-  { hours: 24, label: 'Сводкой раз в день (9:00)' },
-];
+// Подписи вариантов в том же порядке, что и t.digestOptions
+const DIGEST_OPTIONS = [0, 1, 3, 6, 12, 24].map((hours, index) => ({ hours, label: t.digestOptions[index] }));
 
 function browserTimezone(): string {
   try {
@@ -64,11 +59,11 @@ export function NotificationsSection({ load, save }: Props) {
 
   return (
     <section className="section" aria-labelledby="notify-title">
-      <h2 id="notify-title" className="section-title">Уведомления</h2>
+      <h2 id="notify-title" className="section-title">{t.notifications}</h2>
 
       <div className="filters notify">
         <label className="field">
-          <span className="field-label">Как присылать письма</span>
+          <span className="field-label">{t.howToSend}</span>
           <select
             value={settings.digestHours}
             onChange={(e) => update({ digestHours: Number(e.target.value) })}
@@ -79,8 +74,8 @@ export function NotificationsSection({ load, save }: Props) {
           </select>
           <span className="field-hint">
             {settings.digestHours > 0
-              ? 'Письма копятся и приходят пачкой в нужное время. Звук только у первого письма в пачке.'
-              : 'Каждое письмо приходит в чат в течение нескольких секунд.'}
+              ? t.digestOnHint
+              : t.digestOffHint}
           </span>
         </label>
 
@@ -92,29 +87,29 @@ export function NotificationsSection({ load, save }: Props) {
           />
           <span className="toggle-track" aria-hidden="true" />
           <span className="toggle-text">
-            <span className="toggle-title">Тихие часы</span>
-            <span className="toggle-hint">В это время письма приходят без звука.</span>
+            <span className="toggle-title">{t.quietHours}</span>
+            <span className="toggle-hint">{t.quietHint}</span>
           </span>
         </label>
 
         {settings.quietEnabled && (
           <div className="time-range">
             <label className="field">
-              <span className="field-label">С</span>
+              <span className="field-label">{t.from}</span>
               <input type="time" value={settings.quietStart} onChange={(e) => update({ quietStart: e.target.value })} />
             </label>
             <label className="field">
-              <span className="field-label">До</span>
+              <span className="field-label">{t.to}</span>
               <input type="time" value={settings.quietEnd} onChange={(e) => update({ quietEnd: e.target.value })} />
             </label>
           </div>
         )}
 
-        <span className="field-hint">Часовой пояс: {browserTimezone()}</span>
+        <span className="field-hint">{t.timezone(browserTimezone())}</span>
 
         {dirty && (
           <button type="button" className="primary" disabled={saving} onClick={submit}>
-            {saving ? 'Сохраняем…' : 'Сохранить'}
+            {saving ? t.saving : t.save}
           </button>
         )}
       </div>

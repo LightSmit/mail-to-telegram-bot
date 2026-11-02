@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { t } from './i18n'
 import { showBackButton } from './telegram'
 
 type Folder = 'inbox' | 'sent';
@@ -67,17 +68,21 @@ function formatListDate(millis?: number | null): string {
   const date = new Date(millis);
   const now = new Date();
   if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString(t.locale, { hour: '2-digit', minute: '2-digit' });
   }
   if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+    return date.toLocaleDateString(t.locale, { day: 'numeric', month: 'short' });
   }
-  return date.toLocaleDateString('ru-RU');
+  return date.toLocaleDateString(t.locale);
 }
+
+// Сервер ставит служебные заглушки вместо пустой темы и отправителя
+const displaySubject = (subject: string) => (!subject || subject === '(no subject)' ? t.noSubject : subject);
+const displaySender = (from: string) => (!from || from === '(sender unknown)' ? t.unknownSender : from);
 
 function formatFullDate(millis?: number | null): string {
   if (!millis) return '';
-  return new Date(millis).toLocaleString('ru-RU', {
+  return new Date(millis).toLocaleString(t.locale, {
     day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
   });
 }
@@ -113,7 +118,7 @@ export function MailboxView({ account, request, onClose }: Props) {
       const response = await request(`/accounts/${account.id}/messages?${params}`, 'GET', undefined, MAIL_TIMEOUT_MS);
       if (id !== requestId.current) return;
       if (!response.ok) {
-        setError(await readError(response, 'Не удалось загрузить письма'));
+        setError(await readError(response, t.loadEmailsFailed));
         return;
       }
       const page: MailPage = await response.json();
@@ -127,7 +132,7 @@ export function MailboxView({ account, request, onClose }: Props) {
         return [...current, ...page.items.filter((item) => !known.has(item.uid))];
       });
     } catch {
-      if (id === requestId.current) setError('Почтовый сервер не ответил вовремя. Попробуйте еще раз.');
+      if (id === requestId.current) setError(t.mailServerTimeout);
     } finally {
       if (id === requestId.current) setLoading(false);
     }
@@ -154,7 +159,7 @@ export function MailboxView({ account, request, onClose }: Props) {
     const filtered = withAttachments ? items.filter((item) => item.hasAttachments) : items;
     const sorted = [...filtered];
     if (sort === 'old') sorted.sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
-    else if (sort === 'sender') sorted.sort((a, b) => a.fromName.localeCompare(b.fromName, 'ru'));
+    else if (sort === 'sender') sorted.sort((a, b) => a.fromName.localeCompare(b.fromName, t.locale));
     else sorted.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
     return sorted;
   }, [items, withAttachments, sort]);
@@ -179,7 +184,7 @@ export function MailboxView({ account, request, onClose }: Props) {
   return (
     <div className="mail-view">
       <div className="mail-head">
-        <button type="button" className="link-button back" onClick={onClose}>← Ящики</button>
+        <button type="button" className="link-button back" onClick={onClose}>{t.backToMailboxes}</button>
         <div className="mail-title">
           <span className="mailbox-name">{account.name !== account.email ? account.name : account.email}</span>
           {account.name !== account.email && <span className="mailbox-address">{account.email}</span>}
@@ -187,36 +192,34 @@ export function MailboxView({ account, request, onClose }: Props) {
       </div>
 
       <div className="segmented" role="tablist">
-        <button type="button" role="tab" aria-selected={folder === 'inbox'} onClick={() => setFolder('inbox')}>Входящие</button>
-        <button type="button" role="tab" aria-selected={folder === 'sent'} onClick={() => setFolder('sent')}>Отправленные</button>
+        <button type="button" role="tab" aria-selected={folder === 'inbox'} onClick={() => setFolder('inbox')}>{t.inbox}</button>
+        <button type="button" role="tab" aria-selected={folder === 'sent'} onClick={() => setFolder('sent')}>{t.sent}</button>
       </div>
 
       <input
         type="search"
         className="mail-search"
-        placeholder="Поиск по теме, отправителю, получателю"
+        placeholder={t.searchPlaceholder}
         value={queryInput}
         onChange={(e) => setQueryInput(e.target.value)}
       />
 
       <div className="chips">
         <button type="button" className="chip" aria-pressed={unreadOnly} onClick={() => setUnreadOnly((value) => !value)}>
-          Непрочитанные
+          {t.unread}
         </button>
         <button type="button" className="chip" aria-pressed={withAttachments} onClick={() => setWithAttachments((value) => !value)}>
-          📎 С вложениями
+          {t.withAttachments}
         </button>
-        <select className="chip-select" value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Сортировка">
-          <option value="new">Сначала новые</option>
-          <option value="old">Сначала старые</option>
-          <option value="sender">По отправителю</option>
+        <select className="chip-select" value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label={t.sortLabel}>
+          <option value="new">{t.sortNew}</option>
+          <option value="old">{t.sortOld}</option>
+          <option value="sender">{t.sortSender}</option>
         </select>
       </div>
 
       {query && (
-        <p className="field-hint search-hint">
-          Ищу по любой части темы, имени или адреса в последних 2000 письмах папки, в более старых - по целым словам.
-        </p>
+        <p className="field-hint search-hint">{t.searchHint}</p>
       )}
 
       {error && <div className="notice notice-error">{error}</div>}
@@ -224,11 +227,11 @@ export function MailboxView({ account, request, onClose }: Props) {
       {!error && (
         <p className="mail-count">
           {loading && items.length === 0
-            ? 'Загружаем письма…'
+            ? t.loadingEmails
             : query || unreadOnly
-              ? `Найдено: ${total}`
-              : `Писем в папке: ${total}`}
-          {withAttachments && items.length > 0 && ` · с вложениями среди загруженных: ${visible.length}`}
+              ? t.found(total)
+              : t.inFolder(total)}
+          {withAttachments && items.length > 0 && t.attachmentsAmongLoaded(visible.length)}
         </p>
       )}
 
@@ -238,12 +241,12 @@ export function MailboxView({ account, request, onClose }: Props) {
             <li key={item.uid}>
               <button type="button" className={item.seen ? 'mail-row' : 'mail-row unread'} onClick={() => setOpenUid(item.uid)}>
                 <span className="mail-row-top">
-                  <span className="mail-from">{folder === 'sent' ? `Кому: ${item.to || '—'}` : item.fromName}</span>
+                  <span className="mail-from">{folder === 'sent' ? `${t.toPrefix}${item.to || '—'}` : item.fromName || t.unknownSender}</span>
                   <span className="mail-date">{formatListDate(item.date)}</span>
                 </span>
                 <span className="mail-subject">
-                  {item.hasAttachments && <span aria-label="Есть вложения">📎 </span>}
-                  {item.subject}
+                  {item.hasAttachments && <span aria-label={t.hasAttachments}>📎 </span>}
+                  {item.subject || t.noSubject}
                 </span>
               </button>
             </li>
@@ -252,16 +255,16 @@ export function MailboxView({ account, request, onClose }: Props) {
       )}
 
       {!loading && !error && items.length > 0 && visible.length === 0 && (
-        <p className="empty">Среди загруженных писем нет писем с вложениями. Загрузите еще или снимите фильтр.</p>
+        <p className="empty">{t.noAttachmentsLoaded}</p>
       )}
 
       {!loading && !error && items.length === 0 && (
-        <p className="empty">{query || unreadOnly ? 'Ничего не нашлось.' : 'В этой папке пока нет писем.'}</p>
+        <p className="empty">{query || unreadOnly ? t.nothingFound : t.emptyFolder}</p>
       )}
 
       {hasMore && !error && (
         <button type="button" className="secondary more" disabled={loading} onClick={() => load(items.length)}>
-          {loading ? 'Загружаем…' : 'Показать еще'}
+          {loading ? t.loading : t.showMore}
         </button>
       )}
     </div>
@@ -292,12 +295,12 @@ function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onM
       try {
         const response = await request(`${base}?${params}`, 'GET', undefined, MAIL_TIMEOUT_MS);
         if (!response.ok) {
-          setError(await readError(response, 'Не удалось открыть письмо'));
+          setError(await readError(response, t.openEmailFailed));
           return;
         }
         setMessage(await response.json());
       } catch {
-        setError('Почтовый сервер не ответил вовремя. Попробуйте еще раз.');
+        setError(t.mailServerTimeout);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -310,12 +313,12 @@ function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onM
       if (response.ok) {
         setMessage((current) => (current ? { ...current, seen: true } : current));
         onMarkedSeen();
-        setStatus('Письмо отмечено прочитанным в ящике.');
+        setStatus(t.markedRead);
       } else {
-        setStatus(await readError(response, 'Не удалось отметить письмо'));
+        setStatus(await readError(response, t.markReadFailed));
       }
     } catch {
-      setStatus('Нет связи с сервером.');
+      setStatus(t.noServer);
     } finally {
       setBusy(false);
     }
@@ -326,10 +329,10 @@ function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onM
     try {
       const response = await request(`${base}/attachments?${params}`, 'POST');
       setStatus(response.ok
-        ? 'Отправляю вложения в чат с ботом. Можно закрыть приложение.'
-        : await readError(response, 'Не удалось отправить вложения'));
+        ? t.sendingToChat
+        : await readError(response, t.sendAttachmentsFailed));
     } catch {
-      setStatus('Нет связи с сервером.');
+      setStatus(t.noServer);
     } finally {
       setBusy(false);
     }
@@ -338,20 +341,20 @@ function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onM
   return (
     <div className="mail-view">
       <div className="mail-head">
-        <button type="button" className="link-button back" onClick={onBack}>← К списку</button>
+        <button type="button" className="link-button back" onClick={onBack}>{t.backToList}</button>
       </div>
 
       {error && <div className="notice notice-error">{error}</div>}
-      {!error && !message && <p className="mail-count">Открываем письмо…</p>}
+      {!error && !message && <p className="mail-count">{t.openingEmail}</p>}
 
       {message && (
         <article className="message">
-          <h2 className="message-subject">{message.subject}</h2>
+          <h2 className="message-subject">{displaySubject(message.subject)}</h2>
           <dl className="message-meta">
-            <dt>От</dt><dd>{message.from}</dd>
-            <dt>Кому</dt><dd>{message.to || '—'}</dd>
-            {message.cc && (<><dt>Копия</dt><dd>{message.cc}</dd></>)}
-            <dt>Дата</dt><dd>{formatFullDate(message.date)}</dd>
+            <dt>{t.metaFrom}</dt><dd>{displaySender(message.from)}</dd>
+            <dt>{t.metaTo}</dt><dd>{message.to || '—'}</dd>
+            {message.cc && (<><dt>{t.metaCc}</dt><dd>{message.cc}</dd></>)}
+            <dt>{t.metaDate}</dt><dd>{formatFullDate(message.date)}</dd>
           </dl>
 
           {message.attachments.length > 0 && (
@@ -364,17 +367,17 @@ function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onM
 
           <div className="message-actions">
             {folder === 'inbox' && !message.seen && (
-              <button type="button" className="secondary" disabled={busy} onClick={markRead}>✅ Прочитано</button>
+              <button type="button" className="secondary" disabled={busy} onClick={markRead}>{t.markRead}</button>
             )}
             {folder === 'inbox' && message.attachments.length > 0 && (
               <button type="button" className="secondary" disabled={busy} onClick={sendAttachments}>
-                📎 Вложения в чат
+                {t.attachmentsToChat}
               </button>
             )}
           </div>
           {status && <p className="field-hint">{status}</p>}
 
-          <div className="message-body">{message.body ?? 'В письме нет текста.'}</div>
+          <div className="message-body">{message.body ?? t.noText}</div>
         </article>
       )}
     </div>

@@ -7,6 +7,8 @@ data class TelegramCallbackQueryUpdate(
     val chatId: Long?,
     val messageId: Long?,
     val data: String?,
+    // Язык Telegram пользователя ("ru", "en"...), если Telegram его передал
+    val languageCode: String? = null,
 )
 
 /** Текстовое сообщение пользователя боту (например, /start). */
@@ -16,6 +18,7 @@ data class TelegramMessageUpdate(
     val chatType: String?,
     val fromUserId: Long,
     val text: String?,
+    val languageCode: String? = null,
 )
 
 data class TelegramUpdateBatch(

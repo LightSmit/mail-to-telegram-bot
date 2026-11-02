@@ -58,6 +58,18 @@ class UserSettingsRepository {
         return loaded
     }
 
+    suspend fun delete(userId: Long) {
+        withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement("DELETE FROM user_settings WHERE user_id = ?").use { statement ->
+                    statement.setLong(1, userId)
+                    statement.executeUpdate()
+                }
+            }
+        }
+        cache.remove(userId)
+    }
+
     suspend fun save(userId: Long, settings: NotificationSettings, now: Instant = Instant.now()) {
         withContext(DatabaseManager.dispatcher) {
             DatabaseManager.dataSource.connection.use { connection ->

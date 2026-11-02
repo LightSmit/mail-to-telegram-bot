@@ -18,8 +18,11 @@ sealed interface BrowseResult<out T> {
     data class Ok<T>(val value: T) : BrowseResult<T>
     data object MailboxNotFound : BrowseResult<Nothing>
     data object MessageNotFound : BrowseResult<Nothing>
-    data class Failed(val message: String) : BrowseResult<Nothing>
+    data class Failed(val reason: BrowseFailure) : BrowseResult<Nothing>
 }
+
+/** Почему не удалось получить письма; текст для пользователя подбирает API на его языке. */
+enum class BrowseFailure { TIMEOUT, AUTH, NO_SENT_FOLDER, OTHER }
 
 /**
  * Просмотр писем в Mini App. Письма читаются из ящика по запросу и на сервере
@@ -86,16 +89,16 @@ class MailBrowserService(
             val value = withTimeout(REQUEST_TIMEOUT_MILLIS) { block(account) }
             if (value != null) BrowseResult.Ok(value) else BrowseResult.MessageNotFound
         } catch (exception: TimeoutCancellationException) {
-            BrowseResult.Failed("Почтовый сервер отвечает слишком долго. Попробуйте еще раз")
+            BrowseResult.Failed(BrowseFailure.TIMEOUT)
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: AuthenticationFailedException) {
-            BrowseResult.Failed("Почта не пускает бота: обновите пароль приложения в настройках ящика")
+            BrowseResult.Failed(BrowseFailure.AUTH)
         } catch (exception: MailFolderNotFoundException) {
-            BrowseResult.Failed("В этом ящике не нашлась папка «Отправленные»")
+            BrowseResult.Failed(BrowseFailure.NO_SENT_FOLDER)
         } catch (exception: Exception) {
             logger.warn("Mail browse request for mailbox {} failed: {}", account.username, exception.javaClass.simpleName)
-            BrowseResult.Failed("Не удалось получить письма из ящика. Попробуйте еще раз")
+            BrowseResult.Failed(BrowseFailure.OTHER)
         }
     }
 

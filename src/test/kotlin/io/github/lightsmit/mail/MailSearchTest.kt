@@ -8,7 +8,7 @@ class MailSearchTest {
 
     @Test
     fun `search ignores case, extra spaces and the letter yo`() {
-        assertEquals("отчет за неделю", normalizeForSearch("  Отчёт   за НЕДЕЛЮ "))
+        assertEquals("отчет за неделю", normalizeForSearch("  Отч\u0451т   за НЕДЕЛЮ "))
     }
 
     @Test

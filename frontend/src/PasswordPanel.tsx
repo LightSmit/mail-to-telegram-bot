@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { PROVIDERS } from './providers'
+import { t } from './i18n'
+import { PROVIDERS, providerHint } from './providers'
 
 interface Props {
   host: string;
@@ -26,16 +27,14 @@ export function PasswordPanel({ host, broken, onSave }: Props) {
   return (
     <form className={broken ? 'filters password-panel broken' : 'filters password-panel'} onSubmit={save}>
       <div className="toggle-text">
-        <span className="toggle-title">Пароль приложения</span>
+        <span className="toggle-title">{t.appPasswordLabel}</span>
         <span className="toggle-hint">
-          {broken
-            ? 'Почта не пускает бота со старым паролем. Создайте новый пароль приложения в настройках почты и введите его здесь: фильтры сохранятся.'
-            : 'Если вы сменили пароль от почты или удалили пароль приложения, введите новый. Фильтры сохранятся.'}
+          {broken ? t.passwordBrokenHint : t.passwordHint}
         </span>
       </div>
 
       <label className="field">
-        <span className="field-label">Новый пароль приложения</span>
+        <span className="field-label">{t.newAppPassword}</span>
         <input
           type="password"
           autoComplete="new-password"
@@ -43,11 +42,11 @@ export function PasswordPanel({ host, broken, onSave }: Props) {
           onChange={(e) => setPassword(e.target.value)}
           disabled={saving}
         />
-        {provider && <span className="field-hint">{provider.passwordHint}</span>}
+        {provider && <span className="field-hint">{providerHint(provider)}</span>}
       </label>
 
       <button type="submit" className="primary" disabled={saving || !password.trim()}>
-        {saving ? 'Проверяем вход…' : 'Обновить пароль'}
+        {saving ? t.checkingShort : t.updatePassword}
       </button>
     </form>
   );

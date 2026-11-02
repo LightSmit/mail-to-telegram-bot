@@ -3,7 +3,10 @@ import { createRoot } from 'react-dom/client'
 import WebApp from '@twa-dev/sdk'
 import App from './App.tsx'
 import { telegramScriptLoaded } from './telegram'
+import { lang } from './i18n'
 import './index.css'
+
+document.documentElement.lang = lang;
 
 // Вызываем методы Telegram, только если официальный скрипт загрузился
 if (telegramScriptLoaded) {

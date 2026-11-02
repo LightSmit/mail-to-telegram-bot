@@ -1,10 +1,15 @@
 package io.github.lightsmit.storage
 
+import io.github.lightsmit.i18n.Lang
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 
-/** Все, кто хоть раз писал боту или открывал приложение: для статистики и рассылок. */
+/** Все, кто хоть раз писал боту или открывал приложение: для статистики, рассылок и языка интерфейса. */
 class BotUserRepository {
+
+    // Язык нужен при каждом уведомлении о письме: держим в памяти
+    private val languages = ConcurrentHashMap<Long, Lang>()
 
     init {
         DatabaseManager.dataSource.connection.use { connection ->
@@ -20,24 +25,62 @@ class BotUserRepository {
                     """.trimIndent(),
                 )
             }
+
+            // Язык Telegram пользователя (добавлен позже)
+            val hasLanguage = connection.createStatement().use { statement ->
+                statement.executeQuery("PRAGMA table_info(bot_users)").use { rs ->
+                    var found = false
+                    while (rs.next()) if (rs.getString("name") == "language") found = true
+                    found
+                }
+            }
+            if (!hasLanguage) {
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate("ALTER TABLE bot_users ADD COLUMN language TEXT")
+                }
+            }
         }
     }
 
     /** Отмечает, что пользователь был активен (и снимает пометку "заблокировал бота"). */
-    suspend fun touch(userId: Long, now: Instant = Instant.now()) = withContext(DatabaseManager.dispatcher) {
-        DatabaseManager.dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                INSERT INTO bot_users (user_id, first_seen_at, last_seen_at) VALUES (?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, blocked = 0
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setLong(1, userId)
-                statement.setLong(2, now.toEpochMilli())
-                statement.setLong(3, now.toEpochMilli())
-                statement.executeUpdate()
+    suspend fun touch(userId: Long, languageCode: String? = null, now: Instant = Instant.now()) {
+        val language = languageCode?.takeIf(String::isNotBlank)?.let(Lang::fromCode)
+        withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO bot_users (user_id, first_seen_at, last_seen_at, language) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        last_seen_at = excluded.last_seen_at,
+                        blocked = 0,
+                        language = COALESCE(excluded.language, bot_users.language)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, userId)
+                    statement.setLong(2, now.toEpochMilli())
+                    statement.setLong(3, now.toEpochMilli())
+                    statement.setString(4, language?.name)
+                    statement.executeUpdate()
+                }
             }
         }
+        language?.let { value -> languages[userId] = value }
+    }
+
+    /** Язык интерфейса пользователя: последний известный из Telegram, по умолчанию русский. */
+    suspend fun language(userId: Long): Lang {
+        languages[userId]?.let { language -> return language }
+        val stored = withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement("SELECT language FROM bot_users WHERE user_id = ?").use { statement ->
+                    statement.setLong(1, userId)
+                    statement.executeQuery().use { rs -> if (rs.next()) rs.getString(1) else null }
+                }
+            }
+        }
+        val language = stored?.let { name -> runCatching { Lang.valueOf(name) }.getOrNull() } ?: Lang.RU
+        languages[userId] = language
+        return language
     }
 
     /** Заносит владельцев ящиков, которых еще нет в таблице (они пришли до учета пользователей). */
@@ -54,6 +97,18 @@ class BotUserRepository {
                 statement.executeUpdate()
             }
         }
+    }
+
+    suspend fun delete(userId: Long) {
+        withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement("DELETE FROM bot_users WHERE user_id = ?").use { statement ->
+                    statement.setLong(1, userId)
+                    statement.executeUpdate()
+                }
+            }
+        }
+        languages.remove(userId)
     }
 
     suspend fun markBlocked(userId: Long) = withContext(DatabaseManager.dispatcher) {

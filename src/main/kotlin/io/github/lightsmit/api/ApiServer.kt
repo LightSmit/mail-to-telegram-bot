@@ -6,6 +6,9 @@ import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.mail.MailFolderRole
 import io.github.lightsmit.mail.MailListPage
 import io.github.lightsmit.mail.MailMessageView
+import io.github.lightsmit.i18n.Lang
+import io.github.lightsmit.i18n.Texts
+import io.github.lightsmit.service.BrowseFailure
 import io.github.lightsmit.service.BrowseResult
 import io.github.lightsmit.service.MailBrowserService
 import io.github.lightsmit.service.NewMailAccount
@@ -13,6 +16,7 @@ import io.github.lightsmit.service.NotificationSchedule
 import io.github.lightsmit.service.NotificationSettings
 import io.github.lightsmit.service.NotificationSettingsService
 import io.github.lightsmit.service.UpdatePasswordResult
+import io.github.lightsmit.service.UserDataService
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -28,6 +32,7 @@ import io.ktor.server.routing.*
 import io.ktor.util.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -159,14 +164,20 @@ class ApiServer(
     private val botToken: String,
     private val accountService: MailAccountService,
     // Вызывается для каждого авторизованного запроса: учет пользователей
-    private val onUserSeen: suspend (Long) -> Unit = {},
+    private val onUserSeen: suspend (Long, String?) -> Unit = { _, _ -> },
     // Тихие часы и сводка; null - раздел в приложении не работает
     private val notificationSettings: NotificationSettingsService? = null,
     // Просмотр писем ящика в приложении
     private val mailBrowser: MailBrowserService? = null,
+    // Удаление всех данных пользователя
+    private val userData: UserDataService? = null,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
+    // Язык интерфейса пользователя (из Telegram): на нем отвечаем ошибками
+    private val LangKey = AttributeKey<Lang>("Lang")
+
+    private val ApplicationCall.texts: Texts get() = attributes[LangKey].texts
 
     fun start() {
         embeddedServer(Netty, port = port) {
@@ -224,8 +235,9 @@ class ApiServer(
                             return@intercept
                         }
 
-                        // Достаем user_id из initData
-                        val userId = extractUserId(initData)
+                        // Достаем пользователя из initData: id и язык
+                        val user = extractUser(initData)
+                        val userId = user?.first
                         if (userId == null) {
                             call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid user data"))
                             finish()
@@ -234,7 +246,8 @@ class ApiServer(
 
                         // Сохраняем user_id в контекст запроса
                         call.attributes.put(UserIdKey, userId)
-                        runCatching { onUserSeen(userId) }
+                        call.attributes.put(LangKey, Lang.fromCode(user.second))
+                        runCatching { onUserSeen(userId, user.second) }
                     }
 
                     // Ящики текущего пользователя
@@ -248,7 +261,7 @@ class ApiServer(
                                 email = account.username,
                                 host = account.host,
                                 status = health.status.name,
-                                problem = health.problem,
+                                problem = health.problem?.text(call.texts),
                                 filters = account.filters.toDto(),
                             )
                         }
@@ -261,6 +274,7 @@ class ApiServer(
                         val request = call.receive<AddAccountRequestDto>()
 
                         val result = accountService.add(
+                            lang = call.attributes[LangKey],
                             ownerChatId = ownerId,
                             request = NewMailAccount(
                                 name = request.name,
@@ -286,7 +300,7 @@ class ApiServer(
                             is AddMailAccountResult.LimitReached ->
                                 call.respond(
                                     HttpStatusCode.Conflict,
-                                    mapOf("error" to "Можно подключить не больше ${result.limit} ящиков"),
+                                    mapOf("error" to call.texts.limitReached(result.limit)),
                                 )
                         }
                     }
@@ -297,7 +311,7 @@ class ApiServer(
                         val accountId = call.parameters["id"]?.toLongOrNull()
 
                         if (accountId == null) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный ящик"))
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.invalidMailbox))
                             return@put
                         }
 
@@ -305,7 +319,7 @@ class ApiServer(
                         val updated = accountService.updateFilters(ownerId, accountId, request.toModel())
 
                         if (updated == null) {
-                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Ящик не найден"))
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
                         } else {
                             call.respond(HttpStatusCode.OK, updated.filters.toDto())
                         }
@@ -317,18 +331,18 @@ class ApiServer(
                         val accountId = call.parameters["id"]?.toLongOrNull()
 
                         if (accountId == null) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный ящик"))
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.invalidMailbox))
                             return@put
                         }
 
                         val request = call.receive<UpdatePasswordRequestDto>()
-                        when (val result = accountService.updatePassword(ownerId, accountId, request.appPassword)) {
+                        when (val result = accountService.updatePassword(ownerId, accountId, request.appPassword, call.attributes[LangKey])) {
                             is UpdatePasswordResult.Updated ->
                                 call.respond(HttpStatusCode.OK, mapOf("status" to "updated"))
                             is UpdatePasswordResult.Rejected ->
                                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
                             UpdatePasswordResult.NotFound ->
-                                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Ящик не найден"))
+                                call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
                         }
                     }
 
@@ -336,7 +350,7 @@ class ApiServer(
                     get("/settings") {
                         val service = notificationSettings
                         if (service == null) {
-                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Настройки недоступны"))
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
                             return@get
                         }
                         call.respond(service.get(call.attributes[UserIdKey]).toDto())
@@ -345,7 +359,7 @@ class ApiServer(
                     put("/settings") {
                         val service = notificationSettings
                         if (service == null) {
-                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Настройки недоступны"))
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
                             return@put
                         }
 
@@ -353,7 +367,7 @@ class ApiServer(
                         val quietStart = NotificationSchedule.parseMinutes(request.quietStart)
                         val quietEnd = NotificationSchedule.parseMinutes(request.quietEnd)
                         if (quietStart == null || quietEnd == null) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Время укажите в виде ЧЧ:ММ"))
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.timeFormat))
                             return@put
                         }
 
@@ -372,11 +386,11 @@ class ApiServer(
 
                     // Список писем ящика: ?folder=inbox|sent&offset=0&limit=30&q=поиск&unread=true
                     get("/accounts/{id}/messages") {
-                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Просмотр писем недоступен"))
+                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
                         val accountId = call.parameters["id"]?.toLongOrNull()
                         val role = MailFolderRole.parse(call.request.queryParameters["folder"])
                         if (accountId == null || role == null) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный запрос"))
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
                             return@get
                         }
 
@@ -394,13 +408,13 @@ class ApiServer(
 
                     // Одно письмо: ?folder=inbox|sent&v=UIDVALIDITY
                     get("/accounts/{id}/messages/{uid}") {
-                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Просмотр писем недоступен"))
+                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
                         val accountId = call.parameters["id"]?.toLongOrNull()
                         val uid = call.parameters["uid"]?.toLongOrNull()
                         val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
                         val role = MailFolderRole.parse(call.request.queryParameters["folder"])
                         if (accountId == null || uid == null || uidValidity == null || role == null) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный запрос"))
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
                             return@get
                         }
 
@@ -410,12 +424,12 @@ class ApiServer(
 
                     // Отметить прочитанным (только входящие)
                     post("/accounts/{id}/messages/{uid}/read") {
-                        val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Просмотр писем недоступен"))
+                        val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
                         val accountId = call.parameters["id"]?.toLongOrNull()
                         val uid = call.parameters["uid"]?.toLongOrNull()
                         val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
                         if (accountId == null || uid == null || uidValidity == null) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный запрос"))
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
                             return@post
                         }
 
@@ -425,17 +439,24 @@ class ApiServer(
 
                     // Прислать вложения письма в чат с ботом (только входящие)
                     post("/accounts/{id}/messages/{uid}/attachments") {
-                        val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Просмотр писем недоступен"))
+                        val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
                         val accountId = call.parameters["id"]?.toLongOrNull()
                         val uid = call.parameters["uid"]?.toLongOrNull()
                         val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
                         if (accountId == null || uid == null || uidValidity == null) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный запрос"))
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
                             return@post
                         }
 
                         val result = browser.sendAttachments(call.attributes[UserIdKey], accountId, uidValidity, uid)
                         if (result is BrowseResult.Ok) call.respond(mapOf("status" to "sending")) else respondBrowseError(call, result)
+                    }
+
+                    // Удалить все свои данные: ящики, настройки, историю
+                    delete("/me") {
+                        val service = userData ?: return@delete call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
+                        val deleted = service.deleteAll(call.attributes[UserIdKey])
+                        call.respond(mapOf("mailboxes" to deleted))
                     }
 
                     // Удалить свой ящик
@@ -444,14 +465,14 @@ class ApiServer(
                         val accountId = call.parameters["id"]?.toLongOrNull()
 
                         if (accountId == null) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный ящик"))
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.invalidMailbox))
                             return@delete
                         }
 
                         if (accountService.delete(ownerId, accountId)) {
                             call.respond(HttpStatusCode.OK, mapOf("status" to "deleted"))
                         } else {
-                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Ящик не найден"))
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
                         }
                     }
                 }
@@ -466,16 +487,26 @@ class ApiServer(
     ) {
         when (result) {
             is BrowseResult.Ok -> call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Internal error"))
-            BrowseResult.MailboxNotFound -> call.respond(HttpStatusCode.NotFound, mapOf("error" to "Ящик не найден"))
+            BrowseResult.MailboxNotFound -> call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
             BrowseResult.MessageNotFound -> call.respond(
                 HttpStatusCode.NotFound,
-                mapOf("error" to "Письмо не найдено: его могли удалить или переместить"),
+                mapOf("error" to call.texts.emailNotFound),
             )
-            is BrowseResult.Failed -> call.respond(HttpStatusCode.BadGateway, mapOf("error" to result.message))
+            is BrowseResult.Failed -> {
+                val texts = call.texts
+                val message = when (result.reason) {
+                    BrowseFailure.TIMEOUT -> texts.browseTimeout
+                    BrowseFailure.AUTH -> texts.browseAuth
+                    BrowseFailure.NO_SENT_FOLDER -> texts.browseNoSent
+                    BrowseFailure.OTHER -> texts.browseFailed
+                }
+                call.respond(HttpStatusCode.BadGateway, mapOf("error" to message))
+            }
         }
     }
 
-    private fun extractUserId(initData: String): Long? {
+    // id пользователя и его language_code из уже проверенного initData
+    private fun extractUser(initData: String): Pair<Long, String?>? {
         return try {
             val params = initData.split("&").associate { pair ->
                 val parts = pair.split("=", limit = 2)
@@ -483,7 +514,8 @@ class ApiServer(
             }
             val userJson = params["user"] ?: return null
             val userElement = Json.parseToJsonElement(userJson).jsonObject
-            userElement["id"]?.jsonPrimitive?.longOrNull
+            val id = userElement["id"]?.jsonPrimitive?.longOrNull ?: return null
+            id to userElement["language_code"]?.jsonPrimitive?.contentOrNull
         } catch (e: Exception) {
             null
         }

@@ -113,24 +113,6 @@ class TelegramClient(
         return extractMessageId(root)
     }
 
-    suspend fun sendMessageWithButton(
-        chatId: Long,
-        text: String,
-        buttonText: String,
-        callbackData: String,
-    ): Long {
-        return sendMessageWithButtons(
-            chatId = chatId,
-            text = text,
-            buttons = listOf(
-                TelegramInlineButton(
-                    text = buttonText,
-                    callbackData = callbackData,
-                ),
-            ),
-        )
-    }
-
     suspend fun sendMessageWithButtons(
         chatId: Long,
         text: String,
@@ -185,6 +167,8 @@ class TelegramClient(
     /** Регистрирует команды бота: Telegram показывает их подсказками при вводе "/". */
     suspend fun setMyCommands(
         commands: List<Pair<String, String>>,
+        // null - команды по умолчанию, "en" - для пользователей с английским Telegram и т.д.
+        languageCode: String? = null,
     ) {
         val payload = buildJsonArray {
             commands.forEach { (command, description) ->
@@ -202,6 +186,7 @@ class TelegramClient(
                 url = "$baseUrl/setMyCommands",
                 formParameters = Parameters.build {
                     append("commands", payload.toString())
+                    languageCode?.let { code -> append("language_code", code) }
                 },
             )
         }
@@ -320,7 +305,7 @@ class TelegramClient(
         buttons: List<TelegramInlineButton>,
     ): List<Long> {
         val parts = splitText(text)
-            .ifEmpty { listOf("(пустое сообщение)") }
+            .ifEmpty { listOf("—") }
 
         return parts.mapIndexed { index, part ->
             if (index == parts.lastIndex) {
@@ -430,7 +415,8 @@ class TelegramClient(
             if (message != null) {
                 val chat = message["chat"]?.jsonObject
                 val chatId = chat?.get("id")?.jsonPrimitive?.longOrNull
-                val fromUserId = message["from"]?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
+                val from = message["from"]?.jsonObject
+                val fromUserId = from?.get("id")?.jsonPrimitive?.longOrNull
 
                 if (chatId != null && fromUserId != null) {
                     messages += TelegramMessageUpdate(
@@ -439,6 +425,7 @@ class TelegramClient(
                         chatType = chat?.get("type")?.jsonPrimitive?.contentOrNull,
                         fromUserId = fromUserId,
                         text = message["text"]?.jsonPrimitive?.contentOrNull,
+                        languageCode = from?.get("language_code")?.jsonPrimitive?.contentOrNull,
                     )
                 }
                 continue
@@ -453,8 +440,8 @@ class TelegramClient(
                 ?.contentOrNull
                 ?: continue
 
-            val fromUserId = callbackQuery["from"]
-                ?.jsonObject
+            val from = callbackQuery["from"]?.jsonObject
+            val fromUserId = from
                 ?.get("id")
                 ?.jsonPrimitive
                 ?.longOrNull
@@ -486,6 +473,7 @@ class TelegramClient(
                 chatId = chatId,
                 messageId = messageId,
                 data = data,
+                languageCode = from?.get("language_code")?.jsonPrimitive?.contentOrNull,
             )
         }
 

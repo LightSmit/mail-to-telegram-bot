@@ -721,3 +721,13 @@ textarea:focus {
   display: block;
   margin: -4px 0 10px;
 }
+
+.danger-button {
+  align-self: flex-start;
+  padding: 10px 14px;
+  border: 1px solid var(--danger);
+}
+
+.danger-hint {
+  color: var(--danger);
+}
