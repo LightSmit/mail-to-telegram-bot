@@ -46,6 +46,8 @@ class MailForwardingService(
     private val stateRepository: MailStateRepository,
     private val outboxRepository: MailNotificationOutboxRepository,
     private val contentLoader: EmailContentLoader,
+    // Кнопка "Ответить": нужен открытый исходящий SMTP (порты 465/587) на сервере
+    private val replyEnabled: Boolean = false,
 ) : AutoCloseable {
 
     private val logger =
@@ -844,7 +846,7 @@ class MailForwardingService(
         uidValidity: Long,
         uid: Long,
     ): List<TelegramInlineButton> {
-        return listOf(
+        return listOfNotNull(
             TelegramInlineButton(
                 text = "📄 Текст",
                 callbackData = MailViewCallbackCodec.encode(
@@ -873,7 +875,8 @@ class MailForwardingService(
         account: MailAccountConfig,
         uidValidity: Long,
         uid: Long,
-    ): TelegramInlineButton {
+    ): TelegramInlineButton? {
+        if (!replyEnabled) return null
         return TelegramInlineButton(
             text = "↩️ Ответить",
             callbackData = MailViewCallbackCodec.encode(
@@ -937,7 +940,7 @@ class MailForwardingService(
                 )
             }
 
-            add(replyButton(account, uidValidity, uid))
+            replyButton(account, uidValidity, uid)?.let(::add)
             add(readButton(account, uidValidity, uid))
         }
     }
@@ -977,7 +980,7 @@ class MailForwardingService(
                 )
             }
 
-            add(replyButton(account, uidValidity, uid))
+            replyButton(account, uidValidity, uid)?.let(::add)
             add(readButton(account, uidValidity, uid))
         }
     }

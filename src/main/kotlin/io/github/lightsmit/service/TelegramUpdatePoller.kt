@@ -294,7 +294,7 @@ class TelegramUpdatePoller(
 
         val text = when (command) {
             "/start" -> START_TEXT
-            "/help" -> HELP_TEXT
+            "/help" -> if (replyService != null) HELP_TEXT else HELP_TEXT.lines().filterNot { line -> line.startsWith("↩️") }.joinToString("\n")
             "/mailboxes" -> mailboxesText(message.fromUserId)
             else -> "Я не отвечаю на сообщения, зато пересылаю сюда новые письма 🙂\n\n" +
                 "Команды: /mailboxes - мои ящики, /help - как подключить почту."
@@ -357,7 +357,7 @@ class TelegramUpdatePoller(
     ) {
         val replies = replyService
         if (replies == null) {
-            answerSafely(callbackQueryId, "Ответ из Telegram пока недоступен", showAlert = true)
+            answerSafely(callbackQueryId, "Ответ на письма из Telegram временно отключен", showAlert = true)
             return
         }
 
@@ -402,7 +402,7 @@ class TelegramUpdatePoller(
             MailReplyService.SendResult.AuthFailed ->
                 "⚠️ Почта не приняла пароль приложения для отправки писем. Проверьте, что пароль приложения разрешает отправку (SMTP), и подключите ящик заново."
             MailReplyService.SendResult.Failed ->
-                "⚠️ Не удалось отправить ответ: почтовый сервер не отвечает. Отправьте текст еще раз или /cancel."
+                "⚠️ Не удалось связаться с почтовым сервером для отправки. Попробуйте отправить текст еще раз позже или /cancel."
         }
         sendPlain(chatId, text)
     }

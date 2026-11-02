@@ -56,6 +56,8 @@ fun main() = runBlocking {
     val backupHour = Environment.get("BACKUP_HOUR")?.toIntOrNull() ?: 4
     val backupKeep = Environment.get("BACKUP_KEEP")?.toIntOrNull() ?: 7
     val backupSendToAdmins = Environment.get("BACKUP_SEND_TO_ADMINS")?.lowercase() != "false"
+    // Ответ на письма из Telegram. Включать, только если хостинг пускает исходящий SMTP (порты 465/587)
+    val replyEnabled = Environment.get("REPLY_ENABLED")?.lowercase() == "true"
 
     val maxAccountsPerOwner = Environment
         .get("MAX_MAILBOXES_PER_USER")
@@ -202,6 +204,7 @@ fun main() = runBlocking {
         stateRepository = mailStateRepository,
         outboxRepository = mailOutboxRepository,
         contentLoader = contentLoader,
+        replyEnabled = replyEnabled,
     )
 
     val healthMonitor = MailboxHealthMonitor(
@@ -291,11 +294,15 @@ fun main() = runBlocking {
             accountService = accountService,
             botUsers = botUserRepository,
             adminService = adminService,
-            replyService = MailReplyService(
-                registry = accountRegistry,
-                imapClient = imapClient,
-                smtpSender = SmtpMailSender(),
-            ),
+            replyService = if (replyEnabled) {
+                MailReplyService(
+                    registry = accountRegistry,
+                    imapClient = imapClient,
+                    smtpSender = SmtpMailSender(),
+                )
+            } else {
+                null
+            },
         )
 
         println("Watched mailboxes: $watchedMailboxes (limit per user: $maxAccountsPerOwner)")
