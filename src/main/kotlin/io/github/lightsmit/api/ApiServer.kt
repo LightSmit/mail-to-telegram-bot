@@ -3,6 +3,11 @@ package io.github.lightsmit.api
 import io.github.lightsmit.config.MailFilters
 import io.github.lightsmit.service.AddMailAccountResult
 import io.github.lightsmit.service.MailAccountService
+import io.github.lightsmit.mail.MailFolderRole
+import io.github.lightsmit.mail.MailListPage
+import io.github.lightsmit.mail.MailMessageView
+import io.github.lightsmit.service.BrowseResult
+import io.github.lightsmit.service.MailBrowserService
 import io.github.lightsmit.service.NewMailAccount
 import io.github.lightsmit.service.NotificationSchedule
 import io.github.lightsmit.service.NotificationSettings
@@ -72,6 +77,70 @@ private fun NotificationSettings.toDto() = NotificationSettingsDto(
 )
 
 @Serializable
+data class MailListItemDto(
+    val uid: Long,
+    val fromName: String,
+    val fromAddress: String? = null,
+    val to: String,
+    val subject: String,
+    // Время в миллисекундах (UTC), форматирует приложение
+    val date: Long? = null,
+    val seen: Boolean,
+    val hasAttachments: Boolean,
+)
+
+@Serializable
+data class MailListPageDto(
+    val uidValidity: Long,
+    val total: Int,
+    val items: List<MailListItemDto>,
+    val hasMore: Boolean,
+)
+
+@Serializable
+data class MailMessageDto(
+    val uid: Long,
+    val from: String,
+    val to: String,
+    val cc: String,
+    val subject: String,
+    val date: Long? = null,
+    val body: String? = null,
+    val attachments: List<String>,
+    val seen: Boolean,
+)
+
+private fun MailListPage.toDto() = MailListPageDto(
+    uidValidity = uidValidity,
+    total = total,
+    hasMore = hasMore,
+    items = items.map { item ->
+        MailListItemDto(
+            uid = item.uid,
+            fromName = item.fromName,
+            fromAddress = item.fromAddress,
+            to = item.to,
+            subject = item.subject,
+            date = item.date?.toEpochMilli(),
+            seen = item.seen,
+            hasAttachments = item.hasAttachments,
+        )
+    },
+)
+
+private fun MailMessageView.toDto() = MailMessageDto(
+    uid = uid,
+    from = from,
+    to = to,
+    cc = cc,
+    subject = subject,
+    date = date?.toEpochMilli(),
+    body = body,
+    attachments = attachments,
+    seen = seen,
+)
+
+@Serializable
 data class UpdatePasswordRequestDto(
     val appPassword: String,
 )
@@ -93,6 +162,8 @@ class ApiServer(
     private val onUserSeen: suspend (Long) -> Unit = {},
     // Тихие часы и сводка; null - раздел в приложении не работает
     private val notificationSettings: NotificationSettingsService? = null,
+    // Просмотр писем ящика в приложении
+    private val mailBrowser: MailBrowserService? = null,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -299,6 +370,74 @@ class ApiServer(
                         call.respond(saved.toDto())
                     }
 
+                    // Список писем ящика: ?folder=inbox|sent&offset=0&limit=30&q=поиск&unread=true
+                    get("/accounts/{id}/messages") {
+                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Просмотр писем недоступен"))
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val role = MailFolderRole.parse(call.request.queryParameters["folder"])
+                        if (accountId == null || role == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный запрос"))
+                            return@get
+                        }
+
+                        val result = browser.list(
+                            ownerId = call.attributes[UserIdKey],
+                            accountId = accountId,
+                            role = role,
+                            offset = call.request.queryParameters["offset"]?.toIntOrNull() ?: 0,
+                            limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 30,
+                            search = call.request.queryParameters["q"],
+                            unreadOnly = call.request.queryParameters["unread"] == "true",
+                        )
+                        if (result is BrowseResult.Ok) call.respond(result.value.toDto()) else respondBrowseError(call, result)
+                    }
+
+                    // Одно письмо: ?folder=inbox|sent&v=UIDVALIDITY
+                    get("/accounts/{id}/messages/{uid}") {
+                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Просмотр писем недоступен"))
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val uid = call.parameters["uid"]?.toLongOrNull()
+                        val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
+                        val role = MailFolderRole.parse(call.request.queryParameters["folder"])
+                        if (accountId == null || uid == null || uidValidity == null || role == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный запрос"))
+                            return@get
+                        }
+
+                        val result = browser.read(call.attributes[UserIdKey], accountId, role, uidValidity, uid)
+                        if (result is BrowseResult.Ok) call.respond(result.value.toDto()) else respondBrowseError(call, result)
+                    }
+
+                    // Отметить прочитанным (только входящие)
+                    post("/accounts/{id}/messages/{uid}/read") {
+                        val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Просмотр писем недоступен"))
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val uid = call.parameters["uid"]?.toLongOrNull()
+                        val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
+                        if (accountId == null || uid == null || uidValidity == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный запрос"))
+                            return@post
+                        }
+
+                        val result = browser.markRead(call.attributes[UserIdKey], accountId, uidValidity, uid)
+                        if (result is BrowseResult.Ok) call.respond(mapOf("status" to "read")) else respondBrowseError(call, result)
+                    }
+
+                    // Прислать вложения письма в чат с ботом (только входящие)
+                    post("/accounts/{id}/messages/{uid}/attachments") {
+                        val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Просмотр писем недоступен"))
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val uid = call.parameters["uid"]?.toLongOrNull()
+                        val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
+                        if (accountId == null || uid == null || uidValidity == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Некорректный запрос"))
+                            return@post
+                        }
+
+                        val result = browser.sendAttachments(call.attributes[UserIdKey], accountId, uidValidity, uid)
+                        if (result is BrowseResult.Ok) call.respond(mapOf("status" to "sending")) else respondBrowseError(call, result)
+                    }
+
                     // Удалить свой ящик
                     delete("/accounts/{id}") {
                         val ownerId = call.attributes[UserIdKey]
@@ -318,6 +457,22 @@ class ApiServer(
                 }
             }
         }.start(wait = false)
+    }
+
+    // Ошибки просмотра писем: всегда {"error": "понятный текст"}
+    private suspend fun respondBrowseError(
+        call: ApplicationCall,
+        result: BrowseResult<*>,
+    ) {
+        when (result) {
+            is BrowseResult.Ok -> call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Internal error"))
+            BrowseResult.MailboxNotFound -> call.respond(HttpStatusCode.NotFound, mapOf("error" to "Ящик не найден"))
+            BrowseResult.MessageNotFound -> call.respond(
+                HttpStatusCode.NotFound,
+                mapOf("error" to "Письмо не найдено: его могли удалить или переместить"),
+            )
+            is BrowseResult.Failed -> call.respond(HttpStatusCode.BadGateway, mapOf("error" to result.message))
+        }
     }
 
     private fun extractUserId(initData: String): Long? {

@@ -75,6 +75,27 @@ object EmailContentExtractor {
         )
     }
 
+    /** Имена вложений письма без скачивания самих файлов (для просмотра в приложении). */
+    fun attachmentNames(part: Part): List<String> {
+        val names = mutableListOf<String>()
+
+        fun walk(current: Part) {
+            if (isAttachment(current)) {
+                names += extractFileName(current, names.size + 1)
+                return
+            }
+            if (current.isMimeType("multipart/*")) {
+                val multipart = current.content as? Multipart ?: return
+                for (index in 0 until multipart.count) {
+                    walk(multipart.getBodyPart(index))
+                }
+            }
+        }
+
+        runCatching { walk(part) }
+        return names
+    }
+
     private fun collectParts(
         part: Part,
         tempDirectory: Path,

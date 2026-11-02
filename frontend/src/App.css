@@ -467,3 +467,252 @@ textarea:focus {
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
+
+/* Строка ящика открывает его письма */
+.mailbox-open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mailbox-open-hint {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--link);
+}
+
+/* Просмотр писем ящика */
+.mail-view {
+  padding-top: 12px;
+}
+
+.mail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.mail-head .back {
+  margin-left: -11px;
+  flex-shrink: 0;
+}
+
+.mail-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 3px;
+  margin-bottom: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.segmented button {
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--hint);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.segmented button[aria-selected='true'] {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.mail-search {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.chip,
+.chip-select {
+  width: auto;
+  padding: 7px 12px;
+  border: 1px solid var(--separator);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.chip-select {
+  padding-right: 30px;
+  background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+}
+
+.chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.mail-count {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.mail-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.mail-list li + li {
+  border-top: 1px solid var(--separator);
+}
+
+.mail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mail-row-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mail-from {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.mail-date {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.mail-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--hint);
+}
+
+/* Непрочитанные: жирный отправитель и точка акцентного цвета */
+.mail-row.unread .mail-from {
+  font-weight: 700;
+}
+
+.mail-row.unread .mail-from::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: 2px;
+}
+
+.mail-row.unread .mail-subject {
+  color: var(--text);
+}
+
+.more {
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* Открытое письмо */
+.message-subject {
+  margin-bottom: 10px;
+  font-size: 21px;
+  line-height: 1.25;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.message-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.message-meta dt {
+  color: var(--hint);
+}
+
+.message-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.message-attachments {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  list-style: none;
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 14px;
+}
+
+.message-attachments li {
+  overflow-wrap: anywhere;
+}
+
+.message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.message-actions .secondary {
+  padding: 9px 14px;
+  border: 1px solid var(--separator);
+  font-size: 15px;
+}
+
+.message-body {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--separator);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.5;
+}

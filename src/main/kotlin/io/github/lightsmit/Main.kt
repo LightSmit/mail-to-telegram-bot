@@ -12,6 +12,7 @@ import io.github.lightsmit.service.EmailContentLoader
 import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.service.MailboxHealthMonitor
+import io.github.lightsmit.service.MailBrowserService
 import io.github.lightsmit.service.MailReplyService
 import io.github.lightsmit.service.NotificationSettingsService
 import io.github.lightsmit.service.MailboxSupervisor
@@ -38,6 +39,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 fun main() = runBlocking {
+    // Фоновые задачи, запущенные из API (например, отправка вложений в чат)
+    val appScope = this
     println("Mail to Telegram Bot started")
 
     val telegramToken = Environment.require("TELEGRAM_BOT_TOKEN")
@@ -282,6 +285,16 @@ fun main() = runBlocking {
         notificationSettings = NotificationSettingsService(
             repository = userSettingsRepository,
             outboxRepository = mailOutboxRepository,
+        ),
+        mailBrowser = MailBrowserService(
+            repository = mailAccountRepository,
+            imapClient = imapClient,
+            // Отправка вложений может занять минуты: запускаем в фоне, приложение сразу получает ответ
+            sendAttachmentsToChat = { account, uidValidity, uid ->
+                appScope.launch {
+                    runCatching { forwardingService.sendAttachments(account, uidValidity, uid) }
+                }
+            },
         ),
     )
     apiServer.start()

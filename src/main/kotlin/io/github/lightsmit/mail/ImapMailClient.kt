@@ -5,7 +5,15 @@ import jakarta.mail.FetchProfile
 import jakarta.mail.Flags
 import jakarta.mail.Folder
 import jakarta.mail.Message
+import jakarta.mail.Store
 import jakarta.mail.UIDFolder
+import jakarta.mail.search.AndTerm
+import jakarta.mail.search.FlagTerm
+import jakarta.mail.search.FromStringTerm
+import jakarta.mail.search.OrTerm
+import jakarta.mail.search.RecipientStringTerm
+import jakarta.mail.search.SearchTerm
+import jakarta.mail.search.SubjectTerm
 import jakarta.mail.internet.InternetAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -298,10 +306,156 @@ class ImapMailClient(
         }
     }
 
+    /**
+     * Страница писем для просмотра в приложении, новые сверху.
+     * search - поиск по теме, отправителю и получателю (на стороне почтового сервера).
+     */
+    suspend fun listMessages(
+        account: MailAccountConfig,
+        role: MailFolderRole,
+        offset: Int,
+        limit: Int,
+        search: String?,
+        unreadOnly: Boolean,
+    ): MailListPage = withContext(Dispatchers.IO) {
+        require(offset >= 0) { "Offset must not be negative" }
+        require(limit in 1..100) { "Limit must be between 1 and 100" }
+
+        withFolder(account, CONTENT_TIMEOUT_MILLIS, Folder.READ_ONLY, role) { folder, uidFolder ->
+            val terms = buildList<SearchTerm> {
+                search?.trim()?.takeIf(String::isNotEmpty)?.let { query ->
+                    add(
+                        OrTerm(
+                            arrayOf(
+                                SubjectTerm(query),
+                                FromStringTerm(query),
+                                RecipientStringTerm(Message.RecipientType.TO, query),
+                            ),
+                        ),
+                    )
+                }
+                if (unreadOnly) add(FlagTerm(Flags(Flags.Flag.SEEN), false))
+            }
+
+            // Без условий берем по номерам с конца папки, с условиями - через SEARCH на сервере
+            val found: Array<Message>? = when (terms.size) {
+                0 -> null
+                1 -> folder.search(terms.single())
+                else -> folder.search(AndTerm(terms.toTypedArray()))
+            }
+
+            val total = found?.size ?: folder.messageCount
+            val end = total - offset
+            val start = maxOf(0, end - limit)
+
+            val messages: Array<Message> = when {
+                end <= 0 -> emptyArray()
+                found != null -> found.sortedBy { message -> message.messageNumber }.subList(start, end).toTypedArray()
+                else -> folder.getMessages(start + 1, end)
+            }
+
+            if (messages.isNotEmpty()) {
+                val profile = FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(FetchProfile.Item.FLAGS)
+                    add(FetchProfile.Item.CONTENT_INFO)
+                    add(UIDFolder.FetchProfileItem.UID)
+                }
+                folder.fetch(messages, profile)
+            }
+
+            MailListPage(
+                uidValidity = uidFolder.uidValidity,
+                total = total,
+                items = messages.reversed().map { message -> listItem(message, uidFolder.getUID(message)) },
+                hasMore = start > 0,
+            )
+        }
+    }
+
+    /** Письмо целиком для просмотра. Флаг "прочитано" не ставится (ящик открыт только на чтение). */
+    suspend fun readMessage(
+        account: MailAccountConfig,
+        role: MailFolderRole,
+        expectedUidValidity: Long,
+        uid: Long,
+    ): MailMessageView? = withContext(Dispatchers.IO) {
+        withFolder(account, CONTENT_TIMEOUT_MILLIS, Folder.READ_ONLY, role) { _, uidFolder ->
+            if (uidFolder.uidValidity != expectedUidValidity) {
+                return@withFolder null
+            }
+
+            val message = uidFolder.getMessageByUID(uid)
+                ?: return@withFolder null
+
+            val content = EmailContentExtractor.extract(
+                part = message,
+                tempDirectory = attachmentTempDirectory,
+                maxAttachmentSizeBytes = maxAttachmentSizeBytes,
+                includeAttachments = false,
+            )
+
+            MailMessageView(
+                uid = uid,
+                from = formatSender(message),
+                to = formatRecipients(message, Message.RecipientType.TO),
+                cc = formatRecipients(message, Message.RecipientType.CC),
+                subject = formatSubject(message),
+                date = (message.receivedDate ?: message.sentDate)?.toInstant(),
+                body = content.body?.take(MAX_VIEW_BODY_CHARS),
+                attachments = EmailContentExtractor.attachmentNames(message),
+                seen = runCatching { message.isSet(Flags.Flag.SEEN) }.getOrDefault(true),
+            )
+        }
+    }
+
+    private fun listItem(message: Message, uid: Long): MailListItem {
+        val sender = runCatching { message.from?.firstOrNull() as? InternetAddress }.getOrNull()
+        return MailListItem(
+            uid = uid,
+            fromName = sender?.personal?.takeIf(String::isNotBlank)
+                ?: sender?.address
+                ?: "(отправитель неизвестен)",
+            fromAddress = sender?.address?.lowercase(),
+            to = formatRecipients(message, Message.RecipientType.TO),
+            subject = runCatching { message.subject }.getOrNull()?.takeIf(String::isNotBlank) ?: "(без темы)",
+            date = runCatching { (message.receivedDate ?: message.sentDate)?.toInstant() }.getOrNull(),
+            seen = runCatching { message.isSet(Flags.Flag.SEEN) }.getOrDefault(true),
+            hasAttachments = runCatching { message.isMimeType("multipart/mixed") }.getOrDefault(false),
+        )
+    }
+
+    private fun formatRecipients(message: Message, type: Message.RecipientType): String {
+        return runCatching { message.getRecipients(type) }.getOrNull()
+            ?.joinToString(", ") { address ->
+                (address as? InternetAddress)?.toUnicodeString() ?: address.toString()
+            }
+            .orEmpty()
+    }
+
     private fun <T> withInbox(
         account: MailAccountConfig,
         readTimeoutMillis: Int,
         mode: Int = Folder.READ_ONLY,
+        block: (Folder, UIDFolder) -> T,
+    ): T = withFolder(account, readTimeoutMillis, mode, MailFolderRole.INBOX, block)
+
+    /** Папка "Отправленные": по служебной пометке \Sent, иначе по привычным названиям. */
+    private fun resolveFolder(store: Store, role: MailFolderRole): Folder {
+        if (role == MailFolderRole.INBOX) return store.getFolder("INBOX")
+
+        val all = store.defaultFolder.list("*")
+        return all.firstOrNull { folder ->
+            (folder as? IMAPFolder)?.attributes?.any { attribute -> attribute.equals("\\Sent", ignoreCase = true) } == true
+        } ?: all.firstOrNull { folder -> folder.name.lowercase() in SENT_FOLDER_NAMES }
+        ?: throw MailFolderNotFoundException(role)
+    }
+
+    private fun <T> withFolder(
+        account: MailAccountConfig,
+        readTimeoutMillis: Int,
+        mode: Int,
+        role: MailFolderRole,
         block: (Folder, UIDFolder) -> T,
     ): T {
         val session = ImapSessionFactory.create(
@@ -318,7 +472,7 @@ class ImapMailClient(
                 account.password,
             )
 
-            val inbox = store.getFolder("INBOX")
+            val inbox = resolveFolder(store, role)
             try {
                 inbox.open(mode)
                 val uidFolder = inbox as? UIDFolder
@@ -339,5 +493,7 @@ class ImapMailClient(
         const val METADATA_TIMEOUT_MILLIS = 30_000
         val WHITESPACE = Regex("\\s+")
         const val CONTENT_TIMEOUT_MILLIS = 180_000
+        const val MAX_VIEW_BODY_CHARS = 100_000
+        val SENT_FOLDER_NAMES = setOf("sent", "sent items", "sent messages", "sent mail", "отправленные")
     }
 }

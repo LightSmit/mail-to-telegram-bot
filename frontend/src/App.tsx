@@ -4,6 +4,7 @@ import { initData, initDataSource, telegramScriptLoaded } from './telegram'
 import { FiltersPanel, withDefaults, type MailFilters } from './FiltersPanel'
 import { PasswordPanel } from './PasswordPanel'
 import { NotificationsSection, type NotificationSettings } from './NotificationsSection'
+import { MailboxView } from './MailboxView'
 import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
@@ -73,6 +74,8 @@ function App() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [filtersOpenId, setFiltersOpenId] = useState<number | null>(null);
+  // Открытый ящик: просмотр его писем вместо главного экрана
+  const [browsingId, setBrowsingId] = useState<number | null>(null);
   const [notice, setNotice] = useState<Notice>(
     initData ? null : { kind: 'error', text: 'Откройте приложение из чата с ботом в Telegram: без этого вход невозможен.' }
   );
@@ -257,6 +260,15 @@ function App() {
     }
   };
 
+  const browsing = accounts.find((acc) => acc.id === browsingId);
+  if (browsing) {
+    return (
+      <main className="app">
+        <MailboxView account={browsing} request={request} onClose={() => setBrowsingId(null)} />
+      </main>
+    );
+  }
+
   return (
     <main className="app">
       <header className="masthead">
@@ -286,13 +298,19 @@ function App() {
               <li key={acc.id} className="mailbox-item">
                 <div className="mailbox">
                   <span className={`status-dot status-${acc.filters?.paused ? 'paused' : (acc.status ?? 'CONNECTING').toLowerCase()}`} aria-hidden="true" />
-                  <div className="mailbox-info">
+                  <button
+                    type="button"
+                    className="mailbox-info mailbox-open"
+                    onClick={() => setBrowsingId(acc.id)}
+                    aria-label={`Открыть письма ящика ${acc.email}`}
+                  >
                     <span className="mailbox-name">{acc.name !== acc.email ? acc.name : acc.email}</span>
                     {acc.name !== acc.email && <span className="mailbox-address">{acc.email}</span>}
                     <span className={`mailbox-status status-text-${acc.filters?.paused ? 'paused' : (acc.status ?? 'CONNECTING').toLowerCase()}`}>
                       {statusLabel(acc)}
                     </span>
-                  </div>
+                    <span className="mailbox-open-hint">Письма ›</span>
+                  </button>
                   <div className="mailbox-actions">
                     <button
                       type="button"

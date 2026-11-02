@@ -40,3 +40,33 @@ export const telegramScriptLoaded: boolean = platform !== '' && platform !== 'un
 /** Откуда взялись данные: для диагностики. */
 export const initDataSource: string =
   WebApp.initData ? 'sdk' : initData ? 'адрес страницы' : 'нет';
+
+type BackButtonApi = {
+  show: () => void;
+  hide: () => void;
+  onClick: (handler: () => void) => void;
+  offClick: (handler: () => void) => void;
+};
+
+/**
+ * Системная кнопка «Назад» Telegram в шапке приложения. Возвращает функцию,
+ * которая убирает кнопку. Без скрипта Telegram ничего не делает.
+ */
+export function showBackButton(handler: () => void): () => void {
+  const button = (WebApp as unknown as { BackButton?: BackButtonApi }).BackButton;
+  if (!telegramScriptLoaded || !button) return () => {};
+  try {
+    button.onClick(handler);
+    button.show();
+  } catch {
+    return () => {};
+  }
+  return () => {
+    try {
+      button.offClick(handler);
+      button.hide();
+    } catch {
+      // кнопка уже недоступна
+    }
+  };
+}
