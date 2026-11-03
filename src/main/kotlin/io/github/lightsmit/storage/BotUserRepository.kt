@@ -211,6 +211,16 @@ class BotUserRepository {
 
     suspend fun countBlocked(): Long = countWhere("blocked = 1")
 
+    /** Когда пользователь впервые появился в боте; null - еще не появлялся. */
+    suspend fun firstSeen(userId: Long): Instant? = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT first_seen_at FROM bot_users WHERE user_id = ?").use { statement ->
+                statement.setLong(1, userId)
+                statement.executeQuery().use { rs -> if (rs.next()) Instant.ofEpochMilli(rs.getLong(1)) else null }
+            }
+        }
+    }
+
     /** Последние активные пользователи: для /users. */
     suspend fun recent(limit: Int): List<BotUserInfo> = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->

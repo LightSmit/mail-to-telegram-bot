@@ -54,6 +54,17 @@ interface BillingTexts {
     fun groupRemoved(name: String, address: String, group: String): String
     val groupBusinessOnly: String
     val groupAnonymous: String
+
+    // Приглашение друзей
+    val commandReferral: String
+    val startReferralLine: String
+    fun referralInfo(link: String, invited: Int, qualified: Int, goal: Int, towardsNext: Int, rewards: Int): String
+    val referralShareButton: String
+    val referralShareText: String
+    val referralOff: String
+    val referralNewcomer: String
+    fun referralProgress(towardsNext: Int, goal: Int): String
+    fun referralRewarded(goal: Int, plan: Plan?, expiresAt: Instant?): String
 }
 
 object RuBillingTexts : BillingTexts {
@@ -180,6 +191,34 @@ object RuBillingTexts : BillingTexts {
         "Вы пишете анонимно, от имени группы, и бот не может проверить, что ящик ваш. " +
             "Нажмите на аватар слева от поля ввода, выберите свой профиль и откройте ссылку из приложения еще раз " +
             "(или выключите «Анонимность» в правах администратора)."
+
+    override val commandReferral = "Пригласить друзей и получить Pro"
+    override val startReferralLine = "/referral - пригласить друзей и получить Pro бесплатно"
+    override fun referralInfo(link: String, invited: Int, qualified: Int, goal: Int, towardsNext: Int, rewards: Int) = buildString {
+        appendLine("🎁 Приглашайте друзей: за каждых $goal друзей - месяц Pro бесплатно.")
+        appendLine()
+        appendLine("Ваша ссылка:")
+        appendLine(link)
+        appendLine()
+        appendLine("Друг засчитывается, когда впервые откроет бота по вашей ссылке и подключит хотя бы один ящик.")
+        appendLine()
+        appendLine("Пришли по ссылке: $invited, засчитано: $qualified")
+        append("До следующего месяца Pro: $towardsNext из $goal")
+        if (rewards > 0) append("\nПолучено наград: $rewards")
+    }
+    override val referralShareButton = "📤 Поделиться ссылкой"
+    override val referralShareText = "Пересылаю новые письма из почты прямо в Telegram. Попробуй:"
+    override val referralOff = "Сейчас приглашения не работают."
+    override val referralNewcomer = "👋 По вашей ссылке пришел новый пользователь. Он засчитается, когда подключит ящик."
+    override fun referralProgress(towardsNext: Int, goal: Int) =
+        "✅ Друг подключил ящик по вашей ссылке: $towardsNext из $goal до месяца Pro. Ссылка: /referral"
+    override fun referralRewarded(goal: Int, plan: Plan?, expiresAt: Instant?) =
+        if (plan == null) {
+            "🎉 Еще $goal друзей подключились по вашей ссылке! У вас и так подписка навсегда, спасибо, что советуете бота."
+        } else {
+            "🎉 Еще $goal друзей подключились по вашей ссылке! Тариф ${plan.title} " +
+                (expiresAt?.let { "действует до ${formatDate(it)}." } ?: "действует навсегда.")
+        }
 }
 
 object EnBillingTexts : BillingTexts {
@@ -306,4 +345,32 @@ object EnBillingTexts : BillingTexts {
         "You are posting anonymously on behalf of the group, so the bot cannot check that the mailbox is yours. " +
             "Tap the avatar next to the message field, choose your own profile and open the link from the app again " +
             "(or turn off \"Remain anonymous\" in your admin rights)."
+
+    override val commandReferral = "Invite friends and get Pro"
+    override val startReferralLine = "/referral - invite friends and get Pro for free"
+    override fun referralInfo(link: String, invited: Int, qualified: Int, goal: Int, towardsNext: Int, rewards: Int) = buildString {
+        appendLine("🎁 Invite friends: every $goal friends give you a month of Pro for free.")
+        appendLine()
+        appendLine("Your link:")
+        appendLine(link)
+        appendLine()
+        appendLine("A friend counts when they open the bot for the first time with your link and connect at least one mailbox.")
+        appendLine()
+        appendLine("Came with your link: $invited, counted: $qualified")
+        append("Until the next month of Pro: $towardsNext of $goal")
+        if (rewards > 0) append("\nRewards received: $rewards")
+    }
+    override val referralShareButton = "📤 Share the link"
+    override val referralShareText = "I get new emails right in Telegram. Try it:"
+    override val referralOff = "Invitations are not available right now."
+    override val referralNewcomer = "👋 A new user came with your link. They will count once they connect a mailbox."
+    override fun referralProgress(towardsNext: Int, goal: Int) =
+        "✅ A friend connected a mailbox with your link: $towardsNext of $goal until a month of Pro. Link: /referral"
+    override fun referralRewarded(goal: Int, plan: Plan?, expiresAt: Instant?) =
+        if (plan == null) {
+            "🎉 $goal more friends joined with your link! Your subscription is already forever, thanks for recommending the bot."
+        } else {
+            "🎉 $goal more friends joined with your link! ${plan.title} " +
+                (expiresAt?.let { "is active until ${formatDate(it)}." } ?: "is active forever.")
+        }
 }

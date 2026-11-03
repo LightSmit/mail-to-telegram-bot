@@ -238,6 +238,16 @@ const ru = {
   groupLinkFailed: 'Не удалось получить ссылку',
   groupUnlinked: 'Группа отключена, письма снова приходят в чат с ботом.',
   groupUnlinkFailed: 'Не удалось отключить группу',
+  // Приглашение друзей
+  referralTitle: 'Пригласить друзей',
+  referralLede: (goal: number) => `За каждых ${goal} друзей - месяц Pro бесплатно.`,
+  referralCount: (n: number, goal: number) => `${n} из ${goal}`,
+  referralShare: '📤 Поделиться',
+  referralCopy: 'Скопировать',
+  referralCopied: 'Скопировано ✓',
+  referralStats: (invited: number, qualified: number) => `Пришли по ссылке: ${invited}, засчитано: ${qualified}`,
+  referralRewards: (n: number) => `получено месяцев Pro: ${n}`,
+  referralRule: 'Друг засчитывается, когда впервые откроет бота по вашей ссылке и подключит хотя бы один ящик.',
 };
 
 export type Dictionary = typeof ru;
@@ -426,6 +436,16 @@ const en: Dictionary = {
   groupLinkFailed: 'Could not get the link',
   groupUnlinked: 'Group disconnected, emails arrive in the chat with the bot again.',
   groupUnlinkFailed: 'Could not disconnect the group',
+  // Invite friends
+  referralTitle: 'Invite friends',
+  referralLede: (goal: number) => `Every ${goal} friends give you a month of Pro for free.`,
+  referralCount: (n: number, goal: number) => `${n} of ${goal}`,
+  referralShare: '📤 Share',
+  referralCopy: 'Copy',
+  referralCopied: 'Copied ✓',
+  referralStats: (invited: number, qualified: number) => `Came with your link: ${invited}, counted: ${qualified}`,
+  referralRewards: (n: number) => `months of Pro received: ${n}`,
+  referralRule: 'A friend counts when they open the bot for the first time with your link and connect at least one mailbox.',
 };
 
 export const t: Dictionary = lang === 'ru' ? ru : en;

@@ -917,3 +917,56 @@ textarea:focus {
   padding: 10px 14px;
   background: var(--surface);
 }
+
+/* Приглашение друзей */
+.referral {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 0;
+}
+
+.referral-lede {
+  margin: 0;
+  font-weight: 600;
+}
+
+.referral-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.referral-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.referral-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand-gradient);
+}
+
+.referral-count {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.referral-link {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 14px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.referral .field-hint {
+  margin: 0;
+}

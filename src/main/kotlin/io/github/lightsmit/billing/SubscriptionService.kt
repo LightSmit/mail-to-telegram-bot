@@ -85,6 +85,27 @@ class SubscriptionService(
         }
     }
 
+    /**
+     * Бонусный срок (награда за друзей): действующий платный тариф продлевается на этот срок,
+     * иначе (Free или пробный период) подключается Pro. null - подписка уже навсегда или это админ.
+     */
+    suspend fun addBonus(userId: Long, term: GrantTerm): Subscription? = writeLock.withLock {
+        if (isAdmin(userId)) return@withLock null
+        val now = clock()
+        val current = cached(userId)
+        if (current != null && current.isActive(now) && current.lifetime) return@withLock null
+
+        val paid = current?.takeIf { value -> value.isActive(now) && value.source != SubscriptionSource.TRIAL }
+        val updated = if (paid != null) {
+            extend(paid, userId, paid.plan, term, now).copy(source = paid.source)
+        } else {
+            extend(current, userId, Plan.PRO, term, now).copy(source = SubscriptionSource.REFERRAL)
+        }
+        persist(updated)
+        logger.info("Bonus {} for user {}: {} until {}", term.spec, userId, updated.plan, updated.expiresAt)
+        updated
+    }
+
     /** Отозвать любую подписку: тариф сразу становится Free, автопродление Stars отменяется. */
     suspend fun revoke(userId: Long): RevokeResult = writeLock.withLock {
         val now = clock()

@@ -10,6 +10,7 @@ import { MailboxView } from './MailboxView'
 import { DataSection } from './DataSection'
 import { PlanSection, hasPro, type PlanInfo } from './PlanSection'
 import { GroupPanel } from './GroupPanel'
+import { ReferralSection, type ReferralInfo } from './ReferralSection'
 import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider, providerHint, providerSteps, providerTitle } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
@@ -98,6 +99,7 @@ function App() {
   const [browsingId, setBrowsingId] = useState<number | null>(null);
   // Тариф: null - еще не загружен (до загрузки ничего не блокируем)
   const [plan, setPlan] = useState<PlanInfo | null>(null);
+  const [referral, setReferral] = useState<ReferralInfo | null>(null);
   const [notice, setNotice] = useState<Notice>(
     initData ? null : { kind: 'error', text: t.openFromTelegram }
   );
@@ -217,9 +219,19 @@ function App() {
     setTimeout(() => document.getElementById('plan')?.scrollIntoView({ behavior: 'smooth' }), 50);
   };
 
+  const fetchReferral = async () => {
+    try {
+      const response = await request('/referral');
+      if (response.ok) setReferral(await response.json());
+    } catch {
+      // без связи раздел просто не показываем
+    }
+  };
+
   useEffect(() => {
     fetchAccounts();
     fetchPlan();
+    fetchReferral();
     const timer = setInterval(() => fetchAccounts(true), REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -514,6 +526,8 @@ function App() {
           notify={(kind, text) => setNotice(text ? { kind, text } : null)}
         />
       )}
+
+      {referral?.enabled && <ReferralSection info={referral} />}
 
       {accounts.length > 0 && (
         <NotificationsSection load={loadNotificationSettings} save={saveNotificationSettings} />

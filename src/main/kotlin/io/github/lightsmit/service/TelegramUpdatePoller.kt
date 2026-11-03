@@ -1,6 +1,7 @@
 package io.github.lightsmit.service
 
 import io.github.lightsmit.billing.InvoiceLinks
+import io.github.lightsmit.billing.ReferralService
 import io.github.lightsmit.billing.SubscriptionService
 import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.i18n.Lang
@@ -55,6 +56,10 @@ class TelegramUpdatePoller(
     private val quota: MailboxQuota? = null,
     // Пересылка писем в групповые чаты (Business)
     private val groupLinks: GroupLinkService? = null,
+    // Приглашение друзей (/referral, ссылки ?start=ref_)
+    private val referrals: ReferralService? = null,
+    // Имя бота для реферальной ссылки
+    private val botUsername: suspend () -> String? = { null },
 ) {
 
     private val logger =
@@ -380,9 +385,21 @@ class TelegramUpdatePoller(
         if (command == "/start" && startArgument.startsWith(SubscriptionService.INVITE_PREFIX)) {
             redeemInvite(message.chatId, message.fromUserId, startArgument, t)
         }
+        if (command == "/start" && startArgument.startsWith(ReferralService.PREFIX)) {
+            registerReferral(message.fromUserId, startArgument)
+        }
+
+        if (command == "/referral") {
+            sendReferral(message.chatId, message.fromUserId, t)
+            return
+        }
 
         val text = when (command) {
-            "/start" -> if (subscriptions?.enabled == true) t.start() + "\n" + t.billing.startPremiumLine else t.start()
+            "/start" -> buildString {
+                append(t.start())
+                if (subscriptions?.enabled == true) append("\n").append(t.billing.startPremiumLine)
+                if (referrals?.enabled == true) append("\n").append(t.billing.startReferralLine)
+            }
             "/help" -> t.help(replyEnabled = replyService != null)
             "/mailboxes" -> mailboxesText(message.fromUserId, t)
             else -> t.defaultReply
@@ -429,6 +446,7 @@ class TelegramUpdatePoller(
                 "/invite" -> admin.inviteText(adminId, argument)
                 "/subs" -> admin.subscriptionsText()
                 "/users" -> admin.usersText()
+                "/refs" -> admin.referralsText()
                 "/refund" -> admin.refundText(argument)
                 else -> return false
             }
@@ -787,6 +805,50 @@ class TelegramUpdatePoller(
         unlinked.forEach { account ->
             val t = textsFor(account.ownerChatId, null)
             sendPlain(account.ownerChatId, t.billing.groupRemoved(account.name, account.username, update.chatTitle ?: "?"))
+        }
+    }
+
+    // Новый пользователь пришел по ссылке друга: сообщаем другу
+    private suspend fun registerReferral(userId: Long, code: String) {
+        val service = referrals ?: return
+        val result = try {
+            service.register(userId, code)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to register referral for {}: {}", userId, exception.javaClass.simpleName)
+            return
+        }
+        if (result is ReferralService.RegisterResult.Registered) {
+            sendPlain(result.referrerId, textsFor(result.referrerId, null).billing.referralNewcomer)
+        }
+    }
+
+    // Своя ссылка-приглашение и счетчик друзей
+    private suspend fun sendReferral(chatId: Long, userId: Long, t: Texts) {
+        val service = referrals
+        val username = botUsername()
+        if (service == null || !service.enabled || username == null) {
+            sendPlain(chatId, t.billing.referralOff)
+            return
+        }
+
+        val link = "https://t.me/$username?start=${service.code(userId)}"
+        val stats = service.stats(userId)
+        val text = t.billing.referralInfo(link, stats.invited, stats.qualified, stats.goal, stats.towardsNext, stats.rewards)
+        val share = "https://t.me/share/url?url=" + java.net.URLEncoder.encode(link, Charsets.UTF_8) +
+            "&text=" + java.net.URLEncoder.encode(t.billing.referralShareText, Charsets.UTF_8)
+        try {
+            controlClient.sendMessageWithButtons(
+                chatId = chatId,
+                text = text,
+                buttons = listOf(TelegramInlineButton(text = t.billing.referralShareButton, url = share)),
+                perRow = 1,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to send referral link to {}: {}", chatId, exception.javaClass.simpleName)
         }
     }
 

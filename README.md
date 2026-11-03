@@ -54,6 +54,7 @@ Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iClou
 - When a subscription ends, 1 mailbox keeps working (pause the others), sender filters are kept but not applied.
 - `/premium` in the bot and the Plan section in the app; `/paysupport` for payment questions.
 - Admins from `.env` always have Business.
+- Invite friends: everyone has a referral link (`/referral` in the bot or "Invite friends" in the app). Every 5 friends who open the bot with the link for the first time and connect a mailbox give a month of Pro (an active paid plan is extended by a month).
 
 **Prepared but disabled by default**
 - Reply to an email from Telegram via SMTP (`REPLY_ENABLED=true`). Many hosting providers block outgoing SMTP ports 465 and 587; enable it only on a server where they are open.
@@ -144,6 +145,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `TRIAL_DAYS` | `7` | Pro trial for new users, days (0 - no trial) |
 | `PRICE_PRO_MONTH` / `PRICE_PRO_YEAR` | `100` / `1000` | Pro prices in Stars |
 | `PRICE_BUSINESS_MONTH` / `PRICE_BUSINESS_YEAR` | `300` / `3000` | Business prices in Stars |
+| `REFERRAL_GOAL` | `5` | How many friends give a month of Pro (0 - invitations off) |
 | `SUPPORT_CONTACT` | — | Contact for payment questions (`/paysupport`), for example `@username` |
 | `TELEGRAM_PROXY_URL` | — | HTTP proxy for Telegram Bot API only, if Telegram is blocked |
 | `ENCRYPTION_KEY_LEGACY` | — | Previous key, only for migrating old records |
@@ -158,6 +160,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `/language` | everyone | Choose the bot language (Russian or English) |
 | `/premium` | everyone | Plan, subscription term and payment buttons |
 | `/paysupport` | everyone | Where to ask about payments |
+| `/referral` | everyone | Your invite link and friends counter |
 | `/delete_my_data` | everyone | Delete all your data from the bot (with confirmation) |
 | `/admin`, `/stats` | admins | Statistics |
 | `/broadcast text` | admins | Prepare a broadcast; `/broadcast_send` sends it, `/broadcast_cancel` cancels |
@@ -165,6 +168,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `/grant ID plan term` | admins | Grant a subscription: `pro` or `business`, term `7d`, `1m`, `3m`, `6m`, `1y` or `forever`. `@username` works instead of ID |
 | `/revoke ID` | admins | Revoke any subscription (and cancel Stars auto-renewal) |
 | `/invite plan term` | admins | One-time link with a subscription, for example `/invite business forever` |
+| `/refs` | admins | Who invited how many friends |
 | `/subs`, `/users` | admins | Active subscriptions; latest users with ID and plan |
 | `/refund ID` | admins | Refund Stars for the latest payment and revoke the subscription |
 

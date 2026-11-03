@@ -2,7 +2,9 @@ package io.github.lightsmit
 
 import io.github.lightsmit.api.ApiServer
 import io.github.lightsmit.billing.BillingConfig
+import io.github.lightsmit.billing.GrantTerm
 import io.github.lightsmit.billing.InvoiceLinks
+import io.github.lightsmit.billing.ReferralService
 import io.github.lightsmit.billing.SubscriptionNotice
 import io.github.lightsmit.billing.SubscriptionService
 import io.github.lightsmit.config.Environment
@@ -34,6 +36,7 @@ import io.github.lightsmit.storage.DatabaseManager
 import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailStateRepository
+import io.github.lightsmit.storage.ReferralRepository
 import io.github.lightsmit.storage.SubscriptionRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.storage.UserSettingsRepository
@@ -231,6 +234,30 @@ fun main() = runBlocking {
         refundStars = { userId, chargeId -> telegramControlClient.refundStarPayment(userId, chargeId) },
     )
     val mailboxQuota = MailboxQuota(registry = accountRegistry, plan = subscriptionService::plan)
+
+    // Приглашение друзей: за каждых REFERRAL_GOAL друзей с подключенным ящиком - месяц Pro (0 - выключено)
+    val referralGoal = (Environment.get("REFERRAL_GOAL")?.toIntOrNull() ?: 5).also { goal ->
+        require(goal in 0..100) { "REFERRAL_GOAL must be between 0 and 100" }
+    }
+    val referralService = ReferralService(
+        store = ReferralRepository(),
+        subscriptions = subscriptionService,
+        goal = referralGoal,
+        reward = GrantTerm.parse("1m")!!,
+        firstSeen = botUserRepository::firstSeen,
+    )
+    // Друг подключил ящик: сообщаем пригласившему о прогрессе или награде
+    val onMailboxAdded: suspend (Long) -> Unit = { ownerId ->
+        referralService.onMailboxAdded(ownerId)?.let { progress ->
+            val billingTexts = botUserRepository.language(progress.referrerId).texts.billing
+            val text = if (progress.rewarded) {
+                billingTexts.referralRewarded(progress.goal, progress.subscription?.plan, progress.subscription?.expiresAt)
+            } else {
+                billingTexts.referralProgress(progress.qualified % progress.goal, progress.goal)
+            }
+            runCatching { telegramControlClient.sendMessage(chatId = progress.referrerId, text = text) }
+        }
+    }
     // Создается после MailboxSupervisor, а нужен уже при пересылке писем (смена ID группы)
     lateinit var groupLinkService: GroupLinkService
     val invoiceLinks = InvoiceLinks { offer, lang ->
@@ -296,6 +323,7 @@ fun main() = runBlocking {
         imapClient = imapClient,
         mailboxLimit = mailboxQuota::limit,
         healthMonitor = healthMonitor,
+        onMailboxAdded = onMailboxAdded,
     )
 
     // Ящики должны быть в реестре до запуска воркеров outbox, иначе ожидающие
@@ -320,6 +348,7 @@ fun main() = runBlocking {
         backupService = backupService,
         telegramClient = telegramControlClient,
         subscriptions = subscriptionService,
+        referrals = referralService,
     )
 
     val userDataService = UserDataService(
@@ -347,6 +376,7 @@ fun main() = runBlocking {
         quota = mailboxQuota,
         groupLinks = groupLinkService,
         botUsername = botUsername,
+        referrals = referralService,
         mailBrowser = MailBrowserService(
             repository = mailAccountRepository,
             imapClient = imapClient,
@@ -382,6 +412,8 @@ fun main() = runBlocking {
             invoiceLinks = invoiceLinks,
             quota = mailboxQuota,
             groupLinks = groupLinkService,
+            referrals = referralService,
+            botUsername = botUsername,
             replyService = if (replyEnabled) {
                 MailReplyService(
                     registry = accountRegistry,

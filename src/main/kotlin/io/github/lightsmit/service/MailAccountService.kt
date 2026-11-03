@@ -51,6 +51,8 @@ class MailAccountService(
     // Сколько ящиков можно подключить: зависит от тарифа пользователя
     private val mailboxLimit: suspend (Long) -> Int,
     private val healthMonitor: MailboxHealthMonitor,
+    // Новый ящик подключен (для приглашений: друг засчитывается после первого ящика)
+    private val onMailboxAdded: suspend (ownerChatId: Long) -> Unit = {},
 ) {
 
     private val logger = LoggerFactory.getLogger(MailAccountService::class.java)
@@ -131,6 +133,15 @@ class MailAccountService(
         supervisor.start(saved)
 
         logger.info("Mailbox {} (id {}) added by owner {}", saved.username, saved.id, ownerChatId)
+        if (!alreadyExists) {
+            try {
+                onMailboxAdded(ownerChatId)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                logger.warn("Mailbox added hook failed for {}: {}", ownerChatId, exception.javaClass.simpleName)
+            }
+        }
         return AddMailAccountResult.Added(saved)
     }
 

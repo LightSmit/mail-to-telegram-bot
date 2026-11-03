@@ -31,6 +31,8 @@ enum class SubscriptionSource {
     GRANT,
     // Получена по одноразовой ссылке (/invite)
     INVITE,
+    // Награда за приглашенных друзей
+    REFERRAL,
 }
 
 /**

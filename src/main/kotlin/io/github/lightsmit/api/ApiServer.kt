@@ -3,6 +3,7 @@ package io.github.lightsmit.api
 import io.github.lightsmit.billing.InvoiceLinks
 import io.github.lightsmit.billing.Offer
 import io.github.lightsmit.billing.Plan
+import io.github.lightsmit.billing.ReferralService
 import io.github.lightsmit.billing.SubscriptionService
 import io.github.lightsmit.billing.SubscriptionSource
 import io.github.lightsmit.config.MailFilters
@@ -188,6 +189,19 @@ data class PlanDto(
 )
 
 @Serializable
+data class ReferralDto(
+    val enabled: Boolean,
+    val link: String? = null,
+    val invited: Int = 0,
+    val qualified: Int = 0,
+    val goal: Int = 0,
+    val towardsNext: Int = 0,
+    val rewards: Int = 0,
+    // Текст, который подставится при «Поделиться»
+    val shareText: String = "",
+)
+
+@Serializable
 data class InvoiceRequestDto(
     val offer: String,
 )
@@ -235,6 +249,8 @@ class ApiServer(
     private val groupLinks: GroupLinkService? = null,
     // Имя бота для ссылки t.me/бот?startgroup=
     private val botUsername: suspend () -> String? = { null },
+    // Приглашение друзей
+    private val referrals: ReferralService? = null,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -650,6 +666,30 @@ class ApiServer(
                                         stars = service.config.price(offer),
                                     )
                                 },
+                            ),
+                        )
+                    }
+
+                    // Своя ссылка-приглашение и счетчик друзей
+                    get("/referral") {
+                        val userId = call.attributes[UserIdKey]
+                        val service = referrals
+                        val username = botUsername()
+                        if (service == null || !service.enabled || username == null) {
+                            call.respond(ReferralDto(enabled = false))
+                            return@get
+                        }
+                        val stats = service.stats(userId)
+                        call.respond(
+                            ReferralDto(
+                                enabled = true,
+                                link = "https://t.me/$username?start=${service.code(userId)}",
+                                invited = stats.invited,
+                                qualified = stats.qualified,
+                                goal = stats.goal,
+                                towardsNext = stats.towardsNext,
+                                rewards = stats.rewards,
+                                shareText = call.texts.billing.referralShareText,
                             ),
                         )
                     }

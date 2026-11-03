@@ -1,6 +1,7 @@
 package io.github.lightsmit.service
 
 import io.github.lightsmit.billing.GrantTerm
+import io.github.lightsmit.billing.ReferralService
 import io.github.lightsmit.billing.Plan
 import io.github.lightsmit.billing.Subscription
 import io.github.lightsmit.billing.SubscriptionService
@@ -32,6 +33,8 @@ class AdminService(
     private val telegramClient: TelegramClient,
     // Тарифы и подписки; null - команды /grant, /revoke и др. не работают
     private val subscriptions: SubscriptionService? = null,
+    // Приглашения друзей: /refs
+    private val referrals: ReferralService? = null,
     private val startedAt: Instant = Instant.now(),
 ) {
     private val logger = LoggerFactory.getLogger(AdminService::class.java)
@@ -92,7 +95,7 @@ class AdminService(
             appendLine()
             appendLine("Команды: /broadcast текст - рассылка всем, /backup - бэкап сейчас")
             if (subscriptions != null) {
-                appendLine("Подписки: /subs, /users, /grant, /revoke, /invite, /refund (без параметров - подсказка)")
+                appendLine("Подписки: /subs, /users, /refs, /grant, /revoke, /invite, /refund (без параметров - подсказка)")
             }
         }.trimEnd()
     }
@@ -190,6 +193,27 @@ class AdminService(
         }.trimEnd()
     }
 
+    /** /refs: кто сколько друзей пригласил. */
+    suspend fun referralsText(): String {
+        val service = referrals ?: return "Приглашения не настроены."
+        val top = service.top(LIST_LIMIT)
+        if (top.isEmpty()) return "По реферальным ссылкам пока никто не приходил."
+        val names = botUsers.displayNames(top.map { summary -> summary.referrerId })
+        return buildString {
+            appendLine("🎁 Приглашения (награда за каждых ${service.goal} засчитанных друзей)")
+            appendLine()
+            top.forEach { summary ->
+                append(summary.referrerId)
+                names[summary.referrerId]?.let { name -> append(" ").append(name) }
+                append(": пришли ${summary.invited}, засчитано ${summary.qualified}")
+                if (service.goal > 0) append(", наград ${summary.qualified / service.goal}")
+                appendLine()
+            }
+            appendLine()
+            append("Засчитан - новый пользователь пришел по ссылке и подключил ящик.")
+        }.trimEnd()
+    }
+
     /** /refund <id или @username>: вернуть звезды за последнюю оплату и отозвать подписку. */
     suspend fun refundText(argument: String): String {
         val service = subscriptions ?: return BILLING_UNAVAILABLE
@@ -237,6 +261,7 @@ class AdminService(
         SubscriptionSource.STARS -> if (subscription.recurring) "Stars, автопродление" else "Stars"
         SubscriptionSource.GRANT -> "выдана"
         SubscriptionSource.INVITE -> "по ссылке"
+        SubscriptionSource.REFERRAL -> "за друзей"
     }
 
     private fun describe(term: GrantTerm): String = when (term) {

@@ -516,6 +516,7 @@ fun botCommands(t: Texts, billingEnabled: Boolean): List<Pair<String, String>> =
     add("start" to t.commandStart)
     add("mailboxes" to t.commandMailboxes)
     if (billingEnabled) add("premium" to t.billing.commandPremium)
+    if (billingEnabled) add("referral" to t.billing.commandReferral)
     add("help" to t.commandHelp)
     add("language" to t.commandLanguage)
     if (billingEnabled) add("paysupport" to t.billing.commandPaySupport)
