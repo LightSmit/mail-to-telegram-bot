@@ -175,8 +175,10 @@ class SubscriptionServiceTest {
         assertNull(service.validateCheckout(USER, Offer.PRO_MONTH.payload, "XTR", 99))
         assertNull(service.validateCheckout(USER, Offer.PRO_MONTH.payload, "USD", 100))
         assertNull(service.validateCheckout(USER, "something", "XTR", 100))
-        // Business пока не продается
-        assertNull(service.validateCheckout(USER, Offer.BUSINESS_MONTH.payload, "XTR", 300))
+        assertEquals(Offer.BUSINESS_MONTH, service.validateCheckout(USER, Offer.BUSINESS_MONTH.payload, "XTR", 300))
+        // Если Business снят с продажи, оплату не принимаем
+        val noBusiness = SubscriptionService(store, BillingConfig(enabled = true, trialDays = 0, businessOnSale = false), setOf(ADMIN), clock = { now })
+        assertNull(noBusiness.validateCheckout(USER, Offer.BUSINESS_MONTH.payload, "XTR", 300))
         assertNull(service.validateCheckout(ADMIN, Offer.PRO_MONTH.payload, "XTR", 100))
 
         service.grant(USER, Plan.PRO, GrantTerm.Forever, SubscriptionSource.INVITE)

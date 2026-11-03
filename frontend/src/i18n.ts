@@ -207,7 +207,7 @@ const ru = {
     'Все письма: поиск, «Непрочитанные», «Отправленные»',
     'Коды подтверждения из писем с кнопкой «Скопировать»',
   ],
-  businessPerks: ['Все из Pro', 'До 15 ящиков'],
+  businessPerks: ['Все из Pro', 'До 15 ящиков', 'Письма ящиков в групповой чат команды: кнопки работают у всех участников'],
   planRenew: (name: string) => `Продлить ${name}`,
   offerMonth: (stars: number) => `Месяц · ${stars}⭐`,
   offerYear: (stars: number) => `Год · ${stars}⭐`,
@@ -225,6 +225,19 @@ const ru = {
   proBrowseHint: 'На Free видны последние 20 входящих. Все письма, поиск, «Непрочитанные» и «Отправленные» доступны в Pro.',
   showPlans: 'Тарифы',
   statusOverLimit: 'Не работает на Free: работает 1 ящик. Поставьте лишние на паузу или оформите Pro',
+  // Групповой чат
+  groupTitle: 'Групповой чат',
+  groupHint: 'Письма из этого ящика будут приходить в группу, кнопки под письмами сможет нажимать любой участник. Telegram предложит выбрать группу и добавить в нее бота.',
+  groupChoose: '👥 Выбрать группу',
+  groupWaiting: 'Выберите группу в Telegram. Когда бот напишет в ней «Письма из ящика… теперь приходят в эту группу», вернитесь сюда: статус обновится сам.',
+  groupLinkedTo: (title: string) => `Письма приходят в группу «${title}»`,
+  groupUnnamed: 'без названия',
+  groupInactive: 'Пока тариф не Business, письма приходят в личный чат.',
+  groupDisconnect: 'Отключить группу',
+  groupBusinessHint: 'Пересылка писем ящика в групповой чат команды доступна на тарифе Business.',
+  groupLinkFailed: 'Не удалось получить ссылку',
+  groupUnlinked: 'Группа отключена, письма снова приходят в чат с ботом.',
+  groupUnlinkFailed: 'Не удалось отключить группу',
 };
 
 export type Dictionary = typeof ru;
@@ -382,7 +395,7 @@ const en: Dictionary = {
     'All emails: search, Unread, Sent folder',
     'Verification codes from emails with a Copy button',
   ],
-  businessPerks: ['Everything in Pro', 'Up to 15 mailboxes'],
+  businessPerks: ['Everything in Pro', 'Up to 15 mailboxes', "Mailbox emails in your team's group chat: buttons work for every member"],
   planRenew: (name: string) => `Extend ${name}`,
   offerMonth: (stars: number) => `Month · ${stars}⭐`,
   offerYear: (stars: number) => `Year · ${stars}⭐`,
@@ -400,6 +413,19 @@ const en: Dictionary = {
   proBrowseHint: 'Free shows the latest 20 inbox emails. All emails, search, Unread and the Sent folder are available in Pro.',
   showPlans: 'Plans',
   statusOverLimit: 'Not working on Free: 1 mailbox works. Pause the others or get Pro',
+  // Group chat
+  groupTitle: 'Group chat',
+  groupHint: 'Emails from this mailbox will arrive in a group, and any member can use the buttons under them. Telegram will ask you to choose a group and add the bot to it.',
+  groupChoose: '👥 Choose a group',
+  groupWaiting: 'Choose a group in Telegram. When the bot posts there that emails now arrive in this group, come back here: the status updates automatically.',
+  groupLinkedTo: (title: string) => `Emails arrive in the group "${title}"`,
+  groupUnnamed: 'untitled',
+  groupInactive: 'Until your plan is Business, emails arrive in your private chat.',
+  groupDisconnect: 'Disconnect group',
+  groupBusinessHint: 'Forwarding mailbox emails to your team group chat is available on Business.',
+  groupLinkFailed: 'Could not get the link',
+  groupUnlinked: 'Group disconnected, emails arrive in the chat with the bot again.',
+  groupUnlinkFailed: 'Could not disconnect the group',
 };
 
 export const t: Dictionary = lang === 'ru' ? ru : en;

@@ -45,6 +45,14 @@ interface BillingTexts {
 
     fun otpLine(code: String): String
     val buttonCopyCode: String
+
+    // Пересылка в групповой чат (Business)
+    fun groupLinked(name: String, address: String): String
+    val groupLinkExpired: String
+    val groupWrongUser: String
+    val groupNeedBusiness: String
+    fun groupRemoved(name: String, address: String, group: String): String
+    val groupBusinessOnly: String
 }
 
 object RuBillingTexts : BillingTexts {
@@ -79,6 +87,7 @@ object RuBillingTexts : BillingTexts {
             appendLine()
             appendLine("💼 Business")
             appendLine("• все из Pro, до ${Plan.BUSINESS.maxMailboxes} ящиков")
+            appendLine("• письма ящика в групповой чат команды: кнопки работают у всех участников")
             appendLine("• ${config.businessMonthStars}⭐ в месяц или ${config.businessYearStars}⭐ в год")
         }
         if (offers.isNotEmpty()) {
@@ -102,7 +111,7 @@ object RuBillingTexts : BillingTexts {
     }
 
     override fun invoiceDescription(offer: Offer) = when (offer.plan) {
-        Plan.BUSINESS -> "До ${Plan.BUSINESS.maxMailboxes} ящиков и все возможности Pro."
+        Plan.BUSINESS -> "До ${Plan.BUSINESS.maxMailboxes} ящиков, письма в групповой чат команды и все возможности Pro."
         else -> "До ${Plan.PRO.maxMailboxes} ящиков, все фильтры, поиск по письмам и коды подтверждения с кнопкой «Скопировать»."
     } + if (offer.recurring) " Продлевается каждые 30 дней, отменить можно в любой момент." else " Оплата один раз на 12 месяцев."
 
@@ -156,6 +165,16 @@ object RuBillingTexts : BillingTexts {
 
     override fun otpLine(code: String) = "🔑 Код: $code"
     override val buttonCopyCode = "📋 Скопировать код"
+
+    override fun groupLinked(name: String, address: String) =
+        "✅ Письма из ящика «$name» ($address) теперь приходят в эту группу.\n\n" +
+            "Кнопки под письмами может нажимать любой участник. Отключить группу можно в приложении, в настройках ящика."
+    override val groupLinkExpired = "Ссылка устарела. Получите новую в приложении: настройки ящика, раздел «Групповой чат»."
+    override val groupWrongUser = "Подключить группу может только владелец ящика: он получает ссылку в приложении."
+    override val groupNeedBusiness = "Пересылка писем в группу доступна на тарифе Business. Подробнее: /premium в личном чате с ботом."
+    override fun groupRemoved(name: String, address: String, group: String) =
+        "Бота удалили из группы «$group», поэтому письма ящика «$name» ($address) снова приходят сюда."
+    override val groupBusinessOnly = "Пересылка в группу доступна на тарифе Business"
 }
 
 object EnBillingTexts : BillingTexts {
@@ -190,6 +209,7 @@ object EnBillingTexts : BillingTexts {
             appendLine()
             appendLine("💼 Business")
             appendLine("• everything in Pro, up to ${Plan.BUSINESS.maxMailboxes} mailboxes")
+            appendLine("• mailbox emails in your team's group chat: buttons work for every member")
             appendLine("• ${config.businessMonthStars}⭐ a month or ${config.businessYearStars}⭐ a year")
         }
         if (offers.isNotEmpty()) {
@@ -213,7 +233,7 @@ object EnBillingTexts : BillingTexts {
     }
 
     override fun invoiceDescription(offer: Offer) = when (offer.plan) {
-        Plan.BUSINESS -> "Up to ${Plan.BUSINESS.maxMailboxes} mailboxes and everything in Pro."
+        Plan.BUSINESS -> "Up to ${Plan.BUSINESS.maxMailboxes} mailboxes, emails in your team's group chat and everything in Pro."
         else -> "Up to ${Plan.PRO.maxMailboxes} mailboxes, all filters, email search and verification codes with a Copy button."
     } + if (offer.recurring) " Renews every 30 days, cancel at any time." else " One-time payment for 12 months."
 
@@ -267,4 +287,14 @@ object EnBillingTexts : BillingTexts {
 
     override fun otpLine(code: String) = "🔑 Code: $code"
     override val buttonCopyCode = "📋 Copy code"
+
+    override fun groupLinked(name: String, address: String) =
+        "✅ Emails from mailbox \"$name\" ($address) now arrive in this group.\n\n" +
+            "Any member can use the buttons under emails. You can disconnect the group in the app, in the mailbox settings."
+    override val groupLinkExpired = "This link has expired. Get a new one in the app: mailbox settings, \"Group chat\"."
+    override val groupWrongUser = "Only the mailbox owner can connect a group: they get the link in the app."
+    override val groupNeedBusiness = "Forwarding emails to a group is available on Business. Details: /premium in a private chat with the bot."
+    override fun groupRemoved(name: String, address: String, group: String) =
+        "The bot was removed from the group \"$group\", so emails from mailbox \"$name\" ($address) arrive here again."
+    override val groupBusinessOnly = "Group forwarding is available on Business"
 }

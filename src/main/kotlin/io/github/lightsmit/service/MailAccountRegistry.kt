@@ -36,6 +36,13 @@ class MailAccountRegistry {
                 MailViewCallbackCodec.accountCode(account) == accountCode
         }
 
+    /** Ящик для кнопки под письмом в групповом чате: среди ящиков, привязанных к этой группе. */
+    fun findForGroupCallback(accountCode: String, groupChatId: Long): MailAccountConfig? =
+        accountsByKey.values.firstOrNull { account ->
+            account.groupChatId == groupChatId &&
+                MailViewCallbackCodec.accountCode(account) == accountCode
+        }
+
     /** Все отслеживаемые ящики пользователя. */
     fun findByOwner(ownerChatId: Long): List<MailAccountConfig> =
         accountsByKey.values.filter { account -> account.ownerChatId == ownerChatId }

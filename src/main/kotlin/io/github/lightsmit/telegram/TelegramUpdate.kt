@@ -24,6 +24,21 @@ data class TelegramMessageUpdate(
     val firstName: String? = null,
     // Сообщение об успешной оплате звездами (вместо текста)
     val payment: TelegramSuccessfulPayment? = null,
+    // Название группы (для сообщений из групп)
+    val chatTitle: String? = null,
+    // Группа стала супергруппой и получила новый ID
+    val migrateToChatId: Long? = null,
+)
+
+/** Бота добавили в чат или удалили из него (my_chat_member). */
+data class TelegramChatMemberUpdate(
+    val updateId: Long,
+    val chatId: Long,
+    val chatType: String?,
+    val chatTitle: String?,
+    val fromUserId: Long,
+    // Новый статус бота: member, administrator, left, kicked...
+    val newStatus: String,
 )
 
 /** Успешная оплата (message.successful_payment). Для ежемесячной подписки приходит при каждом продлении. */
@@ -54,4 +69,5 @@ data class TelegramUpdateBatch(
     val callbackQueries: List<TelegramCallbackQueryUpdate>,
     val messages: List<TelegramMessageUpdate> = emptyList(),
     val preCheckoutQueries: List<TelegramPreCheckoutQuery> = emptyList(),
+    val chatMemberUpdates: List<TelegramChatMemberUpdate> = emptyList(),
 )

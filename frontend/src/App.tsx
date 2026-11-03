@@ -9,6 +9,7 @@ import { NotificationsSection, type NotificationSettings } from './Notifications
 import { MailboxView } from './MailboxView'
 import { DataSection } from './DataSection'
 import { PlanSection, hasPro, type PlanInfo } from './PlanSection'
+import { GroupPanel } from './GroupPanel'
 import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider, providerHint, providerSteps, providerTitle } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
@@ -23,6 +24,9 @@ interface Account {
   filters?: MailFilters;
   // Ящик сверх лимита тарифа: письма из него не приходят
   overLimit?: boolean;
+  // Письма ящика приходят в групповой чат (Business)
+  groupLinked?: boolean;
+  groupTitle?: string | null;
 }
 
 type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | null;
@@ -179,6 +183,32 @@ function App() {
       setNotice({ kind: 'error', text: describeError(error) });
     }
     return null;
+  };
+
+  const createGroupLink = async (account: Account): Promise<string | null> => {
+    try {
+      const response = await request(`/accounts/${account.id}/group`, 'POST');
+      if (response.ok) return (await response.json()).link;
+      setNotice({ kind: 'error', text: await errorText(response, t.groupLinkFailed) });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return null;
+  };
+
+  const unlinkGroup = async (account: Account): Promise<boolean> => {
+    try {
+      const response = await request(`/accounts/${account.id}/group`, 'DELETE');
+      if (response.ok) {
+        setNotice({ kind: 'ok', text: t.groupUnlinked });
+        await fetchAccounts(true);
+        return true;
+      }
+      setNotice({ kind: 'error', text: await errorText(response, t.groupUnlinkFailed) });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return false;
   };
 
   const showPlans = () => {
@@ -453,6 +483,16 @@ function App() {
                       onSave={(filters) => handleSaveFilters(acc, filters)}
                       onClose={() => setFiltersOpenId(null)}
                     />
+                    {plan && (plan.billingEnabled || plan.plan === 'BUSINESS') && (
+                      <GroupPanel
+                        linked={acc.groupLinked === true}
+                        groupTitle={acc.groupTitle}
+                        business={plan.plan === 'BUSINESS'}
+                        createLink={() => createGroupLink(acc)}
+                        unlink={() => unlinkGroup(acc)}
+                        onUpgrade={plan.billingEnabled ? showPlans : undefined}
+                      />
+                    )}
                     <PasswordPanel
                       host={acc.host}
                       broken={acc.status === 'ERROR'}

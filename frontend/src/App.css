@@ -901,3 +901,19 @@ textarea:focus {
 .mail-view .pro-hint {
   margin-top: 12px;
 }
+
+/* Групповой чат ящика */
+.group-panel .field-label .pro-badge {
+  margin-left: 8px;
+}
+
+.group-linked {
+  margin: 0;
+  font-weight: 500;
+}
+
+.group-panel .secondary {
+  align-self: flex-start;
+  padding: 10px 14px;
+  background: var(--surface);
+}

@@ -14,6 +14,7 @@ import io.github.lightsmit.telegram.MailViewAction
 import io.github.lightsmit.telegram.MailViewCallbackCodec
 import io.github.lightsmit.telegram.TelegramApiException
 import io.github.lightsmit.telegram.TelegramCallbackQueryUpdate
+import io.github.lightsmit.telegram.TelegramChatMemberUpdate
 import io.github.lightsmit.telegram.TelegramClient
 import io.github.lightsmit.telegram.TelegramMessageUpdate
 import io.github.lightsmit.telegram.TelegramPreCheckoutQuery
@@ -52,6 +53,8 @@ class TelegramUpdatePoller(
     private val invoiceLinks: InvoiceLinks? = null,
     // Лимит ящиков по тарифу: для статуса в /mailboxes
     private val quota: MailboxQuota? = null,
+    // Пересылка писем в групповые чаты (Business)
+    private val groupLinks: GroupLinkService? = null,
 ) {
 
     private val logger =
@@ -92,6 +95,12 @@ class TelegramUpdatePoller(
                         handlePreCheckout(query)
                     }
                 }
+
+                for (member in batch.chatMemberUpdates) {
+                    launch {
+                        handleChatMember(member)
+                    }
+                }
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
@@ -108,10 +117,12 @@ class TelegramUpdatePoller(
         update: TelegramCallbackQueryUpdate,
     ) {
         touchUser(update.fromUserId, update.languageCode)
-        val t = textsFor(update.fromUserId, update.languageCode)
+        var t = textsFor(update.fromUserId, update.languageCode)
 
-        // Кнопки работают только в личном чате с ботом: письма приходят туда
-        if (update.chatId != update.fromUserId) {
+        // Кнопки работают в личном чате с ботом и в группе, к которой привязан ящик (Business)
+        val chatId = update.chatId
+        val inGroup = chatId != null && chatId != update.fromUserId
+        if (chatId == null || (inGroup && chatId > 0)) {
             answerSafely(
                 callbackQueryId = update.callbackQueryId,
                 text = t.accessDenied,
@@ -120,9 +131,11 @@ class TelegramUpdatePoller(
             return
         }
 
-        update.data?.takeIf { data -> data.startsWith(LANGUAGE_CALLBACK_PREFIX) }?.let { data ->
-            chooseLanguage(update, data.removePrefix(LANGUAGE_CALLBACK_PREFIX))
-            return
+        if (!inGroup) {
+            update.data?.takeIf { data -> data.startsWith(LANGUAGE_CALLBACK_PREFIX) }?.let { data ->
+                chooseLanguage(update, data.removePrefix(LANGUAGE_CALLBACK_PREFIX))
+                return
+            }
         }
 
         val request = update.data
@@ -137,11 +150,13 @@ class TelegramUpdatePoller(
             return
         }
 
-        // Ищем только среди ящиков нажавшего: чужие письма открыть нельзя
-        val account = registry.findForCallback(
-            accountCode = request.accountCode,
-            ownerChatId = update.fromUserId,
-        )
+        // В личном чате ищем только среди ящиков нажавшего, в группе - среди ящиков этой группы:
+        // чужие письма открыть нельзя
+        val account = if (inGroup) {
+            registry.findForGroupCallback(accountCode = request.accountCode, groupChatId = chatId)
+        } else {
+            registry.findForCallback(accountCode = request.accountCode, ownerChatId = update.fromUserId)
+        }
 
         if (account == null) {
             answerSafely(
@@ -149,6 +164,16 @@ class TelegramUpdatePoller(
                 text = t.mailboxGone,
                 showAlert = true,
             )
+            return
+        }
+
+        // В группе карточки на языке владельца ящика
+        if (inGroup) {
+            t = textsFor(account.ownerChatId, null)
+        }
+
+        if (inGroup && request.action == MailViewAction.REPLY) {
+            answerSafely(update.callbackQueryId, t.replyDisabled, showAlert = true)
             return
         }
 
@@ -200,6 +225,7 @@ class TelegramUpdatePoller(
                             sourceMessageId = requireNotNull(
                                 update.messageId,
                             ),
+                            chatId = chatId,
                         )
                     }
                 }
@@ -213,6 +239,7 @@ class TelegramUpdatePoller(
                             account = account,
                             expectedUidValidity = request.uidValidity,
                             uid = request.uid,
+                            chatId = chatId,
                         )
                     }
                 }
@@ -246,6 +273,7 @@ class TelegramUpdatePoller(
                             sourceMessageId = requireNotNull(
                                 update.messageId,
                             ),
+                            chatId = chatId,
                         )
                     }
                 }
@@ -263,7 +291,7 @@ class TelegramUpdatePoller(
 
             runCatching {
                 controlClient.sendMessage(
-                    chatId = account.ownerChatId,
+                    chatId = chatId,
                     text = t.actionFailed,
                 )
             }
@@ -277,6 +305,10 @@ class TelegramUpdatePoller(
     private suspend fun handleMessage(
         message: TelegramMessageUpdate,
     ) {
+        if (message.chatType == "group" || message.chatType == "supergroup") {
+            handleGroupMessage(message)
+            return
+        }
         if (message.chatType != "private") return
         touchUser(message.fromUserId, message.languageCode, message.username, message.firstName)
         val t = textsFor(message.fromUserId, message.languageCode)
@@ -598,6 +630,10 @@ class TelegramUpdatePoller(
                 if (account.name != account.username) append(" (").append(account.name).append(')')
                 appendLine()
                 append("    ").append(status)
+                account.groupChatId?.let {
+                    appendLine()
+                    append("    👥 ").append(account.groupTitle ?: "group")
+                }
             }
             appendLine()
             appendLine()
@@ -690,6 +726,59 @@ class TelegramUpdatePoller(
         // Об автопродлениях не пишем: человек и так видит списание в Telegram
         if (!payment.recurring || payment.firstRecurring) {
             sendPlain(chatId, t.billing.paymentDone(subscription.plan, subscription.expiresAt, subscription.recurring))
+        }
+    }
+
+    // В группах бот молчит: отвечает только на привязку ящика и следит за сменой ID группы
+    private suspend fun handleGroupMessage(message: TelegramMessageUpdate) {
+        val links = groupLinks ?: return
+
+        message.migrateToChatId?.let { newChatId ->
+            runCatching { links.onMigrated(message.chatId, newChatId) }
+                .onFailure { exception -> logger.warn("Failed to move group {}: {}", message.chatId, exception.javaClass.simpleName) }
+            return
+        }
+
+        val text = message.text?.trim() ?: return
+        val firstToken = text.substringBefore(' ')
+        if (!firstToken.substringBefore('@').equals("/start", ignoreCase = true)) return
+        val code = text.removePrefix(firstToken).trim()
+        if (!code.startsWith(GroupLinkService.CODE_PREFIX)) return
+
+        val t = textsFor(message.fromUserId, message.languageCode)
+        val reply = try {
+            when (val result = links.link(code, message.fromUserId, message.chatId, message.chatTitle)) {
+                is GroupLinkService.LinkResult.Linked -> t.billing.groupLinked(result.account.name, result.account.username)
+                GroupLinkService.LinkResult.Expired -> t.billing.groupLinkExpired
+                GroupLinkService.LinkResult.WrongUser -> t.billing.groupWrongUser
+                GroupLinkService.LinkResult.NeedBusiness -> t.billing.groupNeedBusiness
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to link group {}: {}", message.chatId, exception.javaClass.simpleName)
+            t.actionFailed
+        }
+        sendPlain(message.chatId, reply)
+    }
+
+    // Бота удалили из группы: письма привязанных ящиков возвращаются владельцам в личный чат
+    private suspend fun handleChatMember(update: TelegramChatMemberUpdate) {
+        val links = groupLinks ?: return
+        if (update.chatType != "group" && update.chatType != "supergroup") return
+        if (update.newStatus != "left" && update.newStatus != "kicked") return
+
+        val unlinked = try {
+            links.onRemovedFromGroup(update.chatId)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to unlink group {}: {}", update.chatId, exception.javaClass.simpleName)
+            return
+        }
+        unlinked.forEach { account ->
+            val t = textsFor(account.ownerChatId, null)
+            sendPlain(account.ownerChatId, t.billing.groupRemoved(account.name, account.username, update.chatTitle ?: "?"))
         }
     }
 

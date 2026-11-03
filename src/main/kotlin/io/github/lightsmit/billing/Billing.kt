@@ -141,8 +141,8 @@ data class BillingConfig(
     val proYearStars: Int = 1_000,
     val businessMonthStars: Int = 300,
     val businessYearStars: Int = 3_000,
-    // Business продается, только когда готова пересылка в групповой чат
-    val businessOnSale: Boolean = false,
+    // Business можно купить (до 15 ящиков и пересылка в групповой чат)
+    val businessOnSale: Boolean = true,
     // Контакт для вопросов об оплате (/paysupport), например @username
     val supportContact: String? = null,
 ) {

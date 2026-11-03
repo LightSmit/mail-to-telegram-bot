@@ -49,7 +49,7 @@ Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iClou
 **Plans and Telegram Stars payments** (turned on with `BILLING_ENABLED=true`)
 - Free: 1 mailbox, notifications, the latest 20 emails in the app, pause, newsletter filter, quiet hours and digest.
 - Pro (100⭐ a month or 1000⭐ a year): up to 5 mailboxes, all filters, all emails with search and Sent folder, verification codes from emails with a Copy button.
-- Business (coming): up to 15 mailboxes and forwarding to a group chat.
+- Business (300⭐ a month or 3000⭐ a year): up to 15 mailboxes and forwarding mailbox emails to a team group chat. The owner gets a group picker link in the mailbox settings; buttons under emails in the group work for every member. If the bot is removed from the group, emails go to the owner's private chat again.
 - New users get 7 days of Pro for free. The monthly plan renews automatically, the yearly plan is a one-time payment.
 - When a subscription ends, 1 mailbox keeps working (pause the others), sender filters are kept but not applied.
 - `/premium` in the bot and the Plan section in the app; `/paysupport` for payment questions.

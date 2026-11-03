@@ -38,6 +38,9 @@ class MailAccountRepository {
             ensureColumn(connection, "blocked_senders", "TEXT NOT NULL DEFAULT ''")
             ensureColumn(connection, "blocked_subject_words", "TEXT NOT NULL DEFAULT ''")
             ensureColumn(connection, "allowed_senders", "TEXT NOT NULL DEFAULT ''")
+            // Групповой чат для писем ящика (тариф Business)
+            ensureColumn(connection, "group_chat_id", "INTEGER")
+            ensureColumn(connection, "group_title", "TEXT")
         }
     }
 
@@ -86,6 +89,35 @@ class MailAccountRepository {
                 }
             }
         }
+
+    /** Привязать ящик к групповому чату (chatId = null - отвязать). null - ящик не найден или чужой. */
+    suspend fun setGroup(id: Long, ownerId: Long, chatId: Long?, title: String?): MailAccountConfig? =
+        withContext(DatabaseManager.dispatcher) {
+            val updated = DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    "UPDATE mail_accounts SET group_chat_id = ?, group_title = ? WHERE id = ? AND owner_id = ?",
+                ).use { statement ->
+                    if (chatId == null) statement.setNull(1, java.sql.Types.INTEGER) else statement.setLong(1, chatId)
+                    statement.setString(2, title?.take(128))
+                    statement.setLong(3, id)
+                    statement.setLong(4, ownerId)
+                    statement.executeUpdate()
+                }
+            }
+            if (updated == 0) {
+                null
+            } else {
+                query("SELECT * FROM mail_accounts WHERE id = ? AND owner_id = ?") {
+                    setLong(1, id)
+                    setLong(2, ownerId)
+                }.firstOrNull()
+            }
+        }
+
+    /** Ящики, привязанные к группе. */
+    suspend fun findByGroup(chatId: Long): List<MailAccountConfig> = withContext(DatabaseManager.dispatcher) {
+        query("SELECT * FROM mail_accounts WHERE group_chat_id = ? ORDER BY id") { setLong(1, chatId) }
+    }
 
     /** Ящик владельца по id; null - нет такого или он чужой. */
     suspend fun findByIdAndOwner(id: Long, ownerId: Long): MailAccountConfig? =
@@ -259,6 +291,8 @@ class MailAccountRepository {
                 password = CryptoHelper.decrypt(getString("password_encrypted")),
                 ownerChatId = getLong("owner_id"),
                 id = id,
+                groupChatId = getLong("group_chat_id").takeUnless { wasNull() },
+                groupTitle = getString("group_title"),
                 filters = MailFilters(
                     paused = getInt("paused") == 1,
                     skipBulk = getInt("skip_bulk") == 1,

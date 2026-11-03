@@ -88,3 +88,17 @@ export function openInvoice(link: string): Promise<InvoiceStatus> {
     }
   });
 }
+
+/** Открывает ссылку t.me внутри Telegram (например, выбор группы для бота). */
+export function openTelegramLink(link: string): void {
+  const open = (WebApp as unknown as { openTelegramLink?: (url: string) => void }).openTelegramLink;
+  if (telegramScriptLoaded && typeof open === 'function') {
+    try {
+      open.call(WebApp, link);
+      return;
+    } catch {
+      // ниже откроем обычной ссылкой
+    }
+  }
+  window.open(link, '_blank');
+}

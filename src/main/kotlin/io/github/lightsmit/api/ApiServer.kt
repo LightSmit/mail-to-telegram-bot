@@ -15,6 +15,7 @@ import io.github.lightsmit.i18n.Lang
 import io.github.lightsmit.i18n.Texts
 import io.github.lightsmit.service.BrowseFailure
 import io.github.lightsmit.service.BrowseResult
+import io.github.lightsmit.service.GroupLinkService
 import io.github.lightsmit.service.MailBrowserService
 import io.github.lightsmit.service.MailboxQuota
 import io.github.lightsmit.service.NewMailAccount
@@ -57,6 +58,9 @@ data class AccountResponseDto(
     val filters: FiltersDto = FiltersDto(),
     // Ящик сверх лимита тарифа: письма из него не приходят
     val overLimit: Boolean = false,
+    // Групповой чат, куда приходят письма ящика (Business); null - в личный чат
+    val groupTitle: String? = null,
+    val groupLinked: Boolean = false,
 )
 
 @Serializable
@@ -227,6 +231,10 @@ class ApiServer(
     private val invoiceLinks: InvoiceLinks? = null,
     // Какие ящики сверх лимита тарифа
     private val quota: MailboxQuota? = null,
+    // Пересылка писем ящика в групповой чат (Business)
+    private val groupLinks: GroupLinkService? = null,
+    // Имя бота для ссылки t.me/бот?startgroup=
+    private val botUsername: suspend () -> String? = { null },
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -327,6 +335,8 @@ class ApiServer(
                                 problem = health.problem?.text(call.texts),
                                 filters = account.filters.toDto(),
                                 overLimit = account.id in overLimit,
+                                groupTitle = account.groupTitle,
+                                groupLinked = account.groupChatId != null,
                             )
                         }
                         call.respond(response)
@@ -409,6 +419,48 @@ class ApiServer(
                             call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
                         } else {
                             call.respond(HttpStatusCode.OK, updated.filters.toDto())
+                        }
+                    }
+
+                    // Ссылка, по которой Telegram предложит выбрать группу и добавить в нее бота
+                    post("/accounts/{id}/group") {
+                        val ownerId = call.attributes[UserIdKey]
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val links = groupLinks
+                        if (accountId == null || links == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            return@post
+                        }
+                        if (!links.allowed(ownerId)) {
+                            call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to call.texts.billing.groupBusinessOnly))
+                            return@post
+                        }
+                        val code = links.createCode(ownerId, accountId)
+                        if (code == null) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
+                            return@post
+                        }
+                        val username = botUsername()
+                        if (username == null) {
+                            call.respond(HttpStatusCode.BadGateway, mapOf("error" to call.texts.unavailable))
+                            return@post
+                        }
+                        call.respond(InvoiceLinkDto("https://t.me/$username?startgroup=$code"))
+                    }
+
+                    // Отключить группу: письма снова приходят в личный чат
+                    delete("/accounts/{id}/group") {
+                        val ownerId = call.attributes[UserIdKey]
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val links = groupLinks
+                        if (accountId == null || links == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            return@delete
+                        }
+                        if (links.unlink(ownerId, accountId) == null) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
+                        } else {
+                            call.respond(mapOf("status" to "unlinked"))
                         }
                     }
 

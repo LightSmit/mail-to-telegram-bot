@@ -14,6 +14,7 @@ import io.github.lightsmit.mail.SmtpMailSender
 import io.github.lightsmit.service.AdminService
 import io.github.lightsmit.service.BackupService
 import io.github.lightsmit.service.EmailContentLoader
+import io.github.lightsmit.service.GroupLinkService
 import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.service.MailboxHealthMonitor
@@ -184,6 +185,12 @@ fun main() = runBlocking {
         }
     }
 
+    // Имя бота (для ссылок): узнаем у Telegram один раз
+    var cachedBotUsername: String? = null
+    val botUsername: suspend () -> String? = {
+        cachedBotUsername ?: runCatching { telegramControlClient.getBotUsername() }.getOrNull()?.also { name -> cachedBotUsername = name }
+    }
+
     // Диагностика: какому боту принадлежит токен. Mini App должен открываться
     // именно из этого бота, иначе проверка подписи initData не пройдет (401).
     launch {
@@ -224,6 +231,8 @@ fun main() = runBlocking {
         refundStars = { userId, chargeId -> telegramControlClient.refundStarPayment(userId, chargeId) },
     )
     val mailboxQuota = MailboxQuota(registry = accountRegistry, plan = subscriptionService::plan)
+    // Создается после MailboxSupervisor, а нужен уже при пересылке писем (смена ID группы)
+    lateinit var groupLinkService: GroupLinkService
     val invoiceLinks = InvoiceLinks { offer, lang ->
         val billingTexts = lang.texts.billing
         telegramControlClient.createStarsInvoiceLink(
@@ -249,6 +258,7 @@ fun main() = runBlocking {
         language = botUserRepository::language,
         plan = subscriptionService::plan,
         isOverLimit = mailboxQuota::isOverLimit,
+        onGroupMigrated = { oldChatId, newChatId -> groupLinkService.onMigrated(oldChatId, newChatId) },
     )
 
     val healthMonitor = MailboxHealthMonitor(
@@ -270,6 +280,12 @@ fun main() = runBlocking {
     val mailboxSupervisor = MailboxSupervisor(
         watcher = idleWatcher,
         registry = accountRegistry,
+    )
+
+    groupLinkService = GroupLinkService(
+        repository = mailAccountRepository,
+        supervisor = mailboxSupervisor,
+        plan = subscriptionService::plan,
     )
 
     val accountService = MailAccountService(
@@ -329,6 +345,8 @@ fun main() = runBlocking {
         subscriptions = subscriptionService,
         invoiceLinks = invoiceLinks,
         quota = mailboxQuota,
+        groupLinks = groupLinkService,
+        botUsername = botUsername,
         mailBrowser = MailBrowserService(
             repository = mailAccountRepository,
             imapClient = imapClient,
@@ -363,6 +381,7 @@ fun main() = runBlocking {
             subscriptions = subscriptionService,
             invoiceLinks = invoiceLinks,
             quota = mailboxQuota,
+            groupLinks = groupLinkService,
             replyService = if (replyEnabled) {
                 MailReplyService(
                     registry = accountRegistry,

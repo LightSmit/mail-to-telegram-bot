@@ -56,8 +56,10 @@ class MailForwardingService(
     private val notificationSettings: suspend (Long) -> NotificationSettings = { NotificationSettings() },
     // Язык владельца ящика: на нем пишутся карточки писем и кнопки
     private val language: suspend (Long) -> Lang = { Lang.RU },
-    // Тариф владельца: от него зависят фильтры по отправителям и коды подтверждения
+    // Тариф владельца: от него зависят фильтры по отправителям, коды подтверждения и пересылка в группу
     private val plan: suspend (Long) -> Plan = { Plan.BUSINESS },
+    // Группа стала супергруппой: запомнить ее новый ID
+    private val onGroupMigrated: suspend (oldChatId: Long, newChatId: Long) -> Unit = { _, _ -> },
     // Ящик сверх лимита тарифа: письма из него не присылаются
     private val isOverLimit: suspend (MailAccountConfig) -> Boolean = { false },
     private val clock: () -> Instant = Instant::now,
@@ -152,23 +154,57 @@ class MailForwardingService(
         val t = texts(account)
         // Код из темы письма показываем сразу, не дожидаясь загрузки текста
         val code = verificationCode(account, metadata.subject, body = null)
-        return telegramControlClient.sendMessageWithButtons(
-            chatId = account.ownerChatId,
-            text = formatPendingNotification(
-                account = account,
-                metadata = metadata,
-                t = t,
-                code = code,
-            ),
-            buttons = pendingSummaryButtons(
+        val chatId = cardChatId(account)
+        val text = formatPendingNotification(
+            account = account,
+            metadata = metadata,
+            t = t,
+            code = code,
+        )
+        val buttons = forChat(
+            pendingSummaryButtons(
                 account = account,
                 uidValidity = item.uidValidity,
                 uid = item.uid,
                 t = t,
                 code = code,
             ),
-            silent = shouldSendSilently(account.ownerChatId),
+            chatId = chatId,
+            account = account,
         )
+        val silent = shouldSendSilently(account.ownerChatId)
+
+        return try {
+            telegramControlClient.sendMessageWithButtons(chatId = chatId, text = text, buttons = buttons, silent = silent)
+        } catch (exception: TelegramApiException) {
+            // Группа стала супергруппой: запоминаем новый ID и отправляем туда
+            val newChatId = exception.migrateToChatId ?: throw exception
+            onGroupMigrated(chatId, newChatId)
+            telegramControlClient.sendMessageWithButtons(chatId = newChatId, text = text, buttons = buttons, silent = silent)
+        }
+    }
+
+    /**
+     * Куда присылать карточки писем ящика: в привязанную группу (только на Business),
+     * иначе владельцу в личный чат.
+     */
+    private suspend fun cardChatId(account: MailAccountConfig): Long {
+        val current = registry.findByKey(buildAccountKey(account)) ?: account
+        val group = current.groupChatId ?: return account.ownerChatId
+        val ownerPlan = runCatching { plan(account.ownerChatId) }.getOrDefault(Plan.FREE)
+        return if (ownerPlan == Plan.BUSINESS) group else account.ownerChatId
+    }
+
+    // В группе нет кнопки "Ответить": ответ пишется в личном чате с ботом
+    private fun forChat(
+        buttons: List<TelegramInlineButton>,
+        chatId: Long,
+        account: MailAccountConfig,
+    ): List<TelegramInlineButton> {
+        if (chatId == account.ownerChatId) return buttons
+        return buttons.filterNot { button ->
+            button.callbackData?.let(MailViewCallbackCodec::decode)?.action == MailViewAction.REPLY
+        }
     }
 
     // Без звука: в тихие часы, а в режиме сводки - все карточки пачки, кроме первой
@@ -225,9 +261,10 @@ class MailForwardingService(
             }
 
             val code = verificationCode(account, message.subject, message.body)
+            val chatId = cardChatId(account)
             try {
                 telegramControlClient.editMessageWithButtons(
-                    chatId = account.ownerChatId,
+                    chatId = chatId,
                     messageId = telegramMessageId,
                     text = formatNotification(
                         account = account,
@@ -235,13 +272,17 @@ class MailForwardingService(
                         t = t,
                         code = code,
                     ),
-                    buttons = summaryButtons(
+                    buttons = forChat(
+                        summaryButtons(
+                            account = account,
+                            message = message,
+                            uidValidity = item.uidValidity,
+                            uid = item.uid,
+                            t = t,
+                            code = code,
+                        ),
+                        chatId = chatId,
                         account = account,
-                        message = message,
-                        uidValidity = item.uidValidity,
-                        uid = item.uid,
-                        t = t,
-                        code = code,
                     ),
                 )
             } catch (exception: TelegramApiException) {
@@ -291,6 +332,8 @@ class MailForwardingService(
         expectedUidValidity: Long,
         uid: Long,
         sourceMessageId: Long,
+        // Чат, где нажали кнопку: личный или группа ящика
+        chatId: Long = account.ownerChatId,
     ) {
         val emailKey = interactiveEmailKey(
             account = account,
@@ -302,6 +345,7 @@ class MailForwardingService(
             account = account,
             expectedUidValidity = expectedUidValidity,
             uid = uid,
+            chatId = chatId,
         ) ?: return
 
         val t = texts(account)
@@ -311,12 +355,16 @@ class MailForwardingService(
             t = t,
         )
 
-        val buttons = textViewButtons(
+        val buttons = forChat(
+            textViewButtons(
+                account = account,
+                message = message,
+                uidValidity = expectedUidValidity,
+                uid = uid,
+                t = t,
+            ),
+            chatId = chatId,
             account = account,
-            message = message,
-            uidValidity = expectedUidValidity,
-            uid = uid,
-            t = t,
         )
 
         val accountKey = buildAccountKey(account)
@@ -343,7 +391,7 @@ class MailForwardingService(
                     )
                 ) {
                     telegramControlClient.editMessageWithButtons(
-                        chatId = account.ownerChatId,
+                        chatId = chatId,
                         messageId = sourceMessageId,
                         text = fullText,
                         buttons = buttons,
@@ -353,13 +401,13 @@ class MailForwardingService(
                 } else {
                     val newMessageIds =
                         telegramControlClient.sendLongMessageWithButtons(
-                            chatId = account.ownerChatId,
+                            chatId = chatId,
                             text = fullText,
                             buttons = buttons,
                         )
 
                     textViewMessageIds[emailKey] = ActiveView(newMessageIds)
-                    deleteMessageSafely(account.ownerChatId, sourceMessageId)
+                    deleteMessageSafely(chatId, sourceMessageId)
                 }
             } catch (exception: Exception) {
                 outboxRepository.markSummaryReady(
@@ -385,11 +433,14 @@ class MailForwardingService(
         expectedUidValidity: Long,
         uid: Long,
         sourceMessageId: Long,
+        // Чат, где нажали кнопку: личный или группа ящика
+        chatId: Long = account.ownerChatId,
     ) {
         val message = loadEmailOrNotify(
             account = account,
             expectedUidValidity = expectedUidValidity,
             uid = uid,
+            chatId = chatId,
         ) ?: return
 
         val t = texts(account)
@@ -401,13 +452,17 @@ class MailForwardingService(
             code = code,
         )
 
-        val buttons = summaryButtons(
+        val buttons = forChat(
+            summaryButtons(
+                account = account,
+                message = message,
+                uidValidity = expectedUidValidity,
+                uid = uid,
+                t = t,
+                code = code,
+            ),
+            chatId = chatId,
             account = account,
-            message = message,
-            uidValidity = expectedUidValidity,
-            uid = uid,
-            t = t,
-            code = code,
         )
 
         val emailKey = interactiveEmailKey(
@@ -422,7 +477,7 @@ class MailForwardingService(
 
             if (longViewMessageIds == null) {
                 telegramControlClient.editMessageWithButtons(
-                    chatId = account.ownerChatId,
+                    chatId = chatId,
                     messageId = sourceMessageId,
                     text = summaryText,
                     buttons = buttons,
@@ -445,7 +500,7 @@ class MailForwardingService(
             } else {
                 val summaryMessageId =
                     telegramControlClient.sendMessageWithButtons(
-                        chatId = account.ownerChatId,
+                        chatId = chatId,
                         text = summaryText,
                         buttons = buttons,
                     )
@@ -454,7 +509,7 @@ class MailForwardingService(
                     add(sourceMessageId)
                     addAll(longViewMessageIds)
                 }.forEach { messageId ->
-                    deleteMessageSafely(account.ownerChatId, messageId)
+                    deleteMessageSafely(chatId, messageId)
                 }
 
                 val stateUpdated =
@@ -506,11 +561,14 @@ class MailForwardingService(
         account: MailAccountConfig,
         expectedUidValidity: Long,
         uid: Long,
+        // Чат, где нажали кнопку: личный или группа ящика
+        chatId: Long = account.ownerChatId,
     ) {
         val message = loadEmailOrNotify(
             account = account,
             expectedUidValidity = expectedUidValidity,
             uid = uid,
+            chatId = chatId,
         ) ?: return
 
         val t = texts(account)
@@ -519,7 +577,7 @@ class MailForwardingService(
             message.skippedAttachments.isEmpty()
         ) {
             telegramControlClient.sendMessage(
-                chatId = account.ownerChatId,
+                chatId = chatId,
                 text = t.noAttachments,
             )
             return
@@ -530,7 +588,7 @@ class MailForwardingService(
         val statusMessageId = if (attachmentTotal > 0) {
             try {
                 telegramControlClient.sendMessage(
-                    chatId = account.ownerChatId,
+                    chatId = chatId,
                     text = t.sendingAttachments(0, attachmentTotal),
                 )
             } catch (exception: CancellationException) {
@@ -551,13 +609,13 @@ class MailForwardingService(
                 val startedAt = System.currentTimeMillis()
 
                 telegramMediaClient.sendAttachment(
-                    chatId = account.ownerChatId,
+                    chatId = chatId,
                     attachment = attachment,
                 )
 
                 statusMessageId?.let { messageId ->
                     editMessageSafely(
-                        chatId = account.ownerChatId,
+                        chatId = chatId,
                         messageId = messageId,
                         text = t.sendingAttachments(index + 1, attachmentTotal),
                     )
@@ -573,7 +631,7 @@ class MailForwardingService(
 
             if (message.skippedAttachments.isNotEmpty()) {
                 telegramControlClient.sendLongMessage(
-                    chatId = account.ownerChatId,
+                    chatId = chatId,
                     text = formatSkippedAttachments(
                         account = account,
                         message = message,
@@ -584,13 +642,13 @@ class MailForwardingService(
 
             statusMessageId?.let { messageId ->
                 editMessageSafely(
-                    chatId = account.ownerChatId,
+                    chatId = chatId,
                     messageId = messageId,
                     text = t.attachmentsSent(attachmentTotal),
                 )
 
                 delay(1_500)
-                deleteMessageSafely(account.ownerChatId, messageId)
+                deleteMessageSafely(chatId, messageId)
             }
 
             logger.info(
@@ -604,7 +662,7 @@ class MailForwardingService(
         } catch (exception: Exception) {
             statusMessageId?.let { messageId ->
                 editMessageSafely(
-                    chatId = account.ownerChatId,
+                    chatId = chatId,
                     messageId = messageId,
                     text = t.attachmentsFailed,
                 )
@@ -618,6 +676,8 @@ class MailForwardingService(
         account: MailAccountConfig,
         expectedUidValidity: Long,
         uid: Long,
+        // Чат, где нажали кнопку: личный или группа ящика
+        chatId: Long = account.ownerChatId,
     ): EmailSummary? {
         val message = contentLoader.get(
             account = account,
@@ -630,7 +690,7 @@ class MailForwardingService(
         }
 
         telegramControlClient.sendMessage(
-            chatId = account.ownerChatId,
+            chatId = chatId,
             text = texts(account).cannotOpenEmail,
         )
 

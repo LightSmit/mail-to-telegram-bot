@@ -40,6 +40,8 @@ class TelegramApiException(
     val description: String,
     val retryAfterSeconds: Int? = null,
     val errorCode: Int? = null,
+    // Группа стала супергруппой: писать нужно в чат с этим ID
+    val migrateToChatId: Long? = null,
 ) : RuntimeException(
     buildString {
         append("Telegram API")
@@ -465,7 +467,7 @@ class TelegramClient(
                     }
                     parameters.append(
                         "allowed_updates",
-                        """["callback_query","message","pre_checkout_query"]""",
+                        """["callback_query","message","pre_checkout_query","my_chat_member"]""",
                     )
                 }
             }
@@ -482,6 +484,7 @@ class TelegramClient(
         val callbackQueries = mutableListOf<TelegramCallbackQueryUpdate>()
         val messages = mutableListOf<TelegramMessageUpdate>()
         val preCheckoutQueries = mutableListOf<TelegramPreCheckoutQuery>()
+        val chatMemberUpdates = mutableListOf<TelegramChatMemberUpdate>()
 
         for (updateElement in updates) {
             val update = updateElement.jsonObject
@@ -513,6 +516,27 @@ class TelegramClient(
                         username = from["username"]?.jsonPrimitive?.contentOrNull,
                         firstName = from["first_name"]?.jsonPrimitive?.contentOrNull,
                         payment = message["successful_payment"]?.jsonObject?.let(::parseSuccessfulPayment),
+                        chatTitle = chat["title"]?.jsonPrimitive?.contentOrNull,
+                        migrateToChatId = message["migrate_to_chat_id"]?.jsonPrimitive?.longOrNull,
+                    )
+                }
+                continue
+            }
+
+            val chatMember = update["my_chat_member"]?.jsonObject
+            if (chatMember != null) {
+                val chat = chatMember["chat"]?.jsonObject
+                val chatId = chat?.get("id")?.jsonPrimitive?.longOrNull
+                val fromUserId = chatMember["from"]?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
+                val status = chatMember["new_chat_member"]?.jsonObject?.get("status")?.jsonPrimitive?.contentOrNull
+                if (chatId != null && fromUserId != null && status != null) {
+                    chatMemberUpdates += TelegramChatMemberUpdate(
+                        updateId = updateId,
+                        chatId = chatId,
+                        chatType = chat["type"]?.jsonPrimitive?.contentOrNull,
+                        chatTitle = chat["title"]?.jsonPrimitive?.contentOrNull,
+                        fromUserId = fromUserId,
+                        newStatus = status,
                     )
                 }
                 continue
@@ -588,6 +612,7 @@ class TelegramClient(
             callbackQueries = callbackQueries,
             messages = messages,
             preCheckoutQueries = preCheckoutQueries,
+            chatMemberUpdates = chatMemberUpdates,
         )
     }
 
@@ -824,10 +849,17 @@ class TelegramClient(
                 ?.jsonPrimitive
                 ?.intOrNull
 
+            val migrateTo = root["parameters"]
+                ?.jsonObject
+                ?.get("migrate_to_chat_id")
+                ?.jsonPrimitive
+                ?.longOrNull
+
             throw TelegramApiException(
                 description = description,
                 retryAfterSeconds = retryAfter,
                 errorCode = errorCode,
+                migrateToChatId = migrateTo,
             )
         }
 

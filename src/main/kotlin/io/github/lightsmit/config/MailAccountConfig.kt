@@ -12,6 +12,9 @@ data class MailAccountConfig(
     val id: Long = 0,
     /** Какие письма этого ящика не присылать. */
     val filters: MailFilters = MailFilters(),
+    /** Групповой чат, куда приходят письма ящика (тариф Business); null - в личный чат владельца. */
+    val groupChatId: Long? = null,
+    val groupTitle: String? = null,
 ) {
     // Пароль не должен попадать в логи даже случайно
     override fun toString(): String =
