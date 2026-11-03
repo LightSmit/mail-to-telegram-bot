@@ -28,6 +28,8 @@ data class TelegramMessageUpdate(
     val chatTitle: String? = null,
     // Группа стала супергруппой и получила новый ID
     val migrateToChatId: Long? = null,
+    // Сообщение отправлено от имени чата (анонимный админ группы или канал), а не от человека
+    val senderChatId: Long? = null,
 )
 
 /** Бота добавили в чат или удалили из него (my_chat_member). */

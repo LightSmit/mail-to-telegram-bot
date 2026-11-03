@@ -53,6 +53,7 @@ interface BillingTexts {
     val groupNeedBusiness: String
     fun groupRemoved(name: String, address: String, group: String): String
     val groupBusinessOnly: String
+    val groupAnonymous: String
 }
 
 object RuBillingTexts : BillingTexts {
@@ -175,6 +176,10 @@ object RuBillingTexts : BillingTexts {
     override fun groupRemoved(name: String, address: String, group: String) =
         "Бота удалили из группы «$group», поэтому письма ящика «$name» ($address) снова приходят сюда."
     override val groupBusinessOnly = "Пересылка в группу доступна на тарифе Business"
+    override val groupAnonymous =
+        "Вы пишете анонимно, от имени группы, и бот не может проверить, что ящик ваш. " +
+            "Нажмите на аватар слева от поля ввода, выберите свой профиль и откройте ссылку из приложения еще раз " +
+            "(или выключите «Анонимность» в правах администратора)."
 }
 
 object EnBillingTexts : BillingTexts {
@@ -297,4 +302,8 @@ object EnBillingTexts : BillingTexts {
     override fun groupRemoved(name: String, address: String, group: String) =
         "The bot was removed from the group \"$group\", so emails from mailbox \"$name\" ($address) arrive here again."
     override val groupBusinessOnly = "Group forwarding is available on Business"
+    override val groupAnonymous =
+        "You are posting anonymously on behalf of the group, so the bot cannot check that the mailbox is yours. " +
+            "Tap the avatar next to the message field, choose your own profile and open the link from the app again " +
+            "(or turn off \"Remain anonymous\" in your admin rights)."
 }

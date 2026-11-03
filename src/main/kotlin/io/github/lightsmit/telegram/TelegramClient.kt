@@ -518,6 +518,7 @@ class TelegramClient(
                         payment = message["successful_payment"]?.jsonObject?.let(::parseSuccessfulPayment),
                         chatTitle = chat["title"]?.jsonPrimitive?.contentOrNull,
                         migrateToChatId = message["migrate_to_chat_id"]?.jsonPrimitive?.longOrNull,
+                        senderChatId = message["sender_chat"]?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull,
                     )
                 }
                 continue

@@ -746,6 +746,14 @@ class TelegramUpdatePoller(
         if (!code.startsWith(GroupLinkService.CODE_PREFIX)) return
 
         val t = textsFor(message.fromUserId, message.languageCode)
+
+        // Анонимный админ пишет от имени группы: кто он, бот не знает, поэтому владельца не узнать.
+        // Код не тратим: после смены профиля ссылку можно открыть снова
+        if (message.senderChatId != null || message.fromUserId == ANONYMOUS_ADMIN_ID) {
+            sendPlain(message.chatId, t.billing.groupAnonymous)
+            return
+        }
+
         val reply = try {
             when (val result = links.link(code, message.fromUserId, message.chatId, message.chatTitle)) {
                 is GroupLinkService.LinkResult.Linked -> t.billing.groupLinked(result.account.name, result.account.username)
@@ -851,6 +859,8 @@ class TelegramUpdatePoller(
 
     private companion object {
         const val LANGUAGE_CALLBACK_PREFIX = "lang:"
+        // @GroupAnonymousBot: от его имени приходят сообщения анонимных админов групп
+        const val ANONYMOUS_ADMIN_ID = 1_087_968_824L
         const val LONG_POLL_TIMEOUT_SECONDS = 25
         const val POLL_RETRY_DELAY_MILLIS = 1_000L
         const val CALLBACK_ANSWER_TIMEOUT_MILLIS = 5_000L
