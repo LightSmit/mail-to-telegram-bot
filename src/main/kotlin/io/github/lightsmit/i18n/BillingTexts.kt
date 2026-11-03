@@ -207,7 +207,7 @@ object RuBillingTexts : BillingTexts {
         if (rewards > 0) append("\nПолучено наград: $rewards")
     }
     override val referralShareButton = "📤 Поделиться ссылкой"
-    override val referralShareText = "Пересылаю новые письма из почты прямо в Telegram. Попробуй:"
+    override val referralShareText = "☝️ Бот, который присылает новые письма из почты прямо в Telegram. Попробуй, по этой ссылке первые 7 дней Pro бесплатно."
     override val referralOff = "Сейчас приглашения не работают."
     override val referralNewcomer = "👋 По вашей ссылке пришел новый пользователь. Он засчитается, когда подключит ящик."
     override fun referralProgress(towardsNext: Int, goal: Int) =
@@ -361,7 +361,7 @@ object EnBillingTexts : BillingTexts {
         if (rewards > 0) append("\nRewards received: $rewards")
     }
     override val referralShareButton = "📤 Share the link"
-    override val referralShareText = "I get new emails right in Telegram. Try it:"
+    override val referralShareText = "☝️ A bot that sends your new emails right to Telegram. Try it: the first 7 days of Pro are free."
     override val referralOff = "Invitations are not available right now."
     override val referralNewcomer = "👋 A new user came with your link. They will count once they connect a mailbox."
     override fun referralProgress(towardsNext: Int, goal: Int) =
