@@ -66,3 +66,25 @@ export function showBackButton(handler: () => void): () => void {
     }
   };
 }
+
+export type InvoiceStatus = 'paid' | 'cancelled' | 'failed' | 'pending' | 'unsupported';
+
+type InvoiceApi = (url: string, callback?: (status: string) => void) => void;
+
+/**
+ * Открывает окно оплаты звездами по ссылке из createInvoiceLink.
+ * Без скрипта Telegram (или в старом клиенте) оплату открыть нельзя: 'unsupported'.
+ */
+export function openInvoice(link: string): Promise<InvoiceStatus> {
+  const open = (WebApp as unknown as { openInvoice?: InvoiceApi }).openInvoice;
+  if (!telegramScriptLoaded || typeof open !== 'function') return Promise.resolve('unsupported');
+  return new Promise((resolve) => {
+    try {
+      open.call(WebApp, link, (status) => {
+        resolve(status === 'paid' || status === 'cancelled' || status === 'pending' ? status : 'failed');
+      });
+    } catch {
+      resolve('unsupported');
+    }
+  });
+}

@@ -36,5 +36,9 @@ class MailAccountRegistry {
                 MailViewCallbackCodec.accountCode(account) == accountCode
         }
 
+    /** Все отслеживаемые ящики пользователя. */
+    fun findByOwner(ownerChatId: Long): List<MailAccountConfig> =
+        accountsByKey.values.filter { account -> account.ownerChatId == ownerChatId }
+
     fun size(): Int = accountsByKey.size
 }

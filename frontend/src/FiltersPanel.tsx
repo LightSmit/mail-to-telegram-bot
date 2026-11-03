@@ -30,11 +30,14 @@ function toList(text: string): string[] {
 
 interface Props {
   initial: MailFilters;
+  // false - тариф Free: списки отправителей и слов недоступны (сохраненные не действуют)
+  pro?: boolean;
+  onUpgrade?: () => void;
   onSave: (filters: MailFilters) => Promise<boolean>;
   onClose: () => void;
 }
 
-export function FiltersPanel({ initial: rawInitial, onSave, onClose }: Props) {
+export function FiltersPanel({ initial: rawInitial, pro = true, onUpgrade, onSave, onClose }: Props) {
   const initial = withDefaults(rawInitial);
   const [paused, setPaused] = useState(initial.paused);
   const [skipBulk, setSkipBulk] = useState(initial.skipBulk);
@@ -45,12 +48,13 @@ export function FiltersPanel({ initial: rawInitial, onSave, onClose }: Props) {
 
   const save = async () => {
     setSaving(true);
+    // На Free списки не меняются: отправляем сохраненные как есть
     const saved = await onSave({
       paused,
       skipBulk,
-      blockedSenders: toList(senders),
-      blockedSubjectWords: toList(words),
-      allowedSenders: toList(allowed),
+      blockedSenders: pro ? toList(senders) : initial.blockedSenders,
+      blockedSubjectWords: pro ? toList(words) : initial.blockedSubjectWords,
+      allowedSenders: pro ? toList(allowed) : initial.allowedSenders,
     });
     setSaving(false);
     if (saved) onClose();
@@ -76,34 +80,46 @@ export function FiltersPanel({ initial: rawInitial, onSave, onClose }: Props) {
         </span>
       </label>
 
-      <label className="field">
+      {!pro && (
+        <p className="pro-hint">
+          <span className="pro-badge">{t.proBadge}</span> {t.proFiltersHint}
+          {onUpgrade && (
+            <button type="button" className="link-button" onClick={onUpgrade}>{t.showPlans}</button>
+          )}
+        </p>
+      )}
+
+      <label className={pro ? 'field' : 'field field-locked'}>
         <span className="field-label">{t.onlyFrom}</span>
         <textarea
           rows={3}
           placeholder={'boss@company.ru\nbank.ru'}
           value={allowed}
+          disabled={!pro}
           onChange={(e) => setAllowed(e.target.value)}
         />
         <span className="field-hint">{t.onlyFromHint}</span>
       </label>
 
-      <label className="field">
+      <label className={pro ? 'field' : 'field field-locked'}>
         <span className="field-label">{t.notFrom}</span>
         <textarea
           rows={3}
           placeholder={'news@shop.ru\nexample.com'}
           value={senders}
+          disabled={!pro}
           onChange={(e) => setSenders(e.target.value)}
         />
         <span className="field-hint">{t.notFromHint}</span>
       </label>
 
-      <label className="field">
+      <label className={pro ? 'field' : 'field field-locked'}>
         <span className="field-label">{t.notSubject}</span>
         <textarea
           rows={3}
           placeholder={t.subjectPlaceholder}
           value={words}
+          disabled={!pro}
           onChange={(e) => setWords(e.target.value)}
         />
         <span className="field-hint">{t.notSubjectHint}</span>

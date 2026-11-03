@@ -48,7 +48,8 @@ class MailAccountService(
     private val stateRepository: MailStateRepository,
     private val outboxRepository: MailNotificationOutboxRepository,
     private val imapClient: ImapMailClient,
-    private val maxAccountsPerOwner: Int,
+    // Сколько ящиков можно подключить: зависит от тарифа пользователя
+    private val mailboxLimit: suspend (Long) -> Int,
     private val healthMonitor: MailboxHealthMonitor,
 ) {
 
@@ -59,6 +60,10 @@ class MailAccountService(
 
     fun health(accountId: Long): MailboxHealth =
         healthMonitor.health(accountId)
+
+    /** Ящик владельца; null - нет или чужой. */
+    suspend fun find(ownerChatId: Long, accountId: Long): MailAccountConfig? =
+        repository.findByIdAndOwner(accountId, ownerChatId)
 
     /** Сохраняет фильтры ящика и сразу применяет их. null - ящик не найден или чужой. */
     suspend fun updateFilters(ownerChatId: Long, accountId: Long, filters: MailFilters): MailAccountConfig? {
@@ -101,8 +106,9 @@ class MailAccountService(
         }
 
         val alreadyExists = repository.existsForOwner(ownerChatId, username)
-        if (!alreadyExists && repository.countByOwnerId(ownerChatId) >= maxAccountsPerOwner) {
-            return AddMailAccountResult.LimitReached(maxAccountsPerOwner)
+        val limit = mailboxLimit(ownerChatId)
+        if (!alreadyExists && repository.countByOwnerId(ownerChatId) >= limit) {
+            return AddMailAccountResult.LimitReached(limit)
         }
 
         val name = request.name.trim().ifEmpty { username }.take(64)

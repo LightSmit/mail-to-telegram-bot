@@ -5,6 +5,15 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
+/** Пользователь в списке у администратора (/users). */
+data class BotUserInfo(
+    val userId: Long,
+    val username: String?,
+    val firstName: String?,
+    val lastSeenAt: Instant,
+    val blocked: Boolean,
+)
+
 /** Все, кто хоть раз писал боту или открывал приложение: для статистики, рассылок и языка интерфейса. */
 class BotUserRepository {
 
@@ -45,30 +54,51 @@ class BotUserRepository {
                     statement.executeUpdate("ALTER TABLE bot_users ADD COLUMN language_manual INTEGER NOT NULL DEFAULT 0")
                 }
             }
+            // @username и имя из Telegram (добавлены позже): чтобы админ мог найти человека для /grant
+            if ("username" !in columns) {
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate("ALTER TABLE bot_users ADD COLUMN username TEXT")
+                }
+            }
+            if ("first_name" !in columns) {
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate("ALTER TABLE bot_users ADD COLUMN first_name TEXT")
+                }
+            }
         }
     }
 
     /** Отмечает, что пользователь был активен (и снимает пометку "заблокировал бота"). */
-    suspend fun touch(userId: Long, languageCode: String? = null, now: Instant = Instant.now()) {
+    suspend fun touch(
+        userId: Long,
+        languageCode: String? = null,
+        username: String? = null,
+        firstName: String? = null,
+        now: Instant = Instant.now(),
+    ) {
         val language = languageCode?.takeIf(String::isNotBlank)?.let(Lang::fromCode)
         withContext(DatabaseManager.dispatcher) {
             DatabaseManager.dataSource.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                    INSERT INTO bot_users (user_id, first_seen_at, last_seen_at, language) VALUES (?, ?, ?, ?)
+                    INSERT INTO bot_users (user_id, first_seen_at, last_seen_at, language, username, first_name) VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(user_id) DO UPDATE SET
                         last_seen_at = excluded.last_seen_at,
                         blocked = 0,
                         language = CASE
                             WHEN bot_users.language_manual = 1 THEN bot_users.language
                             ELSE COALESCE(excluded.language, bot_users.language)
-                        END
+                        END,
+                        username = COALESCE(excluded.username, bot_users.username),
+                        first_name = COALESCE(excluded.first_name, bot_users.first_name)
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, userId)
                     statement.setLong(2, now.toEpochMilli())
                     statement.setLong(3, now.toEpochMilli())
                     statement.setString(4, language?.name)
+                    statement.setString(5, username?.takeIf(String::isNotBlank)?.lowercase()?.take(64))
+                    statement.setString(6, firstName?.takeIf(String::isNotBlank)?.take(64))
                     statement.executeUpdate()
                 }
             }
@@ -180,6 +210,63 @@ class BotUserRepository {
     suspend fun countFirstSeenSince(since: Instant): Long = countWhere("first_seen_at >= ${since.toEpochMilli()}")
 
     suspend fun countBlocked(): Long = countWhere("blocked = 1")
+
+    /** Последние активные пользователи: для /users. */
+    suspend fun recent(limit: Int): List<BotUserInfo> = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT user_id, username, first_name, last_seen_at, blocked FROM bot_users ORDER BY last_seen_at DESC LIMIT ?",
+            ).use { statement ->
+                statement.setInt(1, limit)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                BotUserInfo(
+                                    userId = rs.getLong(1),
+                                    username = rs.getString(2),
+                                    firstName = rs.getString(3),
+                                    lastSeenAt = Instant.ofEpochMilli(rs.getLong(4)),
+                                    blocked = rs.getInt(5) == 1,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Telegram ID по @username (если человек писал боту). */
+    suspend fun findIdByUsername(username: String): Long? = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT user_id FROM bot_users WHERE username = ?").use { statement ->
+                statement.setString(1, username.removePrefix("@").trim().lowercase())
+                statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
+            }
+        }
+    }
+
+    /** Имя для списка подписок: @username или имя из Telegram. */
+    suspend fun displayNames(userIds: Collection<Long>): Map<Long, String> {
+        if (userIds.isEmpty()) return emptyMap()
+        return withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                // Только числа из кода, без пользовательского ввода
+                val ids = userIds.joinToString(",")
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT user_id, username, first_name FROM bot_users WHERE user_id IN ($ids)").use { rs ->
+                        buildMap {
+                            while (rs.next()) {
+                                val name = rs.getString(2)?.let { value -> "@$value" } ?: rs.getString(3)
+                                if (name != null) put(rs.getLong(1), name)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /** Получатели рассылки: все, кто не заблокировал бота. */
     suspend fun findReachableIds(): List<Long> = withContext(DatabaseManager.dispatcher) {

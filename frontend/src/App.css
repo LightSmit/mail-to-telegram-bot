@@ -765,3 +765,139 @@ textarea:focus {
   color: var(--text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
+
+/* Тариф */
+.plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.plan-card.plan-pro,
+.plan-card.plan-business {
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    var(--brand-gradient) border-box;
+  border: 2px solid transparent;
+}
+
+.plan-current {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.plan-name {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.plan-status {
+  color: var(--hint);
+  font-size: 14px;
+}
+
+.plan-offer {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.plan-offer-title {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.plan-perks {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  font-size: 15px;
+}
+
+.plan-perks li + li {
+  margin-top: 4px;
+}
+
+.plan-offer-title + .plan-buttons {
+  margin-top: 10px;
+}
+
+.plan-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.plan-buttons .primary,
+.plan-buttons .secondary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin-top: 0;
+  padding: 12px 8px;
+  font-size: 15px;
+}
+
+.plan-buttons .secondary {
+  background: var(--bg);
+}
+
+.plan-hint {
+  margin: 10px 2px 0;
+}
+
+.plan-saving {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+/* Возможности Pro на тарифе Free */
+.pro-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand-gradient);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+
+.pro-hint .pro-badge {
+  margin-left: 0;
+}
+
+.pro-hint {
+  margin: 0;
+  color: var(--hint);
+  font-size: 14px;
+}
+
+.pro-hint .link-button {
+  padding: 2px 4px;
+}
+
+.field-locked textarea,
+.mail-search:disabled {
+  opacity: 0.55;
+}
+
+.segmented button:disabled,
+.chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.mail-view .pro-hint {
+  margin-top: 12px;
+}

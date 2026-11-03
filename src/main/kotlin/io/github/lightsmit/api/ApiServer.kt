@@ -1,5 +1,10 @@
 package io.github.lightsmit.api
 
+import io.github.lightsmit.billing.InvoiceLinks
+import io.github.lightsmit.billing.Offer
+import io.github.lightsmit.billing.Plan
+import io.github.lightsmit.billing.SubscriptionService
+import io.github.lightsmit.billing.SubscriptionSource
 import io.github.lightsmit.config.MailFilters
 import io.github.lightsmit.service.AddMailAccountResult
 import io.github.lightsmit.service.MailAccountService
@@ -11,6 +16,7 @@ import io.github.lightsmit.i18n.Texts
 import io.github.lightsmit.service.BrowseFailure
 import io.github.lightsmit.service.BrowseResult
 import io.github.lightsmit.service.MailBrowserService
+import io.github.lightsmit.service.MailboxQuota
 import io.github.lightsmit.service.NewMailAccount
 import io.github.lightsmit.service.NotificationSchedule
 import io.github.lightsmit.service.NotificationSettings
@@ -49,6 +55,8 @@ data class AccountResponseDto(
     val status: String = "CONNECTING",
     val problem: String? = null,
     val filters: FiltersDto = FiltersDto(),
+    // Ящик сверх лимита тарифа: письма из него не приходят
+    val overLimit: Boolean = false,
 )
 
 @Serializable
@@ -100,6 +108,8 @@ data class MailListPageDto(
     val total: Int,
     val items: List<MailListItemDto>,
     val hasMore: Boolean,
+    // Бесплатный тариф: показаны только последние письма, остальные - в Pro
+    val limited: Boolean = false,
 )
 
 @Serializable
@@ -151,6 +161,39 @@ data class LanguageDto(
 )
 
 @Serializable
+data class OfferDto(
+    val id: String,
+    val plan: String,
+    // month или year
+    val period: String,
+    val stars: Int,
+)
+
+@Serializable
+data class PlanDto(
+    val billingEnabled: Boolean,
+    val plan: String,
+    // Время окончания в миллисекундах (UTC); null - бессрочно
+    val expiresAt: Long? = null,
+    val lifetime: Boolean = false,
+    val recurring: Boolean = false,
+    val trial: Boolean = false,
+    val admin: Boolean = false,
+    val maxMailboxes: Int,
+    val offers: List<OfferDto> = emptyList(),
+)
+
+@Serializable
+data class InvoiceRequestDto(
+    val offer: String,
+)
+
+@Serializable
+data class InvoiceLinkDto(
+    val link: String,
+)
+
+@Serializable
 data class UpdatePasswordRequestDto(
     val appPassword: String,
 )
@@ -179,6 +222,11 @@ class ApiServer(
     private val mailBrowser: MailBrowserService? = null,
     // Удаление всех данных пользователя
     private val userData: UserDataService? = null,
+    // Тарифы и оплата звездами; null - тарифов нет, все доступно
+    private val subscriptions: SubscriptionService? = null,
+    private val invoiceLinks: InvoiceLinks? = null,
+    // Какие ящики сверх лимита тарифа
+    private val quota: MailboxQuota? = null,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -186,6 +234,9 @@ class ApiServer(
     private val LangKey = AttributeKey<Lang>("Lang")
 
     private val ApplicationCall.texts: Texts get() = attributes[LangKey].texts
+
+    // Тариф пользователя запроса; без тарифов - все возможности
+    private suspend fun planOf(userId: Long): Plan = subscriptions?.plan(userId) ?: Plan.BUSINESS
 
     fun start() {
         embeddedServer(Netty, port = port) {
@@ -264,6 +315,7 @@ class ApiServer(
                     // Ящики текущего пользователя
                     get("/accounts") {
                         val ownerId = call.attributes[UserIdKey]
+                        val overLimit = quota?.overLimitIds(ownerId).orEmpty()
                         val response = accountService.list(ownerId).map { account ->
                             val health = accountService.health(account.id)
                             AccountResponseDto(
@@ -274,6 +326,7 @@ class ApiServer(
                                 status = health.status.name,
                                 problem = health.problem?.text(call.texts),
                                 filters = account.filters.toDto(),
+                                overLimit = account.id in overLimit,
                             )
                         }
                         call.respond(response)
@@ -311,7 +364,13 @@ class ApiServer(
                             is AddMailAccountResult.LimitReached ->
                                 call.respond(
                                     HttpStatusCode.Conflict,
-                                    mapOf("error" to call.texts.limitReached(result.limit)),
+                                    mapOf(
+                                        "error" to call.texts.billing.limitReached(
+                                            plan = planOf(ownerId),
+                                            limit = result.limit,
+                                            billingEnabled = subscriptions?.enabled == true,
+                                        ),
+                                    ),
                                 )
                         }
                     }
@@ -327,6 +386,23 @@ class ApiServer(
                         }
 
                         val request = call.receive<FiltersDto>()
+
+                        // На Free списки отправителей и слов менять нельзя (сохраненные остаются, но не действуют)
+                        if (!planOf(ownerId).hasProFeatures) {
+                            val current = accountService.find(ownerId, accountId)?.filters
+                            if (current == null) {
+                                call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
+                                return@put
+                            }
+                            val listsChanged = request.allowedSenders != current.allowedSenders ||
+                                request.blockedSenders != current.blockedSenders ||
+                                request.blockedSubjectWords != current.blockedSubjectWords
+                            if (listsChanged) {
+                                call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to call.texts.billing.proFilters))
+                                return@put
+                            }
+                        }
+
                         val updated = accountService.updateFilters(ownerId, accountId, request.toModel())
 
                         if (updated == null) {
@@ -405,16 +481,43 @@ class ApiServer(
                             return@get
                         }
 
+                        val ownerId = call.attributes[UserIdKey]
+                        val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
+                        var limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 30
+                        val search = call.request.queryParameters["q"]
+                        val unreadOnly = call.request.queryParameters["unread"] == "true"
+
+                        // Free: только последние FREE_BROWSE_LIMIT входящих, без поиска и фильтра "непрочитанные"
+                        val limited = !planOf(ownerId).hasProFeatures
+                        if (limited) {
+                            if (role != MailFolderRole.INBOX || !search.isNullOrBlank() || unreadOnly || offset >= FREE_BROWSE_LIMIT) {
+                                call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to call.texts.billing.proBrowse))
+                                return@get
+                            }
+                            limit = minOf(limit, FREE_BROWSE_LIMIT - offset)
+                        }
+
                         val result = browser.list(
-                            ownerId = call.attributes[UserIdKey],
+                            ownerId = ownerId,
                             accountId = accountId,
                             role = role,
-                            offset = call.request.queryParameters["offset"]?.toIntOrNull() ?: 0,
-                            limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 30,
-                            search = call.request.queryParameters["q"],
-                            unreadOnly = call.request.queryParameters["unread"] == "true",
+                            offset = offset,
+                            limit = limit,
+                            search = search,
+                            unreadOnly = unreadOnly,
                         )
-                        if (result is BrowseResult.Ok) call.respond(result.value.toDto()) else respondBrowseError(call, result)
+                        if (result is BrowseResult.Ok) {
+                            val page = result.value.toDto()
+                            call.respond(
+                                if (limited) {
+                                    page.copy(hasMore = false, limited = page.hasMore || offset + page.items.size >= FREE_BROWSE_LIMIT)
+                                } else {
+                                    page
+                                },
+                            )
+                        } else {
+                            respondBrowseError(call, result)
+                        }
                     }
 
                     // Одно письмо: ?folder=inbox|sent&v=UIDVALIDITY
@@ -461,6 +564,59 @@ class ApiServer(
 
                         val result = browser.sendAttachments(call.attributes[UserIdKey], accountId, uidValidity, uid)
                         if (result is BrowseResult.Ok) call.respond(mapOf("status" to "sending")) else respondBrowseError(call, result)
+                    }
+
+                    // Тариф пользователя и что можно купить
+                    get("/plan") {
+                        val userId = call.attributes[UserIdKey]
+                        val service = subscriptions
+                        if (service == null) {
+                            call.respond(PlanDto(billingEnabled = false, plan = Plan.BUSINESS.name, maxMailboxes = Plan.BUSINESS.maxMailboxes))
+                            return@get
+                        }
+                        val status = service.status(userId)
+                        val offers = if (service.enabled) {
+                            service.config.offersOnSale.filter { offer -> service.canBuy(userId, offer) }
+                        } else {
+                            emptyList()
+                        }
+                        call.respond(
+                            PlanDto(
+                                billingEnabled = service.enabled,
+                                plan = status.plan.name,
+                                expiresAt = status.expiresAt?.toEpochMilli(),
+                                lifetime = status.lifetime,
+                                recurring = status.recurring,
+                                trial = status.source == SubscriptionSource.TRIAL,
+                                admin = status.admin,
+                                maxMailboxes = status.plan.maxMailboxes,
+                                offers = offers.map { offer ->
+                                    OfferDto(
+                                        id = offer.name,
+                                        plan = offer.plan.name,
+                                        period = if (offer.recurring) "month" else "year",
+                                        stars = service.config.price(offer),
+                                    )
+                                },
+                            ),
+                        )
+                    }
+
+                    // Ссылка на оплату: приложение открывает ее через Telegram.WebApp.openInvoice
+                    post("/plan/invoice") {
+                        val userId = call.attributes[UserIdKey]
+                        val service = subscriptions
+                        val links = invoiceLinks
+                        val offer = Offer.parse(call.receive<InvoiceRequestDto>().offer)
+                        if (service == null || links == null || offer == null || !service.config.onSale(offer)) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            return@post
+                        }
+                        if (!service.canBuy(userId, offer)) {
+                            call.respond(HttpStatusCode.Conflict, mapOf("error" to call.texts.billing.checkoutRejected))
+                            return@post
+                        }
+                        call.respond(InvoiceLinkDto(links.link(offer, call.attributes[LangKey])))
                     }
 
                     // Язык интерфейса: какой сейчас и смена вручную (кнопка RU / EN в приложении)
@@ -534,6 +690,11 @@ class ApiServer(
                 call.respond(HttpStatusCode.BadGateway, mapOf("error" to message))
             }
         }
+    }
+
+    private companion object {
+        // Сколько последних писем видно в приложении на бесплатном тарифе
+        const val FREE_BROWSE_LIMIT = 20
     }
 
     // id пользователя и его language_code из уже проверенного initData

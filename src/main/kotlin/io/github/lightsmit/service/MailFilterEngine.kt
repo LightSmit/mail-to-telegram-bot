@@ -3,7 +3,7 @@ package io.github.lightsmit.service
 import io.github.lightsmit.config.MailFilters
 
 /** Почему письмо не прислано (для логов). null - присылать. */
-enum class MailFilterReason { PAUSED, NOT_ALLOWED_SENDER, BULK, BLOCKED_SENDER, BLOCKED_SUBJECT }
+enum class MailFilterReason { PAUSED, NOT_ALLOWED_SENDER, BULK, BLOCKED_SENDER, BLOCKED_SUBJECT, OVER_LIMIT }
 
 object MailFilterEngine {
 

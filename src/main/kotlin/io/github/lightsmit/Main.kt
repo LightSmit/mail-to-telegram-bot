@@ -1,8 +1,13 @@
 package io.github.lightsmit
 
 import io.github.lightsmit.api.ApiServer
+import io.github.lightsmit.billing.BillingConfig
+import io.github.lightsmit.billing.InvoiceLinks
+import io.github.lightsmit.billing.SubscriptionNotice
+import io.github.lightsmit.billing.SubscriptionService
 import io.github.lightsmit.config.Environment
 import io.github.lightsmit.i18n.Lang
+import io.github.lightsmit.i18n.botCommands
 import io.github.lightsmit.mail.ImapIdleWatcher
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.mail.SmtpMailSender
@@ -12,6 +17,7 @@ import io.github.lightsmit.service.EmailContentLoader
 import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.service.MailboxHealthMonitor
+import io.github.lightsmit.service.MailboxQuota
 import io.github.lightsmit.service.MailBrowserService
 import io.github.lightsmit.service.MailReplyService
 import io.github.lightsmit.service.NotificationSettingsService
@@ -27,6 +33,7 @@ import io.github.lightsmit.storage.DatabaseManager
 import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailStateRepository
+import io.github.lightsmit.storage.SubscriptionRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.storage.UserSettingsRepository
 import io.github.lightsmit.telegram.MailViewCallbackCodec
@@ -67,13 +74,23 @@ fun main() = runBlocking {
     // Ответ на письма из Telegram. Включать, только если хостинг пускает исходящий SMTP (порты 465/587)
     val replyEnabled = Environment.get("REPLY_ENABLED")?.lowercase() == "true"
 
-    val maxAccountsPerOwner = Environment
-        .get("MAX_MAILBOXES_PER_USER")
-        ?.toIntOrNull()
-        ?: 5
-    require(maxAccountsPerOwner in 1..100) {
-        "MAX_MAILBOXES_PER_USER must be between 1 and 100"
+    // Тарифы и оплата звездами. Пока BILLING_ENABLED не true, все пользуются ботом как раньше (лимит Pro)
+    fun stars(name: String, default: Int): Int {
+        val value = Environment.get(name)?.toIntOrNull() ?: default
+        require(value in 1..10_000) { "$name must be between 1 and 10000 stars" }
+        return value
     }
+    val billingConfig = BillingConfig(
+        enabled = Environment.get("BILLING_ENABLED")?.lowercase() == "true",
+        trialDays = (Environment.get("TRIAL_DAYS")?.toIntOrNull() ?: 7).also { days ->
+            require(days in 0..90) { "TRIAL_DAYS must be between 0 and 90" }
+        },
+        proMonthStars = stars("PRICE_PRO_MONTH", 100),
+        proYearStars = stars("PRICE_PRO_YEAR", 1_000),
+        businessMonthStars = stars("PRICE_BUSINESS_MONTH", 300),
+        businessYearStars = stars("PRICE_BUSINESS_YEAR", 3_000),
+        supportContact = Environment.get("SUPPORT_CONTACT")?.trim()?.takeIf(String::isNotEmpty),
+    )
 
     val telegramProxyUrl = Environment.get("TELEGRAM_PROXY_URL")
 
@@ -156,12 +173,7 @@ fun main() = runBlocking {
             // По умолчанию русские подсказки, для английского Telegram - английские
             for ((languageCode, texts) in listOf(null to Lang.RU.texts, "en" to Lang.EN.texts)) {
                 telegramControlClient.setMyCommands(
-                    commands = listOf(
-                        "start" to texts.commandStart,
-                        "mailboxes" to texts.commandMailboxes,
-                        "help" to texts.commandHelp,
-                        "language" to texts.commandLanguage,
-                    ),
+                    commands = botCommands(texts, billingEnabled = billingConfig.enabled),
                     languageCode = languageCode,
                 )
             }
@@ -204,6 +216,26 @@ fun main() = runBlocking {
 
     val userSettingsRepository = UserSettingsRepository()
 
+    val subscriptionService = SubscriptionService(
+        store = SubscriptionRepository(),
+        config = billingConfig,
+        adminIds = adminChatIds,
+        cancelRenewal = { userId, chargeId -> telegramControlClient.editUserStarSubscription(userId, chargeId, canceled = true) },
+        refundStars = { userId, chargeId -> telegramControlClient.refundStarPayment(userId, chargeId) },
+    )
+    val mailboxQuota = MailboxQuota(registry = accountRegistry, plan = subscriptionService::plan)
+    val invoiceLinks = InvoiceLinks { offer, lang ->
+        val billingTexts = lang.texts.billing
+        telegramControlClient.createStarsInvoiceLink(
+            title = billingTexts.invoiceTitle(offer),
+            description = billingTexts.invoiceDescription(offer),
+            payload = offer.payload,
+            label = billingTexts.invoiceLabel,
+            amount = billingConfig.price(offer),
+            subscriptionPeriodSeconds = if (offer.recurring) SubscriptionService.SUBSCRIPTION_PERIOD_SECONDS else null,
+        )
+    }
+
     val forwardingService = MailForwardingService(
         registry = accountRegistry,
         imapClient = imapClient,
@@ -215,6 +247,8 @@ fun main() = runBlocking {
         replyEnabled = replyEnabled,
         notificationSettings = { ownerId -> userSettingsRepository.get(ownerId) },
         language = botUserRepository::language,
+        plan = subscriptionService::plan,
+        isOverLimit = mailboxQuota::isOverLimit,
     )
 
     val healthMonitor = MailboxHealthMonitor(
@@ -244,7 +278,7 @@ fun main() = runBlocking {
         stateRepository = mailStateRepository,
         outboxRepository = mailOutboxRepository,
         imapClient = imapClient,
-        maxAccountsPerOwner = maxAccountsPerOwner,
+        mailboxLimit = mailboxQuota::limit,
         healthMonitor = healthMonitor,
     )
 
@@ -269,6 +303,7 @@ fun main() = runBlocking {
         healthMonitor = healthMonitor,
         backupService = backupService,
         telegramClient = telegramControlClient,
+        subscriptions = subscriptionService,
     )
 
     val userDataService = UserDataService(
@@ -276,6 +311,7 @@ fun main() = runBlocking {
         settingsRepository = userSettingsRepository,
         botUsers = botUserRepository,
         backupKeepDays = backupKeep,
+        subscriptions = subscriptionService,
     )
 
     val apiServer = ApiServer(
@@ -290,6 +326,9 @@ fun main() = runBlocking {
             outboxRepository = mailOutboxRepository,
         ),
         userData = userDataService,
+        subscriptions = subscriptionService,
+        invoiceLinks = invoiceLinks,
+        quota = mailboxQuota,
         mailBrowser = MailBrowserService(
             repository = mailAccountRepository,
             imapClient = imapClient,
@@ -321,6 +360,9 @@ fun main() = runBlocking {
             botUsers = botUserRepository,
             adminService = adminService,
             userData = userDataService,
+            subscriptions = subscriptionService,
+            invoiceLinks = invoiceLinks,
+            quota = mailboxQuota,
             replyService = if (replyEnabled) {
                 MailReplyService(
                     registry = accountRegistry,
@@ -332,7 +374,15 @@ fun main() = runBlocking {
             },
         )
 
-        logger.info("Watched mailboxes: {} (limit per user: {})", watchedMailboxes, maxAccountsPerOwner)
+        logger.info("Watched mailboxes: {}", watchedMailboxes)
+        logger.info(
+            "Billing: {}, trial {} days, Pro {}/{} stars, support contact: {}",
+            if (billingConfig.enabled) "on" else "off",
+            billingConfig.trialDays,
+            billingConfig.proMonthStars,
+            billingConfig.proYearStars,
+            if (billingConfig.supportContact != null) "set" else "not set",
+        )
         logger.info(
             "IMAP safety poll: {} s, NOOP: {} s, max attachment: {} MB, Telegram proxy: {}, replies: {}",
             safetyPollSeconds,
@@ -359,7 +409,19 @@ fun main() = runBlocking {
                 backupService.runSchedule()
             }
 
-            (listOf(telegramUpdateJob, backupJob) + mailOutboxJobs).joinAll()
+            // Напоминания о конце подписки и сообщения о переходе на Free
+            val subscriptionJob = launch {
+                subscriptionService.runSchedule { notice ->
+                    val billingTexts = botUserRepository.language(notice.userId).texts.billing
+                    val text = when (notice) {
+                        is SubscriptionNotice.Expiring -> billingTexts.expiring(notice.plan, notice.expiresAt, notice.trial)
+                        is SubscriptionNotice.Ended -> billingTexts.ended(notice.plan, notice.trial)
+                    }
+                    telegramControlClient.sendMessage(chatId = notice.userId, text = text)
+                }
+            }
+
+            (listOf(telegramUpdateJob, backupJob, subscriptionJob) + mailOutboxJobs).joinAll()
         }
     } finally {
         mailboxSupervisor.close()

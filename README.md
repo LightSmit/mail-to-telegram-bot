@@ -46,6 +46,15 @@ Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iClou
 - IMAP servers in private networks are rejected (no SSRF into the server).
 - Users can delete all their data at any time: `/delete_my_data` in the bot or "My data" in the Mini App.
 
+**Plans and Telegram Stars payments** (turned on with `BILLING_ENABLED=true`)
+- Free: 1 mailbox, notifications, the latest 20 emails in the app, pause, newsletter filter, quiet hours and digest.
+- Pro (100⭐ a month or 1000⭐ a year): up to 5 mailboxes, all filters, all emails with search and Sent folder, verification codes from emails with a Copy button.
+- Business (coming): up to 15 mailboxes and forwarding to a group chat.
+- New users get 7 days of Pro for free. The monthly plan renews automatically, the yearly plan is a one-time payment.
+- When a subscription ends, 1 mailbox keeps working (pause the others), sender filters are kept but not applied.
+- `/premium` in the bot and the Plan section in the app; `/paysupport` for payment questions.
+- Admins from `.env` always have Business.
+
 **Prepared but disabled by default**
 - Reply to an email from Telegram via SMTP (`REPLY_ENABLED=true`). Many hosting providers block outgoing SMTP ports 465 and 587; enable it only on a server where they are open.
 
@@ -124,7 +133,6 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `MINI_APP_URL` | `https://<DOMAIN>` | Explicit Mini App URL, if it differs |
 | `TELEGRAM_CHAT_ID` | — | Owner's Telegram ID, always an admin |
 | `ADMIN_IDS` | — | More admins, comma separated |
-| `MAX_MAILBOXES_PER_USER` | `5` | Mailbox limit per user |
 | `IMAP_SAFETY_POLL_SECONDS` | `15` | Safety check over a fresh connection (each check is a new login) |
 | `IMAP_NOOP_SECONDS` | `5` | NOOP over the open IDLE connection |
 | `IDLE_RECONNECT_DELAY_SECONDS` | `5` | Base reconnect delay (exponential backoff on errors) |
@@ -132,6 +140,11 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `BACKUP_HOUR` / `BACKUP_KEEP` | `4` / `7` | Hour of the daily backup and number of copies kept |
 | `BACKUP_SEND_TO_ADMINS` | `true` | Send the daily backup file to admins |
 | `REPLY_ENABLED` | `false` | "Reply" button (needs open outgoing SMTP 465/587) |
+| `BILLING_ENABLED` | `false` | Plans and Stars payments. While `false`, everyone has Pro limits |
+| `TRIAL_DAYS` | `7` | Pro trial for new users, days (0 - no trial) |
+| `PRICE_PRO_MONTH` / `PRICE_PRO_YEAR` | `100` / `1000` | Pro prices in Stars |
+| `PRICE_BUSINESS_MONTH` / `PRICE_BUSINESS_YEAR` | `300` / `3000` | Business prices in Stars |
+| `SUPPORT_CONTACT` | — | Contact for payment questions (`/paysupport`), for example `@username` |
 | `TELEGRAM_PROXY_URL` | — | HTTP proxy for Telegram Bot API only, if Telegram is blocked |
 | `ENCRYPTION_KEY_LEGACY` | — | Previous key, only for migrating old records |
 
@@ -143,10 +156,17 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `/help` | everyone | How it works and how to connect a mailbox |
 | `/mailboxes` | everyone | Your mailboxes and their status |
 | `/language` | everyone | Choose the bot language (Russian or English) |
+| `/premium` | everyone | Plan, subscription term and payment buttons |
+| `/paysupport` | everyone | Where to ask about payments |
 | `/delete_my_data` | everyone | Delete all your data from the bot (with confirmation) |
 | `/admin`, `/stats` | admins | Statistics |
 | `/broadcast text` | admins | Prepare a broadcast; `/broadcast_send` sends it, `/broadcast_cancel` cancels |
 | `/backup` | admins | Make a database backup now |
+| `/grant ID plan term` | admins | Grant a subscription: `pro` or `business`, term `7d`, `1m`, `3m`, `6m`, `1y` or `forever`. `@username` works instead of ID |
+| `/revoke ID` | admins | Revoke any subscription (and cancel Stars auto-renewal) |
+| `/invite plan term` | admins | One-time link with a subscription, for example `/invite business forever` |
+| `/subs`, `/users` | admins | Active subscriptions; latest users with ID and plan |
+| `/refund ID` | admins | Refund Stars for the latest payment and revoke the subscription |
 
 ## Updating and backups
 

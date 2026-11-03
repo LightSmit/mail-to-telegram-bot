@@ -8,6 +8,7 @@ import { PasswordPanel } from './PasswordPanel'
 import { NotificationsSection, type NotificationSettings } from './NotificationsSection'
 import { MailboxView } from './MailboxView'
 import { DataSection } from './DataSection'
+import { PlanSection, hasPro, type PlanInfo } from './PlanSection'
 import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider, providerHint, providerSteps, providerTitle } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
@@ -20,6 +21,8 @@ interface Account {
   status?: MailboxStatus;
   problem?: string | null;
   filters?: MailFilters;
+  // Ящик сверх лимита тарифа: письма из него не приходят
+  overLimit?: boolean;
 }
 
 type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | null;
@@ -29,6 +32,17 @@ const REQUEST_TIMEOUT_MS = 20000;
 const ADD_ACCOUNT_TIMEOUT_MS = 70000;
 // Пока приложение открыто, статусы ящиков обновляются сами
 const REFRESH_INTERVAL_MS = 15000;
+// После оплаты сервер узнает о ней из сообщения Telegram: проверяем тариф несколько раз
+const PLAN_POLL_ATTEMPTS = 6;
+const PLAN_POLL_DELAY_MS = 1500;
+
+// Класс цвета статуса: пауза и ящик сверх лимита - серые
+function statusKind(account: Account): string {
+  if (account.filters?.paused || account.overLimit) return 'paused';
+  return (account.status ?? 'CONNECTING').toLowerCase();
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function describeError(error: unknown): string {
   if (error instanceof DOMException && error.name === 'AbortError') {
@@ -58,6 +72,7 @@ async function errorText(response: Response, prefix: string): Promise<string> {
 
 function statusLabel(account: Account): string {
   if (account.filters?.paused) return t.statusPaused;
+  if (account.overLimit) return t.statusOverLimit;
   switch (account.status) {
     case 'OK':
       return t.statusOk;
@@ -77,6 +92,8 @@ function App() {
   const [filtersOpenId, setFiltersOpenId] = useState<number | null>(null);
   // Открытый ящик: просмотр его писем вместо главного экрана
   const [browsingId, setBrowsingId] = useState<number | null>(null);
+  // Тариф: null - еще не загружен (до загрузки ничего не блокируем)
+  const [plan, setPlan] = useState<PlanInfo | null>(null);
   const [notice, setNotice] = useState<Notice>(
     initData ? null : { kind: 'error', text: t.openFromTelegram }
   );
@@ -130,8 +147,49 @@ function App() {
     }
   };
 
+  const fetchPlan = async (): Promise<PlanInfo | null> => {
+    try {
+      const response = await request('/plan');
+      if (!response.ok) return null;
+      const info: PlanInfo = await response.json();
+      setPlan(info);
+      return info;
+    } catch {
+      return null;
+    }
+  };
+
+  // Оплата прошла в Telegram: ждем, пока бот получит ее и обновит тариф
+  const refreshAfterPayment = async () => {
+    const before = plan;
+    for (let attempt = 0; attempt < PLAN_POLL_ATTEMPTS; attempt++) {
+      const info = await fetchPlan();
+      if (info && (info.plan !== before?.plan || info.expiresAt !== before?.expiresAt)) break;
+      await sleep(PLAN_POLL_DELAY_MS);
+    }
+    await fetchAccounts(true);
+  };
+
+  const createInvoice = async (offerId: string): Promise<string | null> => {
+    try {
+      const response = await request('/plan/invoice', 'POST', { offer: offerId });
+      if (response.ok) return (await response.json()).link;
+      setNotice({ kind: 'error', text: await errorText(response, t.paymentFailed) });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return null;
+  };
+
+  const showPlans = () => {
+    setBrowsingId(null);
+    setFiltersOpenId(null);
+    setTimeout(() => document.getElementById('plan')?.scrollIntoView({ behavior: 'smooth' }), 50);
+  };
+
   useEffect(() => {
     fetchAccounts();
+    fetchPlan();
     const timer = setInterval(() => fetchAccounts(true), REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -310,7 +368,13 @@ function App() {
   if (browsing) {
     return (
       <main className="app">
-        <MailboxView account={browsing} request={request} onClose={() => setBrowsingId(null)} />
+        <MailboxView
+          account={browsing}
+          request={request}
+          limited={!hasPro(plan)}
+          onUpgrade={plan?.billingEnabled ? showPlans : undefined}
+          onClose={() => setBrowsingId(null)}
+        />
       </main>
     );
   }
@@ -346,7 +410,7 @@ function App() {
             {accounts.map((acc) => (
               <li key={acc.id} className="mailbox-item">
                 <div className="mailbox">
-                  <span className={`status-dot status-${acc.filters?.paused ? 'paused' : (acc.status ?? 'CONNECTING').toLowerCase()}`} aria-hidden="true" />
+                  <span className={`status-dot status-${statusKind(acc)}`} aria-hidden="true" />
                   <button
                     type="button"
                     className="mailbox-info mailbox-open"
@@ -355,7 +419,7 @@ function App() {
                   >
                     <span className="mailbox-name">{acc.name !== acc.email ? acc.name : acc.email}</span>
                     {acc.name !== acc.email && <span className="mailbox-address">{acc.email}</span>}
-                    <span className={`mailbox-status status-text-${acc.filters?.paused ? 'paused' : (acc.status ?? 'CONNECTING').toLowerCase()}`}>
+                    <span className={`mailbox-status status-text-${statusKind(acc)}`}>
                       {statusLabel(acc)}
                     </span>
                     <span className="mailbox-open-hint">{t.emailsLink}</span>
@@ -384,6 +448,8 @@ function App() {
                   <div className={acc.status === 'ERROR' ? 'settings settings-broken' : 'settings'}>
                     <FiltersPanel
                       initial={withDefaults(acc.filters)}
+                      pro={hasPro(plan)}
+                      onUpgrade={plan?.billingEnabled ? showPlans : undefined}
                       onSave={(filters) => handleSaveFilters(acc, filters)}
                       onClose={() => setFiltersOpenId(null)}
                     />
@@ -399,6 +465,15 @@ function App() {
           </ul>
         )}
       </section>
+
+      {plan?.billingEnabled && (
+        <PlanSection
+          info={plan}
+          createInvoice={createInvoice}
+          onPaid={refreshAfterPayment}
+          notify={(kind, text) => setNotice(text ? { kind, text } : null)}
+        />
+      )}
 
       {accounts.length > 0 && (
         <NotificationsSection load={loadNotificationSettings} save={saveNotificationSettings} />

@@ -21,6 +21,8 @@ interface MailPage {
   total: number;
   items: MailItem[];
   hasMore: boolean;
+  // Free: показаны только последние письма
+  limited?: boolean;
 }
 
 interface MailMessage {
@@ -45,10 +47,14 @@ type Request = (
 interface Props {
   account: { id: number; name: string; email: string };
   request: Request;
+  // Тариф Free: только последние входящие, без поиска и "Отправленных"
+  limited?: boolean;
+  onUpgrade?: () => void;
   onClose: () => void;
 }
 
 const PAGE_SIZE = 30;
+const FREE_PAGE_SIZE = 20;
 // Почтовый сервер может искать долго, особенно в больших ящиках
 const MAIL_TIMEOUT_MS = 65000;
 
@@ -87,7 +93,7 @@ function formatFullDate(millis?: number | null): string {
   });
 }
 
-export function MailboxView({ account, request, onClose }: Props) {
+export function MailboxView({ account, request, limited = false, onUpgrade, onClose }: Props) {
   const [folder, setFolder] = useState<Folder>('inbox');
   const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
@@ -102,6 +108,7 @@ export function MailboxView({ account, request, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openUid, setOpenUid] = useState<number | null>(null);
+  const [pageLimited, setPageLimited] = useState(false);
 
   // Ответ на устаревший запрос (сменили папку или поиск) не должен затирать новый
   const requestId = useRef(0);
@@ -110,7 +117,7 @@ export function MailboxView({ account, request, onClose }: Props) {
     const id = ++requestId.current;
     setLoading(true);
     setError(null);
-    const params = new URLSearchParams({ folder, offset: String(offset), limit: String(PAGE_SIZE) });
+    const params = new URLSearchParams({ folder, offset: String(offset), limit: String(limited ? FREE_PAGE_SIZE : PAGE_SIZE) });
     if (query) params.set('q', query);
     if (unreadOnly) params.set('unread', 'true');
 
@@ -126,6 +133,7 @@ export function MailboxView({ account, request, onClose }: Props) {
       setUidValidity(page.uidValidity);
       setTotal(page.total);
       setHasMore(page.hasMore);
+      setPageLimited(page.limited === true);
       setItems((current) => {
         if (offset === 0) return page.items;
         const known = new Set(current.map((item) => item.uid));
@@ -193,20 +201,23 @@ export function MailboxView({ account, request, onClose }: Props) {
 
       <div className="segmented" role="tablist">
         <button type="button" role="tab" aria-selected={folder === 'inbox'} onClick={() => setFolder('inbox')}>{t.inbox}</button>
-        <button type="button" role="tab" aria-selected={folder === 'sent'} onClick={() => setFolder('sent')}>{t.sent}</button>
+        <button type="button" role="tab" aria-selected={folder === 'sent'} disabled={limited} onClick={() => setFolder('sent')}>
+          {t.sent}{limited && <span className="pro-badge">{t.proBadge}</span>}
+        </button>
       </div>
 
       <input
         type="search"
         className="mail-search"
-        placeholder={t.searchPlaceholder}
+        placeholder={limited ? t.proSearchPlaceholder : t.searchPlaceholder}
+        disabled={limited}
         value={queryInput}
         onChange={(e) => setQueryInput(e.target.value)}
       />
 
       <div className="chips">
-        <button type="button" className="chip" aria-pressed={unreadOnly} onClick={() => setUnreadOnly((value) => !value)}>
-          {t.unread}
+        <button type="button" className="chip" aria-pressed={unreadOnly} disabled={limited} onClick={() => setUnreadOnly((value) => !value)}>
+          {t.unread}{limited && <span className="pro-badge">{t.proBadge}</span>}
         </button>
         <button type="button" className="chip" aria-pressed={withAttachments} onClick={() => setWithAttachments((value) => !value)}>
           {t.withAttachments}
@@ -260,6 +271,15 @@ export function MailboxView({ account, request, onClose }: Props) {
 
       {!loading && !error && items.length === 0 && (
         <p className="empty">{query || unreadOnly ? t.nothingFound : t.emptyFolder}</p>
+      )}
+
+      {limited && !error && (pageLimited || items.length === 0) && (
+        <p className="pro-hint">
+          <span className="pro-badge">{t.proBadge}</span> {t.proBrowseHint}
+          {onUpgrade && (
+            <button type="button" className="link-button" onClick={onUpgrade}>{t.showPlans}</button>
+          )}
+        </p>
       )}
 
       {hasMore && !error && (

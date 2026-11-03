@@ -1,9 +1,12 @@
 package io.github.lightsmit.service
 
+import io.github.lightsmit.billing.InvoiceLinks
+import io.github.lightsmit.billing.SubscriptionService
 import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.i18n.Lang
 import io.github.lightsmit.i18n.LANGUAGE_PROMPT
 import io.github.lightsmit.i18n.Texts
+import io.github.lightsmit.i18n.botCommands
 import io.github.lightsmit.telegram.TelegramInlineButton
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.TelegramUpdateStateRepository
@@ -13,6 +16,8 @@ import io.github.lightsmit.telegram.TelegramApiException
 import io.github.lightsmit.telegram.TelegramCallbackQueryUpdate
 import io.github.lightsmit.telegram.TelegramClient
 import io.github.lightsmit.telegram.TelegramMessageUpdate
+import io.github.lightsmit.telegram.TelegramPreCheckoutQuery
+import io.github.lightsmit.telegram.TelegramSuccessfulPayment
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -21,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
+import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
 class TelegramUpdatePoller(
@@ -41,6 +47,11 @@ class TelegramUpdatePoller(
     private val replyService: MailReplyService? = null,
     // Удаление всех данных пользователя по команде /delete_my_data
     private val userData: UserDataService? = null,
+    // Тарифы и оплата звездами (/premium, приглашения); null - без тарифов
+    private val subscriptions: SubscriptionService? = null,
+    private val invoiceLinks: InvoiceLinks? = null,
+    // Лимит ящиков по тарифу: для статуса в /mailboxes
+    private val quota: MailboxQuota? = null,
 ) {
 
     private val logger =
@@ -73,6 +84,12 @@ class TelegramUpdatePoller(
                 for (message in batch.messages) {
                     launch {
                         handleMessage(message)
+                    }
+                }
+
+                for (query in batch.preCheckoutQueries) {
+                    launch {
+                        handlePreCheckout(query)
                     }
                 }
             } catch (exception: CancellationException) {
@@ -261,8 +278,13 @@ class TelegramUpdatePoller(
         message: TelegramMessageUpdate,
     ) {
         if (message.chatType != "private") return
-        touchUser(message.fromUserId, message.languageCode)
+        touchUser(message.fromUserId, message.languageCode, message.username, message.firstName)
         val t = textsFor(message.fromUserId, message.languageCode)
+
+        message.payment?.let { payment ->
+            handlePayment(message.chatId, message.fromUserId, payment, t)
+            return
+        }
 
         val fullText = message.text?.trim().orEmpty()
         val firstToken = fullText.substringBefore(' ').substringBefore('\n')
@@ -311,8 +333,24 @@ class TelegramUpdatePoller(
             return
         }
 
+        if (command == "/premium") {
+            sendPremium(message.chatId, message.fromUserId, t)
+            return
+        }
+
+        if (command == "/paysupport") {
+            sendPlain(message.chatId, t.billing.paySupport(subscriptions?.config?.supportContact))
+            return
+        }
+
+        // Ссылка-приглашение: t.me/бот?start=vip_код приходит как "/start vip_код"
+        val startArgument = fullText.removePrefix(firstToken).trim()
+        if (command == "/start" && startArgument.startsWith(SubscriptionService.INVITE_PREFIX)) {
+            redeemInvite(message.chatId, message.fromUserId, startArgument, t)
+        }
+
         val text = when (command) {
-            "/start" -> t.start()
+            "/start" -> if (subscriptions?.enabled == true) t.start() + "\n" + t.billing.startPremiumLine else t.start()
             "/help" -> t.help(replyEnabled = replyService != null)
             "/mailboxes" -> mailboxesText(message.fromUserId, t)
             else -> t.defaultReply
@@ -354,6 +392,12 @@ class TelegramUpdatePoller(
                     admin.sendBroadcast(adminId)
                 }
                 "/backup" -> admin.backupText()
+                "/grant" -> admin.grantText(argument)
+                "/revoke" -> admin.revokeText(argument)
+                "/invite" -> admin.inviteText(adminId, argument)
+                "/subs" -> admin.subscriptionsText()
+                "/users" -> admin.usersText()
+                "/refund" -> admin.refundText(argument)
                 else -> return false
             }
         } catch (exception: CancellationException) {
@@ -491,12 +535,7 @@ class TelegramUpdatePoller(
 
         runCatching {
             controlClient.setMyCommands(
-                commands = listOf(
-                    "start" to texts.commandStart,
-                    "mailboxes" to texts.commandMailboxes,
-                    "help" to texts.commandHelp,
-                    "language" to texts.commandLanguage,
-                ),
+                commands = botCommands(texts, billingEnabled = subscriptions?.enabled == true),
                 chatId = update.fromUserId,
             )
         }
@@ -520,9 +559,9 @@ class TelegramUpdatePoller(
         }
     }
 
-    private suspend fun touchUser(userId: Long, languageCode: String?) {
+    private suspend fun touchUser(userId: Long, languageCode: String?, username: String? = null, firstName: String? = null) {
         try {
-            botUsers?.touch(userId, languageCode)
+            botUsers?.touch(userId, languageCode, username, firstName)
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: Exception) {
@@ -538,11 +577,18 @@ class TelegramUpdatePoller(
             return t.mailboxesEmpty
         }
 
+        val overLimit = quota?.overLimitIds(ownerChatId).orEmpty()
+        val limit = quota?.limit(ownerChatId) ?: accounts.size
+
         return buildString {
             appendLine(t.mailboxesTitle)
             accounts.forEach { account ->
                 val health = service.health(account.id)
-                val (mark, status) = if (account.filters.paused) "⏸" to t.statusPaused else when (health.status) {
+                val (mark, status) = if (account.filters.paused) {
+                    "⏸" to t.statusPaused
+                } else if (account.id in overLimit) {
+                    "🔒" to t.billing.statusOverLimit(limit)
+                } else when (health.status) {
                     MailboxStatus.OK -> "🟢" to t.statusOk
                     MailboxStatus.CONNECTING -> "🟡" to t.statusConnecting
                     MailboxStatus.ERROR -> "🔴" to (health.problem?.text(t)?.replaceFirstChar(Char::lowercase) ?: t.statusErrorFallback)
@@ -557,6 +603,113 @@ class TelegramUpdatePoller(
             appendLine()
             append(t.mailboxesFooter)
         }
+    }
+
+    // Тариф и кнопки оплаты
+    private suspend fun sendPremium(chatId: Long, userId: Long, t: Texts) {
+        val service = subscriptions
+        if (service == null || !service.enabled) {
+            sendPlain(chatId, t.billing.billingOff)
+            return
+        }
+
+        val offers = service.config.offersOnSale.filter { offer -> service.canBuy(userId, offer) }
+        val text = t.billing.premium(service.status(userId), service.config, offers)
+        val lang = if (t === Lang.EN.texts) Lang.EN else Lang.RU
+        val buttons = offers.mapNotNull { offer ->
+            val link = runCatching { invoiceLinks?.link(offer, lang) }
+                .onFailure { exception -> logger.warn("Failed to create invoice link for {}: {}", offer, exception.javaClass.simpleName) }
+                .getOrNull()
+                ?: return@mapNotNull null
+            TelegramInlineButton(text = t.billing.buyButton(offer, service.config.price(offer)), url = link)
+        }
+
+        try {
+            if (buttons.isEmpty()) {
+                controlClient.sendMessage(chatId = chatId, text = text)
+            } else {
+                controlClient.sendMessageWithButtons(chatId = chatId, text = text, buttons = buttons, perRow = 1)
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to send plans to {}: {}", chatId, exception.javaClass.simpleName)
+        }
+    }
+
+    // Перед оплатой Telegram спрашивает бота, можно ли ее принять (ответить нужно за 10 секунд)
+    private suspend fun handlePreCheckout(query: TelegramPreCheckoutQuery) {
+        val service = subscriptions
+        val offer = service?.let {
+            runCatching { it.validateCheckout(query.fromUserId, query.payload, query.currency, query.totalAmount) }.getOrNull()
+        }
+        val t = textsFor(query.fromUserId, query.languageCode)
+        try {
+            controlClient.answerPreCheckoutQuery(
+                queryId = query.id,
+                ok = offer != null,
+                errorMessage = if (offer == null) t.billing.checkoutRejected else null,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to answer pre-checkout query from {}: {}", query.fromUserId, exception.javaClass.simpleName)
+        }
+        logger.info("Pre-checkout from {} for {}: {}", query.fromUserId, query.payload, if (offer != null) "accepted" else "rejected")
+    }
+
+    // Оплата прошла: подключаем тариф
+    private suspend fun handlePayment(chatId: Long, userId: Long, payment: TelegramSuccessfulPayment, t: Texts) {
+        val service = subscriptions
+        if (service == null) {
+            logger.warn("Payment {} from {} received, but subscriptions are not configured", payment.chargeId, userId)
+            sendPlain(chatId, t.billing.paymentUnknown)
+            return
+        }
+
+        val subscription = try {
+            service.onPayment(
+                userId = userId,
+                payload = payment.payload,
+                amount = payment.totalAmount,
+                chargeId = payment.chargeId,
+                subscriptionExpiresAt = payment.subscriptionExpirationDate?.let(Instant::ofEpochSecond),
+                firstRecurring = payment.firstRecurring,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to process payment {} from {}: {}", payment.chargeId, userId, exception.javaClass.simpleName)
+            null
+        }
+
+        if (subscription == null) {
+            sendPlain(chatId, t.billing.paymentUnknown)
+            return
+        }
+        // Об автопродлениях не пишем: человек и так видит списание в Telegram
+        if (!payment.recurring || payment.firstRecurring) {
+            sendPlain(chatId, t.billing.paymentDone(subscription.plan, subscription.expiresAt, subscription.recurring))
+        }
+    }
+
+    private suspend fun redeemInvite(chatId: Long, userId: Long, code: String, t: Texts) {
+        val service = subscriptions ?: return
+        val text = try {
+            when (val result = service.redeemInvite(code, userId)) {
+                is SubscriptionService.InviteResult.Activated ->
+                    t.billing.inviteActivated(result.subscription.plan, result.subscription.expiresAt)
+                SubscriptionService.InviteResult.NotFound -> t.billing.inviteNotFound
+                SubscriptionService.InviteResult.AlreadyUsed -> t.billing.inviteUsed
+                SubscriptionService.InviteResult.AlreadyYours -> t.billing.inviteAlreadyYours
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to redeem invite for {}: {}", userId, exception.javaClass.simpleName)
+            t.actionFailed
+        }
+        sendPlain(chatId, text)
     }
 
     private suspend fun performActionWithAcknowledgement(

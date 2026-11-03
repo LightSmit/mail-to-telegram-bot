@@ -23,6 +23,9 @@ interface Texts {
     // Общие
     val openApp: String
 
+    // Тарифы, оплата, коды подтверждения
+    val billing: BillingTexts
+
     // Команды
     fun start(): String
     fun help(replyEnabled: Boolean): String
@@ -146,6 +149,7 @@ interface Texts {
 
 object RuTexts : Texts {
     override val openApp = "📬 Открыть приложение"
+    override val billing: BillingTexts = RuBillingTexts
 
     override fun start() = """
         👋 Привет! Я пересылаю новые письма из ваших почтовых ящиков прямо сюда, в Telegram.
@@ -302,7 +306,8 @@ object RuTexts : Texts {
     override fun deleteDone(mailboxes: Int, backupKeepDays: Int) =
         "🗑 Готово: удалены ящики ($mailboxes), настройки и вся история. Бот больше не хранит ваших данных.\n\n" +
             "В резервных копиях базы они останутся еще до $backupKeepDays дн., потом удалятся автоматически. " +
-            "Пароли приложений стоит удалить и в настройках самой почты."
+            "Пароли приложений стоит удалить и в настройках самой почты.\n\n" +
+            "Если у вас действующая платная подписка, она сохранится. Записи об оплатах звездами хранятся для возвратов."
     override val deleteFailed = "Не удалось удалить данные. Попробуйте еще раз позже."
 
     override val enterAddress = "Укажите адрес почты"
@@ -329,6 +334,7 @@ object RuTexts : Texts {
 
 object EnTexts : Texts {
     override val openApp = "📬 Open app"
+    override val billing: BillingTexts = EnBillingTexts
 
     override fun start() = """
         👋 Hi! I forward new emails from your mailboxes right here, to Telegram.
@@ -476,7 +482,8 @@ object EnTexts : Texts {
     override fun deleteDone(mailboxes: Int, backupKeepDays: Int) =
         "🗑 Done: mailboxes ($mailboxes), settings and all history are deleted. The bot no longer stores your data.\n\n" +
             "Database backups will keep it for up to $backupKeepDays days, then it is removed automatically. " +
-            "You may also want to revoke the app passwords in your email settings."
+            "You may also want to revoke the app passwords in your email settings.\n\n" +
+            "An active paid subscription is kept. Records of Stars payments are kept for refunds."
     override val deleteFailed = "Could not delete the data. Please try again later."
 
     override val enterAddress = "Enter your email address"
@@ -503,6 +510,16 @@ object EnTexts : Texts {
 
 /** Причина, по которой вложение не отправлено: файл больше лимита. */
 const val SKIP_TOO_LARGE = "too_large"
+
+/** Команды бота для подсказок при вводе "/": /premium и /paysupport - только при включенной оплате. */
+fun botCommands(t: Texts, billingEnabled: Boolean): List<Pair<String, String>> = buildList {
+    add("start" to t.commandStart)
+    add("mailboxes" to t.commandMailboxes)
+    if (billingEnabled) add("premium" to t.billing.commandPremium)
+    add("help" to t.commandHelp)
+    add("language" to t.commandLanguage)
+    if (billingEnabled) add("paysupport" to t.billing.commandPaySupport)
+}
 
 /** Вопрос "какой язык" одинаков для всех: человек мог не понять текущий язык бота. */
 const val LANGUAGE_PROMPT = "🌐 Выберите язык бота / Choose the bot language"

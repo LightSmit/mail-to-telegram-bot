@@ -1,11 +1,13 @@
 package io.github.lightsmit.service
 
+import io.github.lightsmit.billing.Plan
 import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.i18n.Lang
 import io.github.lightsmit.i18n.Texts
 import io.github.lightsmit.config.MailAccountKeys
 import io.github.lightsmit.mail.EmailSummary
 import io.github.lightsmit.mail.ImapMailClient
+import io.github.lightsmit.mail.OtpExtractor
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailOutboxEmailMetadata
 import io.github.lightsmit.storage.MailOutboxItem
@@ -54,6 +56,10 @@ class MailForwardingService(
     private val notificationSettings: suspend (Long) -> NotificationSettings = { NotificationSettings() },
     // Язык владельца ящика: на нем пишутся карточки писем и кнопки
     private val language: suspend (Long) -> Lang = { Lang.RU },
+    // Тариф владельца: от него зависят фильтры по отправителям и коды подтверждения
+    private val plan: suspend (Long) -> Plan = { Plan.BUSINESS },
+    // Ящик сверх лимита тарифа: письма из него не присылаются
+    private val isOverLimit: suspend (MailAccountConfig) -> Boolean = { false },
     private val clock: () -> Instant = Instant::now,
 ) : AutoCloseable {
 
@@ -144,18 +150,22 @@ class MailForwardingService(
             ?: throw PermanentMailDeliveryException("Outbox item ${item.id} has no email metadata")
 
         val t = texts(account)
+        // Код из темы письма показываем сразу, не дожидаясь загрузки текста
+        val code = verificationCode(account, metadata.subject, body = null)
         return telegramControlClient.sendMessageWithButtons(
             chatId = account.ownerChatId,
             text = formatPendingNotification(
                 account = account,
                 metadata = metadata,
                 t = t,
+                code = code,
             ),
             buttons = pendingSummaryButtons(
                 account = account,
                 uidValidity = item.uidValidity,
                 uid = item.uid,
                 t = t,
+                code = code,
             ),
             silent = shouldSendSilently(account.ownerChatId),
         )
@@ -214,6 +224,7 @@ class MailForwardingService(
                 return@withLock telegramMessageId
             }
 
+            val code = verificationCode(account, message.subject, message.body)
             try {
                 telegramControlClient.editMessageWithButtons(
                     chatId = account.ownerChatId,
@@ -222,6 +233,7 @@ class MailForwardingService(
                         account = account,
                         message = message,
                         t = t,
+                        code = code,
                     ),
                     buttons = summaryButtons(
                         account = account,
@@ -229,6 +241,7 @@ class MailForwardingService(
                         uidValidity = item.uidValidity,
                         uid = item.uid,
                         t = t,
+                        code = code,
                     ),
                 )
             } catch (exception: TelegramApiException) {
@@ -380,10 +393,12 @@ class MailForwardingService(
         ) ?: return
 
         val t = texts(account)
+        val code = verificationCode(account, message.subject, message.body)
         val summaryText = formatNotification(
             account = account,
             message = message,
             t = t,
+            code = code,
         )
 
         val buttons = summaryButtons(
@@ -392,6 +407,7 @@ class MailForwardingService(
             uidValidity = expectedUidValidity,
             uid = uid,
             t = t,
+            code = code,
         )
 
         val emailKey = interactiveEmailKey(
@@ -698,8 +714,16 @@ class MailForwardingService(
 
         var lastScheduledUid = state.lastUid
 
-        // Фильтры берем из реестра: их могли изменить в приложении после запуска слежения
-        val filters = (registry.findByKey(accountKey) ?: account).filters
+        // Фильтры берем из реестра: их могли изменить в приложении после запуска слежения.
+        // Фильтры по отправителям и словам работают только на платном тарифе (на Free они сохранены, но не действуют)
+        val currentAccount = registry.findByKey(accountKey) ?: account
+        val ownerPlan = runCatching { plan(account.ownerChatId) }.getOrDefault(Plan.BUSINESS)
+        val filters = if (ownerPlan.hasProFeatures) {
+            currentAccount.filters
+        } else {
+            currentAccount.filters.copy(blockedSenders = emptyList(), blockedSubjectWords = emptyList(), allowedSenders = emptyList())
+        }
+        val overLimit = runCatching { isOverLimit(currentAccount) }.getOrDefault(false)
 
         for (message in batch.messages.sortedBy { item -> item.uid }) {
             if (message.uid <= lastScheduledUid) {
@@ -711,12 +735,16 @@ class MailForwardingService(
                 message = message,
             )
 
-            val skipReason = MailFilterEngine.check(
-                filters = filters,
-                senderAddress = message.senderAddress,
-                subject = message.subject,
-                isBulk = message.isBulk,
-            )
+            val skipReason = if (overLimit) {
+                MailFilterReason.OVER_LIMIT
+            } else {
+                MailFilterEngine.check(
+                    filters = filters,
+                    senderAddress = message.senderAddress,
+                    subject = message.subject,
+                    isBulk = message.isBulk,
+                )
+            }
 
             if (skipReason != null) {
                 // Письмо отфильтровано: сдвигаем позицию, чтобы не вернуться к нему позже
@@ -833,6 +861,16 @@ class MailForwardingService(
     private suspend fun texts(account: MailAccountConfig): Texts =
         runCatching { language(account.ownerChatId) }.getOrDefault(Lang.RU).texts
 
+    // Код подтверждения из письма: только на платном тарифе
+    private suspend fun verificationCode(account: MailAccountConfig, subject: String?, body: String?): String? {
+        val ownerPlan = runCatching { plan(account.ownerChatId) }.getOrDefault(Plan.FREE)
+        if (!ownerPlan.hasProFeatures) return null
+        return OtpExtractor.find(subject, body)
+    }
+
+    private fun copyCodeButton(code: String?, t: Texts): TelegramInlineButton? =
+        code?.let { value -> TelegramInlineButton(text = t.billing.buttonCopyCode, copyText = value) }
+
     private fun button(
         text: String,
         action: MailViewAction,
@@ -855,7 +893,9 @@ class MailForwardingService(
         uidValidity: Long,
         uid: Long,
         t: Texts,
+        code: String? = null,
     ): List<TelegramInlineButton> = listOfNotNull(
+        copyCodeButton(code, t),
         button(t.buttonText, MailViewAction.TEXT, account, uidValidity, uid),
         button(t.buttonAttachments, MailViewAction.ATTACHMENTS, account, uidValidity, uid),
         replyButton(account, uidValidity, uid, t),
@@ -877,9 +917,11 @@ class MailForwardingService(
         uidValidity: Long,
         uid: Long,
         t: Texts,
+        code: String? = null,
     ): List<TelegramInlineButton> {
         val attachmentCount = attachmentCount(message)
         return listOfNotNull(
+            copyCodeButton(code, t),
             button(t.buttonText, MailViewAction.TEXT, account, uidValidity, uid),
             if (attachmentCount > 0) {
                 button(t.buttonAttachmentsCount(attachmentCount), MailViewAction.ATTACHMENTS, account, uidValidity, uid)
@@ -933,6 +975,7 @@ class MailForwardingService(
         account: MailAccountConfig,
         metadata: MailOutboxEmailMetadata,
         t: Texts,
+        code: String? = null,
     ): String = buildString {
         appendHeader(
             title = t.newEmail,
@@ -943,12 +986,14 @@ class MailForwardingService(
             t = t,
         )
         append("${t.labelAttachments}: ${t.attachmentsChecking}")
+        code?.let { value -> append('\n').append(t.billing.otpLine(value)) }
     }
 
     private fun formatNotification(
         account: MailAccountConfig,
         message: EmailSummary,
         t: Texts,
+        code: String? = null,
     ): String = buildString {
         appendHeader(
             title = t.newEmail,
@@ -959,6 +1004,7 @@ class MailForwardingService(
             t = t,
         )
         append("${t.labelAttachments}: ${t.attachmentCount(attachmentCount(message))}")
+        code?.let { value -> append('\n').append(t.billing.otpLine(value)) }
     }
 
     private fun formatFullMessage(

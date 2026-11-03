@@ -59,9 +59,14 @@ class TelegramTransportException(
     causeType: String,
 ) : RuntimeException("Telegram $operation failed: $causeType")
 
+/** Кнопка под сообщением: ровно одно действие - callback, ссылка, копирование текста или Mini App. */
 data class TelegramInlineButton(
     val text: String,
-    val callbackData: String,
+    val callbackData: String? = null,
+    val url: String? = null,
+    // Нажатие копирует этот текст в буфер обмена (например, код подтверждения)
+    val copyText: String? = null,
+    val webAppUrl: String? = null,
 )
 
 class TelegramClient(
@@ -119,12 +124,14 @@ class TelegramClient(
         buttons: List<TelegramInlineButton>,
         // true - сообщение придет без звука (тихие часы, сводка)
         silent: Boolean = false,
+        // Сколько кнопок в строке
+        perRow: Int = 2,
     ): Long {
         require(buttons.isNotEmpty()) {
             "At least one Telegram button is required"
         }
 
-        val replyMarkup = createReplyMarkup(buttons)
+        val replyMarkup = createReplyMarkup(buttons, perRow)
         val root = executeWithRetry("sendMessage") {
             httpClient.submitForm(
                 url = "$baseUrl/sendMessage",
@@ -202,23 +209,7 @@ class TelegramClient(
         buttonText: String,
         webAppUrl: String,
     ): Long {
-        val replyMarkup = buildJsonObject {
-            put(
-                "inline_keyboard",
-                buildJsonArray {
-                    add(
-                        buildJsonArray {
-                            add(
-                                buildJsonObject {
-                                    put("text", buttonText)
-                                    put("web_app", buildJsonObject { put("url", webAppUrl) })
-                                },
-                            )
-                        },
-                    )
-                },
-            )
-        }
+        val replyMarkup = createReplyMarkup(listOf(TelegramInlineButton(text = buttonText, webAppUrl = webAppUrl)))
 
         val root = executeWithRetry("sendMessage") {
             httpClient.submitForm(
@@ -326,6 +317,95 @@ class TelegramClient(
         }
     }
 
+    /**
+     * Ссылка на оплату звездами (валюта XTR). С subscriptionPeriodSeconds - ежемесячная подписка:
+     * Telegram сам списывает звезды каждые 30 дней. Ссылку можно отправлять кнопкой или открыть в Mini App.
+     */
+    suspend fun createStarsInvoiceLink(
+        title: String,
+        description: String,
+        payload: String,
+        label: String,
+        amount: Int,
+        subscriptionPeriodSeconds: Int? = null,
+    ): String {
+        val prices = buildJsonArray {
+            add(
+                buildJsonObject {
+                    put("label", label)
+                    put("amount", amount)
+                },
+            )
+        }
+        val root = executeWithRetry("createInvoiceLink") {
+            httpClient.submitForm(
+                url = "$baseUrl/createInvoiceLink",
+                formParameters = Parameters.build {
+                    append("title", title.take(32))
+                    append("description", description.take(255))
+                    append("payload", payload)
+                    append("currency", "XTR")
+                    append("prices", prices.toString())
+                    subscriptionPeriodSeconds?.let { period -> append("subscription_period", period.toString()) }
+                },
+            )
+        }
+        return root["result"]?.jsonPrimitive?.contentOrNull
+            ?: throw TelegramTransportException(operation = "read invoice link", causeType = "MissingResult")
+    }
+
+    /** Ответ на pre_checkout_query: ok=false отменяет оплату и показывает пользователю errorMessage. */
+    suspend fun answerPreCheckoutQuery(
+        queryId: String,
+        ok: Boolean,
+        errorMessage: String? = null,
+    ) {
+        executeOnce("answerPreCheckoutQuery") {
+            httpClient.submitForm(
+                url = "$baseUrl/answerPreCheckoutQuery",
+                formParameters = Parameters.build {
+                    append("pre_checkout_query_id", queryId)
+                    append("ok", ok.toString())
+                    if (!ok && errorMessage != null) append("error_message", errorMessage)
+                },
+            )
+        }
+    }
+
+    /** Отменить (или вернуть) автопродление ежемесячной подписки Stars пользователя. */
+    suspend fun editUserStarSubscription(
+        userId: Long,
+        chargeId: String,
+        canceled: Boolean,
+    ) {
+        executeOnce("editUserStarSubscription") {
+            httpClient.submitForm(
+                url = "$baseUrl/editUserStarSubscription",
+                formParameters = Parameters.build {
+                    append("user_id", userId.toString())
+                    append("telegram_payment_charge_id", chargeId)
+                    append("is_canceled", canceled.toString())
+                },
+            )
+        }
+    }
+
+    /** Вернуть пользователю звезды за оплату. */
+    suspend fun refundStarPayment(
+        userId: Long,
+        chargeId: String,
+    ) {
+        executeOnce("refundStarPayment") {
+            httpClient.submitForm(
+                url = "$baseUrl/refundStarPayment",
+                formParameters = Parameters.build {
+                    append("user_id", userId.toString())
+                    append("telegram_payment_charge_id", chargeId)
+                },
+            )
+        }
+    }
+
     /** Имя бота, которому принадлежит токен (getMe). Нужно для диагностики. */
     suspend fun getBotUsername(): String? {
         val root = executeOnce("getMe") {
@@ -385,7 +465,7 @@ class TelegramClient(
                     }
                     parameters.append(
                         "allowed_updates",
-                        """["callback_query","message"]""",
+                        """["callback_query","message","pre_checkout_query"]""",
                     )
                 }
             }
@@ -401,6 +481,7 @@ class TelegramClient(
         var highestUpdateId: Long? = null
         val callbackQueries = mutableListOf<TelegramCallbackQueryUpdate>()
         val messages = mutableListOf<TelegramMessageUpdate>()
+        val preCheckoutQueries = mutableListOf<TelegramPreCheckoutQuery>()
 
         for (updateElement in updates) {
             val update = updateElement.jsonObject
@@ -428,6 +509,28 @@ class TelegramClient(
                         chatType = chat["type"]?.jsonPrimitive?.contentOrNull,
                         fromUserId = fromUserId,
                         text = message["text"]?.jsonPrimitive?.contentOrNull,
+                        languageCode = from["language_code"]?.jsonPrimitive?.contentOrNull,
+                        username = from["username"]?.jsonPrimitive?.contentOrNull,
+                        firstName = from["first_name"]?.jsonPrimitive?.contentOrNull,
+                        payment = message["successful_payment"]?.jsonObject?.let(::parseSuccessfulPayment),
+                    )
+                }
+                continue
+            }
+
+            val preCheckout = update["pre_checkout_query"]?.jsonObject
+            if (preCheckout != null) {
+                val from = preCheckout["from"]?.jsonObject
+                val queryId = preCheckout["id"]?.jsonPrimitive?.contentOrNull
+                val fromUserId = from?.get("id")?.jsonPrimitive?.longOrNull
+                if (queryId != null && fromUserId != null) {
+                    preCheckoutQueries += TelegramPreCheckoutQuery(
+                        updateId = updateId,
+                        id = queryId,
+                        fromUserId = fromUserId,
+                        currency = preCheckout["currency"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                        totalAmount = preCheckout["total_amount"]?.jsonPrimitive?.intOrNull ?: 0,
+                        payload = preCheckout["invoice_payload"]?.jsonPrimitive?.contentOrNull,
                         languageCode = from["language_code"]?.jsonPrimitive?.contentOrNull,
                     )
                 }
@@ -484,6 +587,20 @@ class TelegramClient(
             nextOffset = highestUpdateId?.plus(1),
             callbackQueries = callbackQueries,
             messages = messages,
+            preCheckoutQueries = preCheckoutQueries,
+        )
+    }
+
+    private fun parseSuccessfulPayment(payment: JsonObject): TelegramSuccessfulPayment? {
+        val chargeId = payment["telegram_payment_charge_id"]?.jsonPrimitive?.contentOrNull ?: return null
+        return TelegramSuccessfulPayment(
+            currency = payment["currency"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            totalAmount = payment["total_amount"]?.jsonPrimitive?.intOrNull ?: 0,
+            payload = payment["invoice_payload"]?.jsonPrimitive?.contentOrNull,
+            chargeId = chargeId,
+            subscriptionExpirationDate = payment["subscription_expiration_date"]?.jsonPrimitive?.longOrNull,
+            recurring = payment["is_recurring"]?.jsonPrimitive?.booleanOrNull == true,
+            firstRecurring = payment["is_first_recurring"]?.jsonPrimitive?.booleanOrNull == true,
         )
     }
 
@@ -519,14 +636,27 @@ class TelegramClient(
 
     private fun createReplyMarkup(
         buttons: List<TelegramInlineButton>,
+        perRow: Int = 2,
     ): JsonObject {
-        buttons.forEach { button ->
-            val callbackDataSize = button.callbackData
-                .toByteArray(Charsets.UTF_8)
-                .size
+        require(perRow in 1..8) {
+            "Telegram buttons per row must be between 1 and 8"
+        }
 
-            require(callbackDataSize in 1..64) {
-                "Telegram callback data must contain 1-64 bytes"
+        buttons.forEach { button ->
+            val actions = listOfNotNull(button.callbackData, button.url, button.copyText, button.webAppUrl)
+            require(actions.size == 1) {
+                "Telegram button must have exactly one action"
+            }
+
+            button.callbackData?.let { data ->
+                require(data.toByteArray(Charsets.UTF_8).size in 1..64) {
+                    "Telegram callback data must contain 1-64 bytes"
+                }
+            }
+            button.copyText?.let { text ->
+                require(text.length in 1..256) {
+                    "Telegram copy text must contain 1-256 characters"
+                }
             }
         }
 
@@ -534,18 +664,22 @@ class TelegramClient(
             put(
                 "inline_keyboard",
                 buildJsonArray {
-                    // Не больше двух кнопок в строке: на телефоне длинные подписи обрезаются
-                    buttons.chunked(2).forEach { row ->
+                    // По умолчанию не больше двух кнопок в строке: на телефоне длинные подписи обрезаются
+                    buttons.chunked(perRow).forEach { row ->
                         add(
                             buildJsonArray {
                                 row.forEach { button ->
                                     add(
                                         buildJsonObject {
                                             put("text", button.text)
-                                            put(
-                                                "callback_data",
-                                                button.callbackData,
-                                            )
+                                            button.callbackData?.let { data -> put("callback_data", data) }
+                                            button.url?.let { url -> put("url", url) }
+                                            button.copyText?.let { text ->
+                                                put("copy_text", buildJsonObject { put("text", text) })
+                                            }
+                                            button.webAppUrl?.let { url ->
+                                                put("web_app", buildJsonObject { put("url", url) })
+                                            }
                                         },
                                     )
                                 }

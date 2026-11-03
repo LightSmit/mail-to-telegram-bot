@@ -1,5 +1,6 @@
 package io.github.lightsmit.service
 
+import io.github.lightsmit.billing.SubscriptionService
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.UserSettingsRepository
 import org.slf4j.LoggerFactory
@@ -14,6 +15,8 @@ class UserDataService(
     private val settingsRepository: UserSettingsRepository,
     private val botUsers: BotUserRepository,
     val backupKeepDays: Int,
+    // Действующая платная подписка сохраняется, чтобы человек не потерял оплаченный срок
+    private val subscriptions: SubscriptionService? = null,
 ) {
 
     private val logger = LoggerFactory.getLogger(UserDataService::class.java)
@@ -25,6 +28,7 @@ class UserDataService(
         val mailboxes = accountService.deleteAllForOwner(userId)
         settingsRepository.delete(userId)
         botUsers.delete(userId)
+        subscriptions?.forgetUnlessActive(userId)
         logger.info("All data of user {} deleted ({} mailboxes)", userId, mailboxes)
         return mailboxes
     }
