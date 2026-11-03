@@ -26,6 +26,10 @@ interface Texts {
     // Тарифы, оплата, коды подтверждения
     val billing: BillingTexts
 
+    // Описание бота в Telegram: в пустом чате и в профиле
+    val botDescription: String
+    val botShortDescription: String
+
     // Команды
     fun start(): String
     fun help(replyEnabled: Boolean): String
@@ -150,6 +154,11 @@ interface Texts {
 object RuTexts : Texts {
     override val openApp = "📬 Открыть приложение"
     override val billing: BillingTexts = RuBillingTexts
+    override val botDescription = "📬 Присылаю новые письма из Mail.ru, Gmail, Яндекса, iCloud и любой почты с IMAP прямо в Telegram за несколько секунд.\n\n" +
+        "🔐 Нужен не пароль от почты, а отдельный пароль приложения: его можно отозвать в любой момент. " +
+        "Пароли хранятся в зашифрованном виде, сами письма бот не сохраняет. Удалить все данные - /delete_my_data.\n\n" +
+        "Нажмите «Начать» и подключите ящик за 2 минуты."
+    override val botShortDescription = "Новые письма из Mail.ru, Gmail, Яндекса и любой почты прямо в Telegram за секунды."
 
     override fun start() = """
         👋 Привет! Я пересылаю новые письма из ваших почтовых ящиков прямо сюда, в Telegram.
@@ -335,6 +344,11 @@ object RuTexts : Texts {
 object EnTexts : Texts {
     override val openApp = "📬 Open app"
     override val billing: BillingTexts = EnBillingTexts
+    override val botDescription = "📬 I forward new emails from Gmail, Yandex, Mail.ru, iCloud and any IMAP mailbox right to Telegram within seconds.\n\n" +
+        "🔐 You give me a separate app password, not your email password, and can revoke it at any time. " +
+        "Passwords are stored encrypted, emails are not stored. Delete all your data with /delete_my_data.\n\n" +
+        "Tap Start and connect a mailbox in 2 minutes."
+    override val botShortDescription = "New emails from Gmail, Yandex, Mail.ru and any mailbox right in Telegram within seconds."
 
     override fun start() = """
         👋 Hi! I forward new emails from your mailboxes right here, to Telegram.

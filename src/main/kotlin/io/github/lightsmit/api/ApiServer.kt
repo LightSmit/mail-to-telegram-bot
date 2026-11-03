@@ -14,6 +14,7 @@ import io.github.lightsmit.mail.MailListPage
 import io.github.lightsmit.mail.MailMessageView
 import io.github.lightsmit.i18n.Lang
 import io.github.lightsmit.i18n.Texts
+import io.github.lightsmit.service.BotHealth
 import io.github.lightsmit.service.BrowseFailure
 import io.github.lightsmit.service.BrowseResult
 import io.github.lightsmit.service.GroupLinkService
@@ -296,6 +297,16 @@ class ApiServer(
             }
 
             routing {
+                // Для внешнего мониторинга (UptimeRobot и т.п.): 200 - бот работает, 503 - нет связи с Telegram.
+                // Без авторизации и без данных пользователей
+                get("/health") {
+                    if (BotHealth.healthy()) {
+                        call.respond(mapOf("status" to "ok"))
+                    } else {
+                        call.respond(HttpStatusCode.ServiceUnavailable, mapOf("status" to "telegram unreachable"))
+                    }
+                }
+
                 route("/api") {
 
                     // Перехватчик: Защита всех эндпоинтов /api

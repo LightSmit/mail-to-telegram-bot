@@ -6,6 +6,11 @@
 		reverse_proxy mail-bot:8080
 	}
 
+	# Проверка для внешнего мониторинга: бот жив и получает обновления от Telegram
+	handle /health {
+		reverse_proxy mail-bot:8080
+	}
+
 	# Официальный скрипт Telegram Mini App через наш сервер:
 	# у пользователей в России telegram.org может не открываться.
 	handle /telegram-web-app.js {

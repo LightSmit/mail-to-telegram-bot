@@ -204,6 +204,38 @@ class TelegramClient(
         }
     }
 
+    /** Описание в пустом чате с ботом ("Что умеет этот бот?"), до 512 символов. */
+    suspend fun setMyDescription(
+        description: String,
+        languageCode: String? = null,
+    ) {
+        executeOnce("setMyDescription") {
+            httpClient.submitForm(
+                url = "$baseUrl/setMyDescription",
+                formParameters = Parameters.build {
+                    append("description", description.take(512))
+                    languageCode?.let { code -> append("language_code", code) }
+                },
+            )
+        }
+    }
+
+    /** Короткое описание в профиле бота и при пересылке ссылки, до 120 символов. */
+    suspend fun setMyShortDescription(
+        shortDescription: String,
+        languageCode: String? = null,
+    ) {
+        executeOnce("setMyShortDescription") {
+            httpClient.submitForm(
+                url = "$baseUrl/setMyShortDescription",
+                formParameters = Parameters.build {
+                    append("short_description", shortDescription.take(120))
+                    languageCode?.let { code -> append("language_code", code) }
+                },
+            )
+        }
+    }
+
     /** Сообщение с кнопкой, которая открывает Mini App прямо в Telegram (с подписанными данными). */
     suspend fun sendMessageWithWebAppButton(
         chatId: Long,

@@ -34,6 +34,8 @@ Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iClou
 - Digest: emails are collected and delivered together every 1, 3, 6, 12 or 24 hours.
 
 **For the owner**
+- `/health` endpoint for external monitoring (UptimeRobot etc.): 200 when the bot works and receives Telegram updates, 503 otherwise.
+- The bot sets its own description and commands in Telegram in Russian and English.
 - `/admin` — users, mailboxes, notifications sent, queue health.
 - `/broadcast` — message to all users with a preview and confirmation.
 - `/backup` and an automatic daily SQLite backup sent to the admins.
@@ -134,7 +136,8 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `MINI_APP_URL` | `https://<DOMAIN>` | Explicit Mini App URL, if it differs |
 | `TELEGRAM_CHAT_ID` | — | Owner's Telegram ID, always an admin |
 | `ADMIN_IDS` | — | More admins, comma separated |
-| `IMAP_SAFETY_POLL_SECONDS` | `15` | Safety check over a fresh connection (each check is a new login) |
+| `IMAP_SAFETY_POLL_SECONDS` | `15` | Safety check: the Inbox is reopened over a persistent connection, one login per mailbox for hours |
+| `IMAP_SAFETY_REUSE_CONNECTION` | `true` | `false` - old behaviour, every safety check is a new login |
 | `IMAP_NOOP_SECONDS` | `5` | NOOP over the open IDLE connection |
 | `IDLE_RECONNECT_DELAY_SECONDS` | `5` | Base reconnect delay (exponential backoff on errors) |
 | `MAX_ATTACHMENT_SIZE_MB` | `45` | Larger attachments are not sent to Telegram |

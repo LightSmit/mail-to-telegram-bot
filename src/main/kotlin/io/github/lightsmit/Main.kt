@@ -139,6 +139,9 @@ fun main() = runBlocking {
         "IMAP_SAFETY_POLL_SECONDS must be between 5 and 3600"
     }
 
+    // Контрольная проверка по постоянному соединению (true) или каждый раз с новым входом в ящик (false)
+    val safetyReuseConnection = Environment.get("IMAP_SAFETY_REUSE_CONNECTION")?.lowercase() != "false"
+
     // Проверка ящика NOOP по открытому IDLE-соединению: ловит письма, о которых
     // сервер не сообщил по IDLE вовремя (0 - отключить)
     val noopIntervalSeconds = Environment
@@ -174,12 +177,14 @@ fun main() = runBlocking {
     // Команды бота для подсказок в Telegram при вводе "/"
     launch {
         try {
-            // По умолчанию русские подсказки, для английского Telegram - английские
+            // По умолчанию русские подсказки и описание, для английского Telegram - английские
             for ((languageCode, texts) in listOf(null to Lang.RU.texts, "en" to Lang.EN.texts)) {
                 telegramControlClient.setMyCommands(
                     commands = botCommands(texts, billingEnabled = billingConfig.enabled),
                     languageCode = languageCode,
                 )
+                telegramControlClient.setMyDescription(texts.botDescription, languageCode)
+                telegramControlClient.setMyShortDescription(texts.botShortDescription, languageCode)
             }
         } catch (exception: CancellationException) {
             throw exception
@@ -302,6 +307,7 @@ fun main() = runBlocking {
         noopIntervalSeconds = noopIntervalSeconds,
         onMailboxConnected = healthMonitor::onConnected,
         onMailboxFailure = healthMonitor::onFailure,
+        reuseSafetyConnection = safetyReuseConnection,
     )
 
     val mailboxSupervisor = MailboxSupervisor(
@@ -435,8 +441,9 @@ fun main() = runBlocking {
             if (billingConfig.supportContact != null) "set" else "not set",
         )
         logger.info(
-            "IMAP safety poll: {} s, NOOP: {} s, max attachment: {} MB, Telegram proxy: {}, replies: {}",
+            "IMAP safety poll: {} s ({}), NOOP: {} s, max attachment: {} MB, Telegram proxy: {}, replies: {}",
             safetyPollSeconds,
+            if (safetyReuseConnection) "persistent connection" else "new login each time",
             noopIntervalSeconds,
             maxAttachmentSizeMb,
             if (telegramProxyUrl.isNullOrBlank()) "off" else "on",

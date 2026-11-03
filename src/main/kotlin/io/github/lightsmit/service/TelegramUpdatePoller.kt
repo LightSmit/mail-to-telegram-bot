@@ -77,6 +77,7 @@ class TelegramUpdatePoller(
                     offset = nextOffset,
                     timeoutSeconds = LONG_POLL_TIMEOUT_SECONDS,
                 )
+                BotHealth.telegramPolled()
 
                 batch.nextOffset?.let { offset ->
                     stateRepository.saveNextOffset(offset)

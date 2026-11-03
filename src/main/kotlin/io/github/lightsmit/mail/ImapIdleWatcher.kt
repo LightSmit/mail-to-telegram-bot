@@ -29,6 +29,9 @@ class ImapIdleWatcher(
     // Сообщают монитору здоровья ящиков: подключение удалось / сорвалось
     private val onMailboxConnected: (MailAccountConfig) -> Unit = {},
     private val onMailboxFailure: (MailAccountConfig, Exception) -> Unit = { _, _ -> },
+    // true - контрольная проверка идет по постоянному соединению (вход в ящик один раз),
+    // false - как раньше, каждая проверка с новым входом
+    private val reuseSafetyConnection: Boolean = true,
 ) {
 
     private val logger =
@@ -179,32 +182,132 @@ class ImapIdleWatcher(
         }
     }
 
+    /**
+     * Контрольная проверка раз в safetyPollSeconds: ловит письма, о которых сервер не сообщил по IDLE
+     * (Gmail иногда опаздывает на минуты). Папка "Входящие" каждый раз открывается заново - это дает
+     * свежий список писем, как при новом входе, но само соединение с ящиком держится постоянно.
+     * Так почтовый сервис видит один вход в несколько часов, а не четыре входа в минуту.
+     */
     private suspend fun runSafetyPollLoop(
         account: MailAccountConfig,
     ) {
         var consecutiveFailures = 0
+        var store: IMAPStore? = null
 
-        while (currentCoroutineContext().isActive) {
-            // При ошибках опрашиваем реже, чтобы почтовик не принял нас за перебор паролей
-            val extraDelay = if (consecutiveFailures == 0) 0L else backoffMillis(consecutiveFailures)
-            delay(safetyPollSeconds * 1_000 + extraDelay)
+        try {
+            while (currentCoroutineContext().isActive) {
+                // При ошибках опрашиваем реже, чтобы почтовик не принял нас за перебор паролей
+                val extraDelay = if (consecutiveFailures == 0) 0L else backoffMillis(consecutiveFailures)
+                delay(safetyPollSeconds * 1_000 + extraDelay)
 
+                try {
+                    if (reuseSafetyConnection) {
+                        store = checkOverPersistentConnection(account, store)
+                    } else {
+                        onSafetyMailboxCheck(account)
+                    }
+                    consecutiveFailures = 0
+                    onMailboxConnected(account)
+                } catch (exception: CancellationException) {
+                    throw exception
+                } catch (exception: Exception) {
+                    closeQuietly(store)
+                    store = null
+                    consecutiveFailures++
+                    onMailboxFailure(account, exception)
+                    logger.debug(
+                        "Safety mail check failed for {}: {} ({})",
+                        account.username,
+                        exception.javaClass.simpleName,
+                        exception.message,
+                    )
+                }
+            }
+        } finally {
+            closeQuietly(store)
+        }
+    }
+
+    /**
+     * Проверка по уже открытому соединению. Если сервер его тихо закрыл, сразу входим заново
+     * и проверяем еще раз: письмо не ждет следующего круга. Возвращает рабочее соединение.
+     */
+    private suspend fun checkOverPersistentConnection(
+        account: MailAccountConfig,
+        current: IMAPStore?,
+    ): IMAPStore {
+        if (current != null && current.isConnected) {
             try {
-                onSafetyMailboxCheck(account)
-                consecutiveFailures = 0
-                onMailboxConnected(account)
+                checkInbox(account, current)
+                return current
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
-                consecutiveFailures++
-                onMailboxFailure(account, exception)
                 logger.debug(
-                    "Safety mail check failed for {}: {} ({})",
+                    "Safety connection for {} was lost ({}), reconnecting",
                     account.username,
                     exception.javaClass.simpleName,
-                    exception.message,
                 )
+                closeQuietly(current)
             }
+        } else {
+            closeQuietly(current)
+        }
+
+        val fresh = connectStore(account, SAFETY_READ_TIMEOUT_MILLIS)
+        try {
+            checkInbox(account, fresh)
+        } catch (exception: Exception) {
+            closeQuietly(fresh)
+            throw exception
+        }
+        logger.debug("Safety connection opened for {}", account.username)
+        return fresh
+    }
+
+    // Открыть "Входящие" заново, забрать новые письма и закрыть папку (соединение остается)
+    private suspend fun checkInbox(
+        account: MailAccountConfig,
+        store: IMAPStore,
+    ) {
+        val inbox = store.getFolder("INBOX") as? IMAPFolder
+            ?: error("Mailbox ${account.name} does not provide an IMAP folder")
+        runInterruptible(Dispatchers.IO) {
+            inbox.open(Folder.READ_ONLY)
+        }
+        try {
+            onIdleMailboxChanged(account, inbox)
+        } finally {
+            runCatching {
+                if (inbox.isOpen) inbox.close(false)
+            }
+        }
+    }
+
+    private suspend fun connectStore(
+        account: MailAccountConfig,
+        readTimeoutMillis: Int,
+    ): IMAPStore {
+        val session = ImapSessionFactory.create(
+            account = account,
+            readTimeoutMillis = readTimeoutMillis,
+        )
+        val store = session.getStore("imaps") as? IMAPStore
+            ?: error("The configured store is not an IMAPStore")
+        runInterruptible(Dispatchers.IO) {
+            store.connect(
+                account.host,
+                account.port,
+                account.username,
+                account.password,
+            )
+        }
+        return store
+    }
+
+    private fun closeQuietly(store: IMAPStore?) {
+        runCatching {
+            if (store?.isConnected == true) store.close()
         }
     }
 
@@ -217,6 +320,8 @@ class ImapIdleWatcher(
 
     private companion object {
         const val IDLE_READ_TIMEOUT_MILLIS = 25 * 60 * 1_000
+        // Проверка короткая: если сервер молчит минуту, соединение считаем потерянным
+        const val SAFETY_READ_TIMEOUT_MILLIS = 60 * 1_000
         const val HEALTHY_SESSION_SECONDS = 120L
         const val MAX_BACKOFF_SECONDS = 600L
     }
