@@ -836,8 +836,7 @@ class TelegramUpdatePoller(
         val link = "https://t.me/$username?start=${service.code(userId)}"
         val stats = service.stats(userId)
         val text = t.billing.referralInfo(link, stats.invited, stats.qualified, stats.goal, stats.towardsNext, stats.rewards)
-        val share = "https://t.me/share/url?url=" + java.net.URLEncoder.encode(link, Charsets.UTF_8) +
-            "&text=" + java.net.URLEncoder.encode(t.billing.referralShareText, Charsets.UTF_8)
+        val share = "https://t.me/share/url?url=" + urlEncode(link) + "&text=" + urlEncode(t.billing.referralShareText)
         try {
             controlClient.sendMessageWithButtons(
                 chatId = chatId,
@@ -851,6 +850,10 @@ class TelegramUpdatePoller(
             logger.warn("Failed to send referral link to {}: {}", chatId, exception.javaClass.simpleName)
         }
     }
+
+    // URLEncoder кодирует пробел как "+", а Telegram в ссылке t.me/share показывает его как есть: нужен %20
+    private fun urlEncode(value: String): String =
+        java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
 
     private suspend fun redeemInvite(chatId: Long, userId: Long, code: String, t: Texts) {
         val service = subscriptions ?: return
