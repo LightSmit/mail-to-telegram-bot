@@ -453,6 +453,7 @@ class TelegramUpdatePoller(
                 "/users" -> admin.usersText()
                 "/refs" -> admin.referralsText()
                 "/refund" -> admin.refundText(argument)
+                "/reset_trials" -> admin.resetTrialsText(argument)
                 else -> return false
             }
         } catch (exception: CancellationException) {

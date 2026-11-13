@@ -261,6 +261,25 @@ class SubscriptionServiceTest {
     }
 
     @Test
+    fun `reset trials returns free and the trial button but keeps other subscriptions`() = runBlocking {
+        val auto = service(trialOnRequest = false)
+        auto.plan(USER) // старый автоматический пробный период
+        auto.grant(OTHER, Plan.BUSINESS, GrantTerm.Forever, SubscriptionSource.GRANT)
+
+        val service = service(trialOnRequest = true)
+        assertEquals(listOf(USER), service.trialRecords().map { it.userId })
+        assertEquals(listOf(USER), service.resetTrials().map { it.userId })
+
+        assertEquals(Plan.FREE, service.plan(USER))
+        assertTrue(service.trialAvailable(USER))
+        assertNotNull(service.startTrial(USER))
+        assertEquals(Plan.PRO, service.plan(USER))
+
+        assertEquals(Plan.BUSINESS, service.plan(OTHER))
+        assertNull(store.subscriptions[OTHER]?.expiresAt)
+    }
+
+    @Test
     fun `notices are sent once`() = runBlocking {
         val service = service()
         service.plan(USER) // пробный период на 7 дней

@@ -34,7 +34,7 @@ const googleAccount = (path: string) => (email: string) => {
   return `https://myaccount.google.com/${path}` + (address.includes('@') ? `?authuser=${encodeURIComponent(address)}` : '');
 };
 
-const MAILRU_SECURITY_URL = 'https://e.mail.ru/settings/security';
+const MAILRU_APP_PASSWORDS_URL = 'https://account.mail.ru/user/2-step-auth/passwords?back_url=https%3A%2F%2Fid.mail.ru%2Fsecurity';
 const YANDEX_IMAP_URL = 'https://mail.yandex.ru/#setup/client';
 const YANDEX_APP_PASSWORDS_URL = 'https://id.yandex.ru/security/app-passwords';
 const APPLE_ACCOUNT_URL = 'https://account.apple.com/account/manage';
@@ -49,22 +49,20 @@ export const PROVIDERS: MailProvider[] = [
     domains: ['mail.ru', 'list.ru', 'bk.ru', 'inbox.ru', 'internet.ru', 'mail.ua'],
     steps: [
       {
-        text: 'Откройте настройки Mail.ru, раздел «Пароль и безопасность».',
-        url: MAILRU_SECURITY_URL,
-        button: 'Открыть «Пароль и безопасность»',
+        text: 'Откройте «Пароли для внешних приложений» в настройках Mail.ru и нажмите «Создать».',
+        url: MAILRU_APP_PASSWORDS_URL,
+        button: 'Создать пароль приложения',
       },
-      'Найдите «Пароли для внешних приложений» и нажмите «Создать».',
       'Введите название, например «Почта в Telegram», выберите полный доступ к почте (IMAP и SMTP), чтобы можно было отвечать на письма из Telegram, и подтвердите вход.',
       'Скопируйте пароль: он показывается один раз.',
     ],
     passwordHint: 'Пароль для внешнего приложения из настроек Mail.ru, а не пароль от почты.',
     stepsEn: [
       {
-        text: 'Open Mail.ru settings, "Password and security".',
-        url: MAILRU_SECURITY_URL,
-        button: 'Open "Password and security"',
+        text: 'Open "Passwords for external applications" in Mail.ru settings and click "Create".',
+        url: MAILRU_APP_PASSWORDS_URL,
+        button: 'Create an app password',
       },
-      'Find "Passwords for external applications" and click "Create".',
       'Enter a name, for example "Email in Telegram", choose full mail access (IMAP and SMTP) so you can reply from Telegram, and confirm.',
       'Copy the password: it is shown only once.',
     ],

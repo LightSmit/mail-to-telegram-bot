@@ -175,6 +175,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `/refs` | admins | Who invited how many friends |
 | `/subs`, `/users` | admins | Active subscriptions; latest users with ID and plan |
 | `/refund ID` | admins | Refund Stars for the latest payment and revoke the subscription |
+| `/reset_trials` | admins | Reset the Pro trial: everyone who had it goes back to Free and can start the trial with a button again (`/reset_trials confirm`) |
 
 ## Updating and backups
 

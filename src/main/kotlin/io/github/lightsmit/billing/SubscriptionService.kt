@@ -284,6 +284,25 @@ class SubscriptionService(
         return InviteResult.Activated(grant(userId, invite.plan, invite.term, SubscriptionSource.INVITE))
     }
 
+    /** Записи о пробном периоде (действующие и закончившиеся): для /reset_trials. */
+    suspend fun trialRecords(): List<Subscription> =
+        store.findAll().filter { subscription -> subscription.source == SubscriptionSource.TRIAL && !isAdmin(subscription.userId) }
+
+    /**
+     * Удаляет записи о пробном периоде: человек снова на Free и может один раз включить
+     * пробный Pro кнопкой. Купленные, выданные и бессрочные подписки не трогаются.
+     * Возвращает тех, чьи записи удалены.
+     */
+    suspend fun resetTrials(): List<Subscription> = writeLock.withLock {
+        val trials = trialRecords()
+        trials.forEach { subscription ->
+            store.delete(subscription.userId)
+            cache.remove(subscription.userId)
+        }
+        logger.info("Trial records reset: {}", trials.size)
+        trials
+    }
+
     /** Действующие подписки (без админов из .env): для /subs. */
     suspend fun activeSubscriptions(): List<Subscription> {
         val now = clock()

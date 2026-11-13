@@ -95,7 +95,7 @@ class AdminService(
             appendLine()
             appendLine("Команды: /broadcast текст - рассылка всем, /backup - бэкап сейчас")
             if (subscriptions != null) {
-                appendLine("Подписки: /subs, /users, /refs, /grant, /revoke, /invite, /refund (без параметров - подсказка)")
+                appendLine("Подписки: /subs, /users, /refs, /grant, /revoke, /invite, /refund (без параметров - подсказка), /reset_trials")
             }
         }.trimEnd()
     }
@@ -130,6 +130,38 @@ class AdminService(
             if (result.renewalCancelled) append(" Автопродление Stars отменено.")
             if (service.isAdmin(userId)) append(" Учтите: это админ из .env, у него все равно будет Business.")
         }
+    }
+
+    /**
+     * /reset_trials: показать, у кого был пробный Pro. /reset_trials confirm: вернуть им Free
+     * и возможность один раз включить пробный Pro кнопкой. Бессрочные, купленные и выданные подписки не трогаются.
+     */
+    suspend fun resetTrialsText(argument: String): String {
+        val service = subscriptions ?: return BILLING_UNAVAILABLE
+        val now = Instant.now()
+        if (argument.trim().lowercase() != "confirm") {
+            val trials = service.trialRecords()
+            if (trials.isEmpty()) return "Записей о пробном периоде нет: сбрасывать нечего."
+            val active = trials.count { subscription -> subscription.isActive(now) }
+            return "Пробный Pro был у ${trials.size} чел., сейчас действует у $active.\n\n" +
+                "После /reset_trials confirm они вернутся на Free (лишние ящики встанут на паузу по лимиту Free) " +
+                "и смогут один раз включить пробный Pro кнопкой. Каждому придет сообщение об этом.\n" +
+                "Подписки навсегда, купленные и выданные через /grant или /invite не затрагиваются."
+        }
+
+        val reset = service.resetTrials()
+        if (reset.isEmpty()) return "Записей о пробном периоде нет: сбрасывать нечего."
+        var delivered = 0
+        reset.forEach { subscription ->
+            val sent = runCatching {
+                val texts = botUsers.language(subscription.userId).texts
+                telegramClient.sendMessage(chatId = subscription.userId, text = texts.billing.trialReset(service.config.trialDays))
+            }.isSuccess
+            if (sent) delivered++
+        }
+        logger.info("Trials reset for {} users, notified {}", reset.size, delivered)
+        return "✅ Пробный период сброшен у ${reset.size} чел. (у ${reset.count { it.isActive(now) }} он еще действовал). " +
+            "Сообщение получили: $delivered."
     }
 
     /** /invite <pro|business> <срок>: одноразовая ссылка с подпиской. */
