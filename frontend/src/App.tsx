@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import './App.css'
-import { initData } from './telegram'
+import { initData, openLink } from './telegram'
 import { lang, rememberLang, t, type Lang } from './i18n'
 import { LanguageSwitch } from './LanguageSwitch'
 import { FiltersPanel, withDefaults, type MailFilters } from './FiltersPanel'
@@ -11,7 +11,7 @@ import { DataSection } from './DataSection'
 import { PlanSection, hasPro, type PlanInfo } from './PlanSection'
 import { GroupPanel } from './GroupPanel'
 import { ReferralSection, type ReferralInfo } from './ReferralSection'
-import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider, providerHint, providerSteps, providerTitle } from './providers'
+import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider, providerHint, providerSteps, providerTitle, stepKey, stepUrl, type ProviderStep } from './providers'
 
 type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
 
@@ -187,6 +187,23 @@ function App() {
     return null;
   };
 
+  const startTrial = async (): Promise<boolean> => {
+    setNotice({ kind: 'info', text: t.trialStarting });
+    try {
+      const response = await request('/plan/trial', 'POST');
+      if (response.ok) {
+        setPlan(await response.json());
+        setNotice({ kind: 'ok', text: t.trialStarted });
+        await fetchAccounts(true);
+        return true;
+      }
+      setNotice({ kind: 'error', text: await errorText(response, t.trialFailed) });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    }
+    return false;
+  };
+
   const createGroupLink = async (account: Account): Promise<string | null> => {
     try {
       const response = await request(`/accounts/${account.id}/group`, 'POST');
@@ -248,7 +265,7 @@ function App() {
   const provider = findProvider(providerId);
   const isCustom = providerId === CUSTOM_PROVIDER_ID;
   const host = isCustom ? customHost.trim() : provider?.host ?? '';
-  const steps = provider ? providerSteps(provider) : isCustom ? CUSTOM_STEPS : null;
+  const steps: ProviderStep[] | null = provider ? providerSteps(provider) : isCustom ? CUSTOM_STEPS : null;
 
   const handleAddAccount = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -507,6 +524,7 @@ function App() {
                     )}
                     <PasswordPanel
                       host={acc.host}
+                      email={acc.email}
                       broken={acc.status === 'ERROR'}
                       onSave={(newPassword) => handleUpdatePassword(acc, newPassword)}
                     />
@@ -523,6 +541,7 @@ function App() {
           info={plan}
           createInvoice={createInvoice}
           onPaid={refreshAfterPayment}
+          startTrial={startTrial}
           notify={(kind, text) => setNotice(text ? { kind, text } : null)}
         />
       )}
@@ -583,7 +602,19 @@ function App() {
             <p>{t.appPasswordLede}</p>
             {steps ? (
               <ol className="steps">
-                {steps.map((step) => <li key={step}>{step}</li>)}
+                {steps.map((step) => (
+                  <li key={stepKey(step)}>
+                    {typeof step === 'string' ? step : (
+                      <>
+                        {step.text}
+                        <br />
+                        <button type="button" className="step-link" onClick={() => openLink(stepUrl(step, email))}>
+                          {step.button} <span aria-hidden="true">↗</span>
+                        </button>
+                      </>
+                    )}
+                  </li>
+                ))}
               </ol>
             ) : (
               <p className="steps-placeholder">{t.stepsPlaceholder}</p>

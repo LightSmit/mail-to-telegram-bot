@@ -44,6 +44,14 @@ export function rememberLang(value: Lang): boolean {
 
 export const lang: Lang = detectLang();
 
+// «1 день», «3 дня», «7 дней»
+function daysRu(days: number): string {
+  const tens = days % 100;
+  const ones = days % 10;
+  const word = tens >= 11 && tens <= 14 ? 'дней' : ones === 1 ? 'день' : ones >= 2 && ones <= 4 ? 'дня' : 'дней';
+  return `${days} ${word}`;
+}
+
 const ru = {
   locale: 'ru-RU',
   // Общие
@@ -212,6 +220,12 @@ const ru = {
   offerMonth: (stars: number) => `Месяц · ${stars}⭐`,
   offerYear: (stars: number) => `Год · ${stars}⭐`,
   offerYearSave: (percent: number) => `выгоднее на ${percent}%`,
+  trialTitle: (days: number) => `Попробовать Pro ${daysRu(days)} бесплатно`,
+  trialText: 'Все ящики, фильтры, поиск по письмам и коды подтверждения. Ничего не спишется: после пробного периода останется Free.',
+  trialButton: 'Включить пробный Pro',
+  trialStarting: 'Включаем пробный период...',
+  trialStarted: 'Пробный Pro включен.',
+  trialFailed: 'Не удалось включить пробный период',
   planStarsHint: 'Оплата звездами Telegram. Месячная подписка продлевается сама, отменить можно в любой момент в профиле Telegram, раздел «Звезды». Годовая оплачивается один раз.',
   planCancelHint: 'Отменить автопродление можно в профиле Telegram, раздел «Звезды».',
   paying: 'Открываем оплату…',
@@ -410,6 +424,12 @@ const en: Dictionary = {
   offerMonth: (stars: number) => `Month · ${stars}⭐`,
   offerYear: (stars: number) => `Year · ${stars}⭐`,
   offerYearSave: (percent: number) => `save ${percent}%`,
+  trialTitle: (days: number) => `Try Pro free for ${days} days`,
+  trialText: 'All mailboxes, filters, email search and confirmation codes. Nothing is charged: after the trial you stay on Free.',
+  trialButton: 'Start Pro trial',
+  trialStarting: 'Starting the trial...',
+  trialStarted: 'Pro trial is on.',
+  trialFailed: 'Could not start the trial',
   planStarsHint: 'Paid with Telegram Stars. The monthly plan renews automatically, cancel any time in your Telegram profile, "Stars". The yearly plan is a one-time payment.',
   planCancelHint: 'You can cancel auto-renewal in your Telegram profile, "Stars".',
   paying: 'Opening payment…',

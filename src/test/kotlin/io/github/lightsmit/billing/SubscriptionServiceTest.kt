@@ -51,9 +51,9 @@ class SubscriptionServiceTest {
     private val cancelled = mutableListOf<Pair<Long, String>>()
     private val refunded = mutableListOf<Pair<Long, String>>()
 
-    private fun service(enabled: Boolean = true, trialDays: Int = 7) = SubscriptionService(
+    private fun service(enabled: Boolean = true, trialDays: Int = 7, trialOnRequest: Boolean = false) = SubscriptionService(
         store = store,
-        config = BillingConfig(enabled = enabled, trialDays = trialDays),
+        config = BillingConfig(enabled = enabled, trialDays = trialDays, trialOnRequest = trialOnRequest),
         adminIds = setOf(ADMIN),
         cancelRenewal = { userId, chargeId -> cancelled += userId to chargeId },
         refundStars = { userId, chargeId -> refunded += userId to chargeId },
@@ -221,6 +221,43 @@ class SubscriptionServiceTest {
         assertEquals(SubscriptionService.InviteResult.AlreadyUsed, service.redeemInvite(invite.code, OTHER))
         assertEquals(SubscriptionService.InviteResult.NotFound, service.redeemInvite("vip_missing", OTHER))
         assertEquals(Plan.FREE, service.plan(OTHER))
+    }
+
+    @Test
+    fun `button mode starts on free and trial starts only on request`() = runBlocking {
+        val service = service(trialOnRequest = true)
+        assertEquals(Plan.FREE, service.plan(USER))
+        assertNull(store.subscriptions[USER])
+        assertTrue(service.status(USER).trialAvailable)
+
+        val trial = assertNotNull(service.startTrial(USER))
+        assertEquals(SubscriptionSource.TRIAL, trial.source)
+        assertEquals(start.plus(Duration.ofDays(7)), trial.expiresAt)
+        assertEquals(Plan.PRO, service.plan(USER))
+        assertFalse(service.status(USER).trialAvailable)
+
+        // Второй раз пробный период не включается, и после окончания тоже
+        assertNull(service.startTrial(USER))
+        now = start.plus(Duration.ofDays(8))
+        assertEquals(Plan.FREE, service.plan(USER))
+        assertNull(service.startTrial(USER))
+        assertFalse(service.status(USER).trialAvailable)
+    }
+
+    @Test
+    fun `trial is not offered to admins, paying users or with billing off`() = runBlocking {
+        val service = service(trialOnRequest = true)
+        assertFalse(service.trialAvailable(ADMIN))
+        assertNull(service.startTrial(ADMIN))
+
+        service.grant(USER, Plan.PRO, GrantTerm.parse("1m")!!, SubscriptionSource.GRANT)
+        assertFalse(service.trialAvailable(USER))
+        assertNull(service.startTrial(USER))
+
+        assertFalse(service(enabled = false, trialOnRequest = true).trialAvailable(OTHER))
+        assertFalse(service(trialDays = 0, trialOnRequest = true).trialAvailable(OTHER))
+        // В режиме auto кнопки нет: пробный период включается сам
+        assertFalse(service(trialOnRequest = false).trialAvailable(OTHER))
     }
 
     @Test

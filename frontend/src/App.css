@@ -814,6 +814,45 @@ textarea:focus {
   font-size: 17px;
 }
 
+/* Пробный Pro по кнопке */
+.plan-trial {
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    var(--brand-gradient) border-box;
+  border: 1.5px solid transparent;
+}
+
+.plan-trial .field-hint {
+  display: block;
+  margin: 0 0 12px;
+}
+
+/* Кнопка-ссылка под шагом инструкции: открывает нужную страницу настроек почты */
+.step-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--link);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.step-link:active {
+  opacity: 0.7;
+}
+
+.toggle-text .step-link {
+  align-self: flex-start;
+}
+
 .plan-perks {
   margin: 0 0 12px;
   padding-left: 20px;

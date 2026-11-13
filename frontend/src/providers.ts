@@ -3,19 +3,41 @@
 // Тексты на двух языках: *En - для английского интерфейса.
 import { lang } from './i18n'
 
+/**
+ * Шаг инструкции: просто текст или текст с кнопкой, которая сразу открывает
+ * нужную страницу настроек почты. url может зависеть от адреса ящика
+ * (Google открывает страницу сразу в аккаунте этой почты).
+ */
+export type ProviderStep = string | {
+  text: string;
+  url: string | ((email: string) => string);
+  button: string;
+};
+
 export interface MailProvider {
   id: string;
   title: string;
   host: string;
   domains: string[];
   /** Шаги получения пароля приложения (по порядку). */
-  steps: string[];
+  steps: ProviderStep[];
   /** Подсказка под полем пароля: как выглядит правильный пароль. */
   passwordHint: string;
   titleEn?: string;
-  stepsEn: string[];
+  stepsEn: ProviderStep[];
   passwordHintEn: string;
 }
+
+// Страница аккаунта Google. authuser выбирает нужный аккаунт, если в браузере их несколько
+const googleAccount = (path: string) => (email: string) => {
+  const address = email.trim();
+  return `https://myaccount.google.com/${path}` + (address.includes('@') ? `?authuser=${encodeURIComponent(address)}` : '');
+};
+
+const MAILRU_SECURITY_URL = 'https://e.mail.ru/settings/security';
+const YANDEX_IMAP_URL = 'https://mail.yandex.ru/#setup/client';
+const YANDEX_APP_PASSWORDS_URL = 'https://id.yandex.ru/security/app-passwords';
+const APPLE_ACCOUNT_URL = 'https://account.apple.com/account/manage';
 
 export const CUSTOM_PROVIDER_ID = 'custom';
 
@@ -26,15 +48,23 @@ export const PROVIDERS: MailProvider[] = [
     host: 'imap.mail.ru',
     domains: ['mail.ru', 'list.ru', 'bk.ru', 'inbox.ru', 'internet.ru', 'mail.ua'],
     steps: [
-      'Откройте почту Mail.ru, нажмите на свой аккаунт и выберите «Пароль и безопасность».',
-      'Откройте «Пароли для внешних приложений» и нажмите «Создать».',
+      {
+        text: 'Откройте настройки Mail.ru, раздел «Пароль и безопасность».',
+        url: MAILRU_SECURITY_URL,
+        button: 'Открыть «Пароль и безопасность»',
+      },
+      'Найдите «Пароли для внешних приложений» и нажмите «Создать».',
       'Введите название, например «Почта в Telegram», выберите полный доступ к почте (IMAP и SMTP), чтобы можно было отвечать на письма из Telegram, и подтвердите вход.',
       'Скопируйте пароль: он показывается один раз.',
     ],
     passwordHint: 'Пароль для внешнего приложения из настроек Mail.ru, а не пароль от почты.',
     stepsEn: [
-      'Open Mail.ru mail, click your account and choose "Password and security".',
-      'Open "Passwords for external applications" and click "Create".',
+      {
+        text: 'Open Mail.ru settings, "Password and security".',
+        url: MAILRU_SECURITY_URL,
+        button: 'Open "Password and security"',
+      },
+      'Find "Passwords for external applications" and click "Create".',
       'Enter a name, for example "Email in Telegram", choose full mail access (IMAP and SMTP) so you can reply from Telegram, and confirm.',
       'Copy the password: it is shown only once.',
     ],
@@ -46,17 +76,31 @@ export const PROVIDERS: MailProvider[] = [
     host: 'imap.yandex.ru',
     domains: ['yandex.ru', 'ya.ru', 'yandex.com', 'yandex.by', 'yandex.kz', 'narod.ru'],
     steps: [
-      'В настройках Яндекс Почты откройте «Почтовые программы» и включите доступ по протоколу IMAP.',
-      'Откройте passport.yandex.ru/security/app-passwords (Яндекс ID, раздел «Пароли приложений»).',
-      'Создайте пароль для «Почты» с названием, например, «Почта в Telegram».',
+      {
+        text: 'Включите доступ по протоколу IMAP в настройках Яндекс Почты, раздел «Почтовые программы».',
+        url: YANDEX_IMAP_URL,
+        button: 'Открыть настройки IMAP',
+      },
+      {
+        text: 'Создайте пароль приложения для «Почты» с названием, например, «Почта в Telegram».',
+        url: YANDEX_APP_PASSWORDS_URL,
+        button: 'Создать пароль приложения',
+      },
       'Скопируйте пароль сразу: Яндекс показывает его только один раз.',
     ],
     passwordHint: 'Пароль приложения из Яндекс ID, а не пароль от почты.',
     titleEn: 'Yandex Mail',
     stepsEn: [
-      'In Yandex Mail settings open "Email clients" and enable IMAP access.',
-      'Open passport.yandex.ru/security/app-passwords (Yandex ID, "App passwords").',
-      'Create a password for "Mail" with a name, for example "Email in Telegram".',
+      {
+        text: 'Enable IMAP access in Yandex Mail settings, "Email clients".',
+        url: YANDEX_IMAP_URL,
+        button: 'Open IMAP settings',
+      },
+      {
+        text: 'Create an app password for "Mail" with a name, for example "Email in Telegram".',
+        url: YANDEX_APP_PASSWORDS_URL,
+        button: 'Create an app password',
+      },
       'Copy the password right away: Yandex shows it only once.',
     ],
     passwordHintEn: 'An app password from Yandex ID, not your email password.',
@@ -67,19 +111,33 @@ export const PROVIDERS: MailProvider[] = [
     host: 'imap.gmail.com',
     domains: ['gmail.com', 'googlemail.com'],
     steps: [
-      'Войдите в аккаунт Google этой почты и включите двухэтапную аутентификацию (раздел «Безопасность»).',
-      'Откройте myaccount.google.com/apppasswords.',
-      'Введите название, например «Почта в Telegram», и нажмите «Создать».',
-      'Скопируйте 16 букв без пробелов.',
+      {
+        text: 'Включите двухэтапную аутентификацию в аккаунте Google этой почты. Если она уже включена, пропустите шаг.',
+        url: googleAccount('signinoptions/twosv'),
+        button: 'Включить двухэтапную аутентификацию',
+      },
+      {
+        text: 'Создайте пароль приложения: введите название, например «Почта в Telegram», и нажмите «Создать».',
+        url: googleAccount('apppasswords'),
+        button: 'Создать пароль приложения',
+      },
+      'Скопируйте 16 букв. Пробелы между ними можно не убирать.',
     ],
-    passwordHint: 'Ровно 16 латинских букв, например abcdefghijklmnop. Ваш обычный пароль Google не подойдет.',
+    passwordHint: '16 латинских букв, например abcd efgh ijkl mnop. Ваш обычный пароль Google не подойдет.',
     stepsEn: [
-      'Sign in to the Google account of this mailbox and turn on 2-Step Verification ("Security" section).',
-      'Open myaccount.google.com/apppasswords.',
-      'Enter a name, for example "Email in Telegram", and click "Create".',
-      'Copy the 16 letters without spaces.',
+      {
+        text: 'Turn on 2-Step Verification in the Google account of this mailbox. If it is already on, skip this step.',
+        url: googleAccount('signinoptions/twosv'),
+        button: 'Turn on 2-Step Verification',
+      },
+      {
+        text: 'Create an app password: enter a name, for example "Email in Telegram", and click "Create".',
+        url: googleAccount('apppasswords'),
+        button: 'Create an app password',
+      },
+      'Copy the 16 letters. You can keep the spaces between them.',
     ],
-    passwordHintEn: 'Exactly 16 Latin letters, for example abcdefghijklmnop. Your regular Google password will not work.',
+    passwordHintEn: '16 Latin letters, for example abcd efgh ijkl mnop. Your regular Google password will not work.',
   },
   {
     id: 'rambler',
@@ -106,13 +164,21 @@ export const PROVIDERS: MailProvider[] = [
     host: 'imap.mail.me.com',
     domains: ['icloud.com', 'me.com', 'mac.com'],
     steps: [
-      'Откройте appleid.apple.com, раздел «Вход и безопасность», затем «Пароли приложений».',
+      {
+        text: 'Откройте аккаунт Apple, раздел «Вход и безопасность», затем «Пароли приложений».',
+        url: APPLE_ACCOUNT_URL,
+        button: 'Открыть аккаунт Apple',
+      },
       'Создайте пароль с названием, например, «Почта в Telegram».',
       'Скопируйте код вида xxxx-xxxx-xxxx-xxxx.',
     ],
     passwordHint: 'Код вида xxxx-xxxx-xxxx-xxxx, а не пароль от Apple ID.',
     stepsEn: [
-      'Open appleid.apple.com, "Sign-In and Security", then "App-Specific Passwords".',
+      {
+        text: 'Open your Apple Account, "Sign-In and Security", then "App-Specific Passwords".',
+        url: APPLE_ACCOUNT_URL,
+        button: 'Open Apple Account',
+      },
       'Create a password with a name, for example "Email in Telegram".',
       'Copy the code that looks like xxxx-xxxx-xxxx-xxxx.',
     ],
@@ -135,7 +201,12 @@ export const CUSTOM_STEPS = lang === 'ru' ? CUSTOM_STEPS_RU : CUSTOM_STEPS_EN;
 export const providerTitle = (provider: MailProvider) =>
   lang === 'ru' ? provider.title : provider.titleEn ?? provider.title;
 
-export const providerSteps = (provider: MailProvider) =>
+export const stepKey = (step: ProviderStep) => (typeof step === 'string' ? step : step.text);
+
+export const stepUrl = (step: Exclude<ProviderStep, string>, email: string) =>
+  typeof step.url === 'function' ? step.url(email) : step.url;
+
+export const providerSteps = (provider: MailProvider): ProviderStep[] =>
   lang === 'ru' ? provider.steps : provider.stepsEn;
 
 export const providerHint = (provider: MailProvider) =>

@@ -21,6 +21,9 @@ export interface PlanInfo {
   admin: boolean;
   maxMailboxes: number;
   offers: Offer[];
+  // Пробный Pro можно включить кнопкой
+  trialAvailable?: boolean;
+  trialDays?: number;
 }
 
 /** Платный тариф: фильтры по отправителям, все письма с поиском, коды подтверждения. */
@@ -32,6 +35,8 @@ interface Props {
   createInvoice: (offerId: string) => Promise<string | null>;
   // После оплаты: перечитать тариф с сервера
   onPaid: () => Promise<void>;
+  // Включить пробный Pro (true - включен, причину ошибки показывает App)
+  startTrial: () => Promise<boolean>;
   notify: (kind: 'info' | 'ok' | 'error', text: string) => void;
 }
 
@@ -58,8 +63,17 @@ function yearSaving(offers: Offer[], year: Offer): number {
   return Math.round((1 - year.stars / (month.stars * 12)) * 100);
 }
 
-export function PlanSection({ info, createInvoice, onPaid, notify }: Props) {
+export function PlanSection({ info, createInvoice, onPaid, startTrial, notify }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
+
+  const tryPro = async () => {
+    setBusy('trial');
+    try {
+      await startTrial();
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const buy = async (offer: Offer) => {
     setBusy(offer.id);
@@ -100,6 +114,18 @@ export function PlanSection({ info, createInvoice, onPaid, notify }: Props) {
         {info.plan !== 'FREE' && <span className="field-hint">{t.planMailboxes(info.maxMailboxes)}</span>}
         {info.recurring && <span className="field-hint">{t.planCancelHint}</span>}
       </div>
+
+      {info.trialAvailable && info.trialDays ? (
+        <div className="plan-offer plan-trial">
+          <h3 className="plan-offer-title">{t.trialTitle(info.trialDays)}</h3>
+          <p className="field-hint">{t.trialText}</p>
+          <div className="plan-buttons">
+            <button type="button" className="primary" disabled={busy !== null} onClick={tryPro}>
+              {busy === 'trial' ? t.trialStarting : t.trialButton}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {plans.map((plan) => {
         const offers = info.offers.filter((offer) => offer.plan === plan);

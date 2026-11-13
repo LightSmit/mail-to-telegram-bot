@@ -146,6 +146,7 @@ docker compose logs -f mail-bot
 | `REPLY_ENABLED` | `false` | Кнопка «Ответить» (нужен открытый исходящий SMTP 465/587) |
 | `BILLING_ENABLED` | `false` | Тарифы и оплата звездами. Пока `false`, у всех лимиты Pro |
 | `TRIAL_DAYS` | `7` | Пробный Pro для новых пользователей, дней (0 - без пробного) |
+| `TRIAL_MODE` | `button` | `button` - пользователь включает пробный период кнопкой, `auto` - он включается сам при первом запуске |
 | `PRICE_PRO_MONTH` / `PRICE_PRO_YEAR` | `100` / `1000` | Цены Pro в звездах |
 | `PRICE_BUSINESS_MONTH` / `PRICE_BUSINESS_YEAR` | `300` / `3000` | Цены Business в звездах |
 | `REFERRAL_GOAL` | `5` | Сколько друзей нужно пригласить за месяц Pro (0 - приглашения выключены) |

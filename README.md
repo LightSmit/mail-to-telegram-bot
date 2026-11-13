@@ -146,6 +146,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `REPLY_ENABLED` | `false` | "Reply" button (needs open outgoing SMTP 465/587) |
 | `BILLING_ENABLED` | `false` | Plans and Stars payments. While `false`, everyone has Pro limits |
 | `TRIAL_DAYS` | `7` | Pro trial for new users, days (0 - no trial) |
+| `TRIAL_MODE` | `button` | `button` - the user starts the trial with a button, `auto` - it starts by itself on the first start |
 | `PRICE_PRO_MONTH` / `PRICE_PRO_YEAR` | `100` / `1000` | Pro prices in Stars |
 | `PRICE_BUSINESS_MONTH` / `PRICE_BUSINESS_YEAR` | `300` / `3000` | Business prices in Stars |
 | `REFERRAL_GOAL` | `5` | How many friends give a month of Pro (0 - invitations off) |

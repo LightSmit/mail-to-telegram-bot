@@ -13,6 +13,17 @@ private val dateFormat = DateTimeFormatter.ofPattern("dd.MM.yyyy").withZone(Zone
 
 internal fun formatDate(instant: Instant): String = dateFormat.format(instant)
 
+// «1 день», «3 дня», «7 дней»
+internal fun daysRu(days: Int): String {
+    val word = when {
+        days % 100 in 11..14 -> "дней"
+        days % 10 == 1 -> "день"
+        days % 10 in 2..4 -> "дня"
+        else -> "дней"
+    }
+    return "$days $word"
+}
+
 /** Тексты о тарифах, оплате и кодах подтверждения. */
 interface BillingTexts {
     val commandPremium: String
@@ -25,6 +36,11 @@ interface BillingTexts {
     fun invoiceDescription(offer: Offer): String
     val invoiceLabel: String
     val checkoutRejected: String
+
+    // Пробный период по кнопке (TRIAL_MODE=button)
+    fun trialButton(days: Int): String
+    fun trialStarted(expiresAt: Instant?): String
+    val trialUnavailable: String
     fun paymentDone(plan: Plan, expiresAt: Instant?, recurring: Boolean): String
     val paymentUnknown: String
     val billingOff: String
@@ -83,6 +99,9 @@ object RuBillingTexts : BillingTexts {
                 appendLine("Продлится автоматически ${formatDate(status.expiresAt)}. Отменить: в профиле Telegram, раздел «Звезды».")
             status.expiresAt != null -> appendLine("Действует до ${formatDate(status.expiresAt)}.")
         }
+        if (status.trialAvailable) {
+            appendLine("🎁 Pro можно бесплатно попробовать ${daysRu(config.trialDays)}: кнопка ниже. Ничего не спишется, после пробного периода останется Free.")
+        }
         appendLine()
         appendLine("🆓 Free")
         appendLine("• 1 ящик, уведомления о письмах с кнопками")
@@ -129,6 +148,12 @@ object RuBillingTexts : BillingTexts {
 
     override val invoiceLabel = "Подписка"
     override val checkoutRejected = "Этот тариф сейчас нельзя оформить. Откройте /premium и попробуйте еще раз."
+
+    override fun trialButton(days: Int) = "🎁 Попробовать Pro ${daysRu(days)} бесплатно"
+    override fun trialStarted(expiresAt: Instant?) =
+        "🎁 Пробный Pro включен" + (expiresAt?.let { " до ${formatDate(it)}" } ?: "") +
+            ". Доступны все ящики, фильтры, поиск по письмам и коды подтверждения. Ничего не спишется: после пробного периода останется Free."
+    override val trialUnavailable = "Пробный период уже был использован или сейчас недоступен. Тарифы: /premium"
 
     override fun paymentDone(plan: Plan, expiresAt: Instant?, recurring: Boolean) = buildString {
         append("🎉 Спасибо! Тариф ${plan.title} подключен")
@@ -237,6 +262,9 @@ object EnBillingTexts : BillingTexts {
                 appendLine("Renews automatically on ${formatDate(status.expiresAt)}. Cancel in your Telegram profile, \"Stars\".")
             status.expiresAt != null -> appendLine("Valid until ${formatDate(status.expiresAt)}.")
         }
+        if (status.trialAvailable) {
+            appendLine("🎁 You can try Pro for free for ${config.trialDays} days: button below. Nothing is charged, after the trial you stay on Free.")
+        }
         appendLine()
         appendLine("🆓 Free")
         appendLine("• 1 mailbox, email notifications with buttons")
@@ -283,6 +311,12 @@ object EnBillingTexts : BillingTexts {
 
     override val invoiceLabel = "Subscription"
     override val checkoutRejected = "This plan cannot be purchased right now. Open /premium and try again."
+
+    override fun trialButton(days: Int) = "🎁 Try Pro free for $days days"
+    override fun trialStarted(expiresAt: Instant?) =
+        "🎁 Pro trial is on" + (expiresAt?.let { " until ${formatDate(it)}" } ?: "") +
+            ". All mailboxes, filters, email search and confirmation codes are available. Nothing is charged: after the trial you stay on Free."
+    override val trialUnavailable = "The trial has already been used or is not available right now. Plans: /premium"
 
     override fun paymentDone(plan: Plan, expiresAt: Instant?, recurring: Boolean) = buildString {
         append("🎉 Thank you! ${plan.title} is active")

@@ -102,3 +102,20 @@ export function openTelegramLink(link: string): void {
   }
   window.open(link, '_blank');
 }
+
+/**
+ * Открывает обычную ссылку (настройки почты) в браузере. Внутри Telegram -
+ * через openLink, иначе мини-приложение закрылось бы при переходе.
+ */
+export function openLink(link: string): void {
+  const open = (WebApp as unknown as { openLink?: (url: string) => void }).openLink;
+  if (telegramScriptLoaded && typeof open === 'function') {
+    try {
+      open.call(WebApp, link);
+      return;
+    } catch {
+      // ниже откроем обычной ссылкой
+    }
+  }
+  window.open(link, '_blank', 'noopener');
+}

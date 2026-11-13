@@ -139,6 +139,8 @@ data class BillingConfig(
     // false - все пользуются ботом бесплатно (как до появления тарифов), оплата выключена
     val enabled: Boolean = false,
     val trialDays: Int = 7,
+    // true - пробный Pro включается кнопкой (TRIAL_MODE=button), false - сам при первом запуске (auto)
+    val trialOnRequest: Boolean = true,
     val proMonthStars: Int = 100,
     val proYearStars: Int = 1_000,
     val businessMonthStars: Int = 300,
@@ -191,6 +193,8 @@ data class PlanStatus(
     val lifetime: Boolean,
     val admin: Boolean,
     val billingEnabled: Boolean,
+    // Пробный период еще не использован и его можно включить кнопкой
+    val trialAvailable: Boolean = false,
 )
 
 /** Сообщения пользователю о подписке, которые отправляет фоновая проверка. */

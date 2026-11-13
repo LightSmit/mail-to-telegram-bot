@@ -137,6 +137,11 @@ interface Texts {
     fun hostNotAllowed(host: String): String
     fun serverTimeout(host: String): String
     val loginRejected: String
+    // Почта отклонила вход: подсказки для популярных сервисов
+    val loginRejectedGmailRegular: String
+    val loginRejectedGmail: String
+    val loginRejectedYandex: String
+    val loginRejectedMailru: String
     fun cannotConnect(host: String): String
     fun limitReached(limit: Int): String
     val mailboxNotFound: String
@@ -327,6 +332,10 @@ object RuTexts : Texts {
     override fun hostNotAllowed(host: String) = "Адрес сервера $host не разрешен"
     override fun serverTimeout(host: String) = "Сервер $host не ответил вовремя. Попробуйте позже"
     override val loginRejected = "Почта отклонила вход. Проверьте адрес и пароль приложения, а также что доступ по IMAP включен в настройках ящика"
+    override val loginRejectedGmailRegular = "Gmail не принял пароль. Похоже, это обычный пароль от Google, а нужен пароль приложения из 16 латинских букв. Он создается после включения двухэтапной аутентификации: кнопки есть в инструкции"
+    override val loginRejectedGmail = "Gmail не принял пароль приложения. Проверьте, что он создан в аккаунте именно этой почты и не удален. Если не помогает, создайте новый пароль приложения"
+    override val loginRejectedYandex = "Яндекс не принял вход. Нужен пароль приложения из Яндекс ID (не пароль от почты), а в настройках почты должен быть включен доступ по IMAP: кнопки есть в инструкции"
+    override val loginRejectedMailru = "Mail.ru не принял вход. Нужен пароль для внешнего приложения (не пароль от почты) с доступом к IMAP. Создайте его заново и скопируйте целиком"
     override fun cannotConnect(host: String) = "Не удалось подключиться к $host. Проверьте адрес сервера"
     override fun limitReached(limit: Int) = "Можно подключить не больше $limit ящиков"
     override val mailboxNotFound = "Ящик не найден"
@@ -508,6 +517,10 @@ object EnTexts : Texts {
     override fun hostNotAllowed(host: String) = "Server address $host is not allowed"
     override fun serverTimeout(host: String) = "Server $host did not respond in time. Try again later"
     override val loginRejected = "The mailbox rejected the sign-in. Check the address and the app password, and that IMAP access is enabled in the mailbox settings"
+    override val loginRejectedGmailRegular = "Gmail rejected the password. It looks like your regular Google password, but an app password of 16 Latin letters is needed. You can create it after turning on 2-Step Verification: the buttons are in the instructions"
+    override val loginRejectedGmail = "Gmail rejected the app password. Check that it was created in the account of this exact mailbox and was not deleted. If that does not help, create a new app password"
+    override val loginRejectedYandex = "Yandex rejected the sign-in. An app password from Yandex ID is needed (not your email password), and IMAP access must be enabled in the mail settings: the buttons are in the instructions"
+    override val loginRejectedMailru = "Mail.ru rejected the sign-in. A password for an external application with IMAP access is needed (not your email password). Create a new one and copy it in full"
     override fun cannotConnect(host: String) = "Could not connect to $host. Check the server address"
     override fun limitReached(limit: Int) = "You can connect up to $limit mailboxes"
     override val mailboxNotFound = "Mailbox not found"

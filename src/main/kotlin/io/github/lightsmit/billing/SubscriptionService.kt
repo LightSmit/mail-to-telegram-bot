@@ -63,7 +63,24 @@ class SubscriptionService(
             lifetime = subscription?.lifetime == true,
             admin = false,
             billingEnabled = config.enabled,
+            trialAvailable = trialAvailable(userId),
         )
+    }
+
+    /**
+     * Можно ли включить пробный период кнопкой: оплата включена, пробный режим «по кнопке»
+     * и у человека еще не было никакой подписки (ни пробной, ни выданной, ни купленной).
+     */
+    suspend fun trialAvailable(userId: Long): Boolean =
+        config.enabled && config.trialOnRequest && config.trialDays > 0 && !isAdmin(userId) && cached(userId) == null
+
+    /** Включить пробный Pro по кнопке. null - пробный период недоступен (уже был или выключен). */
+    suspend fun startTrial(userId: Long): Subscription? {
+        if (!trialAvailable(userId)) return null
+        return writeLock.withLock {
+            if (cached(userId) != null) return@withLock null
+            createTrial(userId)
+        }
     }
 
     /** Запись о подписке (в том числе закончившейся). */
@@ -371,26 +388,30 @@ class SubscriptionService(
         )
     }
 
-    // Новым пользователям при включенной оплате - пробный Pro на TRIAL_DAYS дней
+    // TRIAL_MODE=auto: новым пользователям при включенной оплате пробный Pro включается сам.
+    // В режиме «по кнопке» запись появляется только после startTrial
     private suspend fun subscriptionWithTrial(userId: Long): Subscription? {
         val existing = cached(userId)
-        if (existing != null || !config.enabled || config.trialDays <= 0) return existing
+        if (existing != null || !config.enabled || config.trialDays <= 0 || config.trialOnRequest) return existing
 
         return writeLock.withLock {
-            cached(userId) ?: run {
-                val now = clock()
-                val trial = Subscription(
-                    userId = userId,
-                    plan = Plan.PRO,
-                    expiresAt = now.plus(Duration.ofDays(config.trialDays.toLong())),
-                    source = SubscriptionSource.TRIAL,
-                    updatedAt = now,
-                )
-                persist(trial)
-                logger.info("Trial started for user {} until {}", userId, trial.expiresAt)
-                trial
-            }
+            cached(userId) ?: createTrial(userId)
         }
+    }
+
+    // Вызывать под writeLock
+    private suspend fun createTrial(userId: Long): Subscription {
+        val now = clock()
+        val trial = Subscription(
+            userId = userId,
+            plan = Plan.PRO,
+            expiresAt = now.plus(Duration.ofDays(config.trialDays.toLong())),
+            source = SubscriptionSource.TRIAL,
+            updatedAt = now,
+        )
+        persist(trial)
+        logger.info("Trial started for user {} until {}", userId, trial.expiresAt)
+        return trial
     }
 
     private suspend fun cached(userId: Long): Subscription? {

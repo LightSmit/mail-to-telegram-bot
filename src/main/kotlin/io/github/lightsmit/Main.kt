@@ -89,6 +89,12 @@ fun main() = runBlocking {
         trialDays = (Environment.get("TRIAL_DAYS")?.toIntOrNull() ?: 7).also { days ->
             require(days in 0..90) { "TRIAL_DAYS must be between 0 and 90" }
         },
+        // button (по умолчанию) - пробный Pro по кнопке в /premium и в приложении, auto - сам при первом запуске
+        trialOnRequest = when (val mode = Environment.get("TRIAL_MODE")?.trim()?.lowercase()) {
+            null, "", "button" -> true
+            "auto" -> false
+            else -> error("TRIAL_MODE must be button or auto, got $mode")
+        },
         proMonthStars = stars("PRICE_PRO_MONTH", 100),
         proYearStars = stars("PRICE_PRO_YEAR", 1_000),
         businessMonthStars = stars("PRICE_BUSINESS_MONTH", 300),
@@ -433,9 +439,10 @@ fun main() = runBlocking {
 
         logger.info("Watched mailboxes: {}", watchedMailboxes)
         logger.info(
-            "Billing: {}, trial {} days, Pro {}/{} stars, support contact: {}",
+            "Billing: {}, trial {} days ({}), Pro {}/{} stars, support contact: {}",
             if (billingConfig.enabled) "on" else "off",
             billingConfig.trialDays,
+            if (billingConfig.trialOnRequest) "button" else "auto",
             billingConfig.proMonthStars,
             billingConfig.proYearStars,
             if (billingConfig.supportContact != null) "set" else "not set",

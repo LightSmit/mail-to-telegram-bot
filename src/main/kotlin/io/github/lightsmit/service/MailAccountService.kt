@@ -91,7 +91,7 @@ class MailAccountService(
             return AddMailAccountResult.Rejected(t.enterAddress)
         }
 
-        val password = request.password.trim()
+        val password = normalizePassword(request.host, request.password)
         if (password.isEmpty() || password.length > 256) {
             return AddMailAccountResult.Rejected(t.enterPassword)
         }
@@ -156,13 +156,13 @@ class MailAccountService(
         lang: Lang = Lang.RU,
     ): UpdatePasswordResult {
         val t = lang.texts
-        val password = rawPassword.trim()
+        val existing = repository.findByIdAndOwner(accountId, ownerChatId)
+            ?: return UpdatePasswordResult.NotFound
+
+        val password = normalizePassword(existing.host, rawPassword)
         if (password.isEmpty() || password.length > 256) {
             return UpdatePasswordResult.Rejected(t.enterPassword)
         }
-
-        val existing = repository.findByIdAndOwner(accountId, ownerChatId)
-            ?: return UpdatePasswordResult.NotFound
 
         verifyLogin(existing.copy(password = password), t)?.let { problem ->
             return UpdatePasswordResult.Rejected(problem)
@@ -231,11 +231,17 @@ class MailAccountService(
             throw exception
         } catch (exception: AuthenticationFailedException) {
             logger.info("Login check failed for {}: authentication rejected", account.username)
-            t.loginRejected
+            AppPasswordHints.rejectionText(account.host, account.password, t)
         } catch (exception: Exception) {
             logger.info("Login check failed for {}: {} ({})", account.username, exception.javaClass.simpleName, exception.message)
             t.cannotConnect(account.host)
         }
+    }
+
+    // Gmail показывает пароль приложения группами по 4 буквы: пробелы убираем
+    private fun normalizePassword(host: String, raw: String): String {
+        val trimmed = raw.trim()
+        return if (AppPasswordHints.isGmail(host)) trimmed.filterNot(Char::isWhitespace) else trimmed
     }
 
     private companion object {

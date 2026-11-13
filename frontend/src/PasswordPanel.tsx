@@ -1,19 +1,26 @@
 import { useState } from 'react'
 import { t } from './i18n'
-import { PROVIDERS, providerHint } from './providers'
+import { PROVIDERS, providerHint, providerSteps, stepUrl } from './providers'
+import { openLink } from './telegram'
 
 interface Props {
   host: string;
+  // Адрес ящика: Google открывает страницу паролей сразу в нужном аккаунте
+  email: string;
   /** true - вход в ящик сейчас не работает: показываем подсказку заметнее */
   broken: boolean;
   onSave: (password: string) => Promise<boolean>;
 }
 
 // Новый пароль приложения для уже подключенного ящика: фильтры и история сохраняются
-export function PasswordPanel({ host, broken, onSave }: Props) {
+export function PasswordPanel({ host, email, broken, onSave }: Props) {
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
   const provider = PROVIDERS.find((item) => item.host === host);
+  // Последний шаг инструкции с кнопкой - страница, где создается пароль приложения
+  const passwordStep = provider
+    ? [...providerSteps(provider)].reverse().find((step) => typeof step !== 'string')
+    : undefined;
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -31,6 +38,11 @@ export function PasswordPanel({ host, broken, onSave }: Props) {
         <span className="toggle-hint">
           {broken ? t.passwordBrokenHint : t.passwordHint}
         </span>
+        {passwordStep && typeof passwordStep !== 'string' && (
+          <button type="button" className="step-link" onClick={() => openLink(stepUrl(passwordStep, email))}>
+            {passwordStep.button} <span aria-hidden="true">↗</span>
+          </button>
+        )}
       </div>
 
       <label className="field">

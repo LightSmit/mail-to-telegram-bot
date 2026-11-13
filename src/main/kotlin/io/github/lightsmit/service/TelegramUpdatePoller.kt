@@ -142,6 +142,10 @@ class TelegramUpdatePoller(
                 chooseLanguage(update, data.removePrefix(LANGUAGE_CALLBACK_PREFIX))
                 return
             }
+            if (update.data == TRIAL_CALLBACK) {
+                startTrial(update, t)
+                return
+            }
         }
 
         val request = update.data
@@ -669,9 +673,15 @@ class TelegramUpdatePoller(
         }
 
         val offers = service.config.offersOnSale.filter { offer -> service.canBuy(userId, offer) }
-        val text = t.billing.premium(service.status(userId), service.config, offers)
+        val status = service.status(userId)
+        val text = t.billing.premium(status, service.config, offers)
         val lang = if (t === Lang.EN.texts) Lang.EN else Lang.RU
-        val buttons = offers.mapNotNull { offer ->
+        // Пробный период еще не использован: кнопка «Попробовать Pro» первой
+        val trialButton = listOfNotNull(
+            TelegramInlineButton(text = t.billing.trialButton(service.config.trialDays), callbackData = TRIAL_CALLBACK)
+                .takeIf { status.trialAvailable },
+        )
+        val buttons = trialButton + offers.mapNotNull { offer ->
             val link = runCatching { invoiceLinks?.link(offer, lang) }
                 .onFailure { exception -> logger.warn("Failed to create invoice link for {}: {}", offer, exception.javaClass.simpleName) }
                 .getOrNull()
@@ -690,6 +700,17 @@ class TelegramUpdatePoller(
         } catch (exception: Exception) {
             logger.warn("Failed to send plans to {}: {}", chatId, exception.javaClass.simpleName)
         }
+    }
+
+    // Кнопка «Попробовать Pro» из /premium: включает пробный период один раз
+    private suspend fun startTrial(update: TelegramCallbackQueryUpdate, t: Texts) {
+        val trial = subscriptions?.startTrial(update.fromUserId)
+        if (trial == null) {
+            answerSafely(callbackQueryId = update.callbackQueryId, text = t.billing.trialUnavailable, showAlert = true)
+            return
+        }
+        answerSafely(callbackQueryId = update.callbackQueryId, text = null, showAlert = false)
+        sendPlain(update.fromUserId, t.billing.trialStarted(trial.expiresAt))
     }
 
     // Перед оплатой Telegram спрашивает бота, можно ли ее принять (ответить нужно за 10 секунд)
@@ -925,6 +946,8 @@ class TelegramUpdatePoller(
 
     private companion object {
         const val LANGUAGE_CALLBACK_PREFIX = "lang:"
+        // Кнопка «Попробовать Pro» в /premium
+        const val TRIAL_CALLBACK = "trial:start"
         // @GroupAnonymousBot: от его имени приходят сообщения анонимных админов групп
         const val ANONYMOUS_ADMIN_ID = 1_087_968_824L
         const val LONG_POLL_TIMEOUT_SECONDS = 25

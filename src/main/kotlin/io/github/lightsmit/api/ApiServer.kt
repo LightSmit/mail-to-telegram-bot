@@ -187,6 +187,9 @@ data class PlanDto(
     val admin: Boolean = false,
     val maxMailboxes: Int,
     val offers: List<OfferDto> = emptyList(),
+    // Пробный Pro можно включить кнопкой (TRIAL_MODE=button) и на сколько дней
+    val trialAvailable: Boolean = false,
+    val trialDays: Int = 0,
 )
 
 @Serializable
@@ -262,6 +265,38 @@ class ApiServer(
 
     // Тариф пользователя запроса; без тарифов - все возможности
     private suspend fun planOf(userId: Long): Plan = subscriptions?.plan(userId) ?: Plan.BUSINESS
+
+    // Тариф, предложения для покупки и пробный период: для /plan и после включения пробного периода
+    private suspend fun planDto(userId: Long): PlanDto {
+        val service = subscriptions
+            ?: return PlanDto(billingEnabled = false, plan = Plan.BUSINESS.name, maxMailboxes = Plan.BUSINESS.maxMailboxes)
+        val status = service.status(userId)
+        val offers = if (service.enabled) {
+            service.config.offersOnSale.filter { offer -> service.canBuy(userId, offer) }
+        } else {
+            emptyList()
+        }
+        return PlanDto(
+            billingEnabled = service.enabled,
+            plan = status.plan.name,
+            expiresAt = status.expiresAt?.toEpochMilli(),
+            lifetime = status.lifetime,
+            recurring = status.recurring,
+            trial = status.source == SubscriptionSource.TRIAL,
+            admin = status.admin,
+            maxMailboxes = status.plan.maxMailboxes,
+            offers = offers.map { offer ->
+                OfferDto(
+                    id = offer.name,
+                    plan = offer.plan.name,
+                    period = if (offer.recurring) "month" else "year",
+                    stars = service.config.price(offer),
+                )
+            },
+            trialAvailable = status.trialAvailable,
+            trialDays = if (status.trialAvailable) service.config.trialDays else 0,
+        )
+    }
 
     fun start() {
         embeddedServer(Netty, port = port) {
@@ -647,38 +682,18 @@ class ApiServer(
 
                     // Тариф пользователя и что можно купить
                     get("/plan") {
+                        call.respond(planDto(call.attributes[UserIdKey]))
+                    }
+
+                    // Включить пробный Pro кнопкой в приложении (один раз на человека)
+                    post("/plan/trial") {
                         val userId = call.attributes[UserIdKey]
                         val service = subscriptions
-                        if (service == null) {
-                            call.respond(PlanDto(billingEnabled = false, plan = Plan.BUSINESS.name, maxMailboxes = Plan.BUSINESS.maxMailboxes))
-                            return@get
+                        if (service == null || service.startTrial(userId) == null) {
+                            call.respond(HttpStatusCode.Conflict, mapOf("error" to call.texts.billing.trialUnavailable))
+                            return@post
                         }
-                        val status = service.status(userId)
-                        val offers = if (service.enabled) {
-                            service.config.offersOnSale.filter { offer -> service.canBuy(userId, offer) }
-                        } else {
-                            emptyList()
-                        }
-                        call.respond(
-                            PlanDto(
-                                billingEnabled = service.enabled,
-                                plan = status.plan.name,
-                                expiresAt = status.expiresAt?.toEpochMilli(),
-                                lifetime = status.lifetime,
-                                recurring = status.recurring,
-                                trial = status.source == SubscriptionSource.TRIAL,
-                                admin = status.admin,
-                                maxMailboxes = status.plan.maxMailboxes,
-                                offers = offers.map { offer ->
-                                    OfferDto(
-                                        id = offer.name,
-                                        plan = offer.plan.name,
-                                        period = if (offer.recurring) "month" else "year",
-                                        stars = service.config.price(offer),
-                                    )
-                                },
-                            ),
-                        )
+                        call.respond(planDto(userId))
                     }
 
                     // Своя ссылка-приглашение и счетчик друзей
