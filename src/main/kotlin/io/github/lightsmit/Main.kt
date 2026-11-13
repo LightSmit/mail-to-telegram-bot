@@ -16,6 +16,8 @@ import io.github.lightsmit.mail.SmtpMailSender
 import io.github.lightsmit.service.AdminService
 import io.github.lightsmit.service.BackupService
 import io.github.lightsmit.service.EmailContentLoader
+import io.github.lightsmit.service.FunnelService
+import io.github.lightsmit.service.FunnelStep
 import io.github.lightsmit.service.GroupLinkService
 import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
@@ -33,8 +35,10 @@ import io.github.lightsmit.service.TelegramUpdatePoller
 import io.github.lightsmit.service.UserDataService
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.DatabaseManager
+import io.github.lightsmit.storage.FunnelRepository
 import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
+import io.github.lightsmit.storage.MailOutboxOperation
 import io.github.lightsmit.storage.MailStateRepository
 import io.github.lightsmit.storage.ReferralRepository
 import io.github.lightsmit.storage.SubscriptionRepository
@@ -237,6 +241,13 @@ fun main() = runBlocking {
 
     val userSettingsRepository = UserSettingsRepository()
 
+    // Воронка новых пользователей: /funnel и /stuck у администратора
+    val funnelService = FunnelService(
+        store = FunnelRepository(),
+        firstSeen = botUserRepository::firstSeen,
+        excludedIds = adminChatIds,
+    )
+
     val subscriptionService = SubscriptionService(
         store = SubscriptionRepository(),
         config = billingConfig,
@@ -361,6 +372,7 @@ fun main() = runBlocking {
         telegramClient = telegramControlClient,
         subscriptions = subscriptionService,
         referrals = referralService,
+        funnel = funnelService,
     )
 
     val userDataService = UserDataService(
@@ -369,6 +381,7 @@ fun main() = runBlocking {
         botUsers = botUserRepository,
         backupKeepDays = backupKeep,
         subscriptions = subscriptionService,
+        funnel = funnelService,
     )
 
     val apiServer = ApiServer(
@@ -376,6 +389,7 @@ fun main() = runBlocking {
         botToken = telegramToken,
         accountService = accountService,
         onUserSeen = { userId, languageCode -> botUserRepository.touch(userId, languageCode) },
+        funnel = funnelService,
         resolveLanguage = { userId, languageCode -> botUserRepository.resolve(userId, languageCode) },
         setLanguage = { userId, lang -> botUserRepository.setLanguage(userId, lang) },
         notificationSettings = NotificationSettingsService(
@@ -405,7 +419,16 @@ fun main() = runBlocking {
     val mailOutboxWorker = MailNotificationOutboxWorker(
         repository = mailOutboxRepository,
         failureClassifier = TelegramDeliveryFailureClassifier(),
-        deliver = forwardingService::deliverOutboxNotification,
+        deliver = { item ->
+            forwardingService.deliverOutboxNotification(item).also {
+                // Первое письмо пришло в Telegram: шаг воронки «получил первое письмо»
+                if (item.operation == MailOutboxOperation.SEND_NOTIFICATION) {
+                    accountRegistry.findByKey(item.accountKey)?.let { account ->
+                        funnelService.record(account.ownerChatId, FunnelStep.FIRST_MAIL)
+                    }
+                }
+            }
+        },
     )
 
     try {
@@ -425,6 +448,7 @@ fun main() = runBlocking {
             quota = mailboxQuota,
             groupLinks = groupLinkService,
             referrals = referralService,
+            funnel = funnelService,
             botUsername = botUsername,
             replyService = if (replyEnabled) {
                 MailReplyService(

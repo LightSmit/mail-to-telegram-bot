@@ -34,7 +34,17 @@ sealed interface UpdatePasswordResult {
 
 sealed interface AddMailAccountResult {
     data class Added(val account: MailAccountConfig) : AddMailAccountResult
-    data class Rejected(val message: String) : AddMailAccountResult
+    // reason - для воронки: input, host, auth, timeout, connect
+    data class Rejected(val message: String, val reason: String = REASON_INPUT) : AddMailAccountResult
+
+    companion object {
+        const val REASON_INPUT = "input"
+        const val REASON_HOST = "host"
+        const val REASON_AUTH = "auth"
+        const val REASON_TIMEOUT = "timeout"
+        const val REASON_CONNECT = "connect"
+        const val REASON_LIMIT = "limit"
+    }
     data class LimitReached(val limit: Int) : AddMailAccountResult
 }
 
@@ -101,10 +111,10 @@ class MailAccountService(
         }
 
         val host = MailHostPolicy.normalizeHostname(request.host)
-            ?: return AddMailAccountResult.Rejected(t.badHost)
+            ?: return AddMailAccountResult.Rejected(t.badHost, AddMailAccountResult.REASON_HOST)
 
         resolveHostProblem(host, t)?.let { problem ->
-            return AddMailAccountResult.Rejected(problem)
+            return AddMailAccountResult.Rejected(problem, AddMailAccountResult.REASON_HOST)
         }
 
         val alreadyExists = repository.existsForOwner(ownerChatId, username)
@@ -125,7 +135,7 @@ class MailAccountService(
         )
 
         verifyLogin(candidate, t)?.let { problem ->
-            return AddMailAccountResult.Rejected(problem)
+            return AddMailAccountResult.Rejected(problem.message, problem.reason)
         }
 
         val saved = repository.upsert(ownerChatId, candidate)
@@ -165,7 +175,7 @@ class MailAccountService(
         }
 
         verifyLogin(existing.copy(password = password), t)?.let { problem ->
-            return UpdatePasswordResult.Rejected(problem)
+            return UpdatePasswordResult.Rejected(problem.message)
         }
 
         val updated = repository.updatePassword(accountId, ownerChatId, password)
@@ -216,14 +226,17 @@ class MailAccountService(
         }
     }
 
-    private suspend fun verifyLogin(account: MailAccountConfig, t: Texts): String? {
+    // Почему не удалось войти: текст для пользователя и причина для воронки
+    private data class LoginProblem(val message: String, val reason: String)
+
+    private suspend fun verifyLogin(account: MailAccountConfig, t: Texts): LoginProblem? {
         return try {
             val connected = withTimeoutOrNull(LOGIN_TIMEOUT_MILLIS) {
                 imapClient.fetchCursor(account)
             }
 
             if (connected == null) {
-                t.serverTimeout(account.host)
+                LoginProblem(t.serverTimeout(account.host), AddMailAccountResult.REASON_TIMEOUT)
             } else {
                 null
             }
@@ -231,10 +244,10 @@ class MailAccountService(
             throw exception
         } catch (exception: AuthenticationFailedException) {
             logger.info("Login check failed for {}: authentication rejected", account.username)
-            AppPasswordHints.rejectionText(account.host, account.password, t)
+            LoginProblem(AppPasswordHints.rejectionText(account.host, account.password, t), AddMailAccountResult.REASON_AUTH)
         } catch (exception: Exception) {
             logger.info("Login check failed for {}: {} ({})", account.username, exception.javaClass.simpleName, exception.message)
-            t.cannotConnect(account.host)
+            LoginProblem(t.cannotConnect(account.host), AddMailAccountResult.REASON_CONNECT)
         }
     }
 

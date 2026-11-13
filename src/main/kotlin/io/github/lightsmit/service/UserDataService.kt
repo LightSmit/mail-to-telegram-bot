@@ -17,6 +17,7 @@ class UserDataService(
     val backupKeepDays: Int,
     // Действующая платная подписка сохраняется, чтобы человек не потерял оплаченный срок
     private val subscriptions: SubscriptionService? = null,
+    private val funnel: FunnelService? = null,
 ) {
 
     private val logger = LoggerFactory.getLogger(UserDataService::class.java)
@@ -29,6 +30,7 @@ class UserDataService(
         settingsRepository.delete(userId)
         botUsers.delete(userId)
         subscriptions?.forgetUnlessActive(userId)
+        funnel?.forget(userId)
         logger.info("All data of user {} deleted ({} mailboxes)", userId, mailboxes)
         return mailboxes
     }

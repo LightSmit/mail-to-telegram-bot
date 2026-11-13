@@ -17,6 +17,8 @@ import io.github.lightsmit.i18n.Texts
 import io.github.lightsmit.service.BotHealth
 import io.github.lightsmit.service.BrowseFailure
 import io.github.lightsmit.service.BrowseResult
+import io.github.lightsmit.service.FunnelService
+import io.github.lightsmit.service.FunnelStep
 import io.github.lightsmit.service.GroupLinkService
 import io.github.lightsmit.service.MailBrowserService
 import io.github.lightsmit.service.MailboxQuota
@@ -221,6 +223,12 @@ data class UpdatePasswordRequestDto(
 )
 
 @Serializable
+data class FunnelEventDto(
+    val step: String,
+    val detail: String? = null,
+)
+
+@Serializable
 data class AddAccountRequestDto(
     val name: String = "",
     val host: String,
@@ -235,6 +243,8 @@ class ApiServer(
     private val accountService: MailAccountService,
     // Вызывается для каждого авторизованного запроса: учет пользователей
     private val onUserSeen: suspend (Long, String?) -> Unit = { _, _ -> },
+    // Воронка новых пользователей (null - выключена)
+    private val funnel: FunnelService? = null,
     // Язык интерфейса: выбранный вручную или из Telegram
     private val resolveLanguage: suspend (Long, String?) -> Lang = { _, code -> Lang.fromCode(code) },
     private val setLanguage: suspend (Long, Lang) -> Unit = { _, _ -> },
@@ -341,6 +351,10 @@ class ApiServer(
                         call.respond(HttpStatusCode.ServiceUnavailable, mapOf("status" to "telegram unreachable"))
                     }
                 }
+                // Некоторые мониторинги (UptimeRobot) проверяют адрес запросом HEAD: тот же ответ без тела
+                head("/health") {
+                    call.respond(if (BotHealth.healthy()) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable)
+                }
 
                 route("/api") {
 
@@ -376,6 +390,7 @@ class ApiServer(
                         // Сохраняем user_id в контекст запроса
                         call.attributes.put(UserIdKey, userId)
                         runCatching { onUserSeen(userId, user.second) }
+                        funnel?.onAppOpen(userId)
                         call.attributes.put(
                             LangKey,
                             runCatching { resolveLanguage(userId, user.second) }.getOrElse { Lang.fromCode(user.second) },
@@ -405,9 +420,21 @@ class ApiServer(
                     }
 
                     // Добавить ящик: проверяем адрес сервера и вход, потом сохраняем и начинаем следить
+                    // Шаги воронки, которые видит только приложение: какую почту выбрал человек
+                    post("/funnel") {
+                        val userId = call.attributes[UserIdKey]
+                        val request = call.receive<FunnelEventDto>()
+                        if (request.step == FunnelStep.PROVIDER.key) {
+                            val provider = request.detail?.lowercase()?.filter { char -> char.isLetterOrDigit() || char == '-' }?.take(32)
+                            funnel?.record(userId, FunnelStep.PROVIDER, provider?.ifEmpty { null })
+                        }
+                        call.respond(HttpStatusCode.NoContent)
+                    }
+
                     post("/accounts") {
                         val ownerId = call.attributes[UserIdKey]
                         val request = call.receive<AddAccountRequestDto>()
+                        funnel?.record(ownerId, FunnelStep.SUBMIT)
 
                         val result = accountService.add(
                             lang = call.attributes[LangKey],
@@ -424,16 +451,20 @@ class ApiServer(
                         when (result) {
                             is AddMailAccountResult.Added -> {
                                 val account = result.account
+                                funnel?.record(ownerId, FunnelStep.CONNECTED)
                                 call.respond(
                                     HttpStatusCode.Created,
                                     AccountResponseDto(id = account.id, name = account.name, email = account.username, host = account.host),
                                 )
                             }
 
-                            is AddMailAccountResult.Rejected ->
+                            is AddMailAccountResult.Rejected -> {
+                                funnel?.record(ownerId, FunnelStep.CONNECT_ERROR, result.reason)
                                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
+                            }
 
-                            is AddMailAccountResult.LimitReached ->
+                            is AddMailAccountResult.LimitReached -> {
+                                funnel?.record(ownerId, FunnelStep.CONNECT_ERROR, AddMailAccountResult.REASON_LIMIT)
                                 call.respond(
                                     HttpStatusCode.Conflict,
                                     mapOf(
@@ -444,6 +475,7 @@ class ApiServer(
                                         ),
                                     ),
                                 )
+                            }
                         }
                     }
 
@@ -693,6 +725,7 @@ class ApiServer(
                             call.respond(HttpStatusCode.Conflict, mapOf("error" to call.texts.billing.trialUnavailable))
                             return@post
                         }
+                        funnel?.record(userId, FunnelStep.TRIAL)
                         call.respond(planDto(userId))
                     }
 

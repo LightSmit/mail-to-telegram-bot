@@ -112,6 +112,13 @@ function App() {
   const [providerTouched, setProviderTouched] = useState(false);
   const [customHost, setCustomHost] = useState('');
 
+  // Воронка: какую почту выбрал человек (сервер записывает только первый выбор)
+  useEffect(() => {
+    if (!providerId) return;
+    request('/funnel', 'POST', { step: 'provider', detail: providerId }).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerId]);
+
   // Относительный путь: в разработке его проксирует Vite, в проде - Caddy.
   const API_URL = import.meta.env.VITE_API_URL ?? '/api';
 

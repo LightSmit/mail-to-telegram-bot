@@ -35,6 +35,7 @@ class AdminService(
     private val subscriptions: SubscriptionService? = null,
     // Приглашения друзей: /refs
     private val referrals: ReferralService? = null,
+    private val funnel: FunnelService? = null,
     private val startedAt: Instant = Instant.now(),
 ) {
     private val logger = LoggerFactory.getLogger(AdminService::class.java)
@@ -96,6 +97,9 @@ class AdminService(
             appendLine("Команды: /broadcast текст - рассылка всем, /backup - бэкап сейчас")
             if (subscriptions != null) {
                 appendLine("Подписки: /subs, /users, /refs, /grant, /revoke, /invite, /refund (без параметров - подсказка), /reset_trials")
+            }
+            if (funnel != null) {
+                appendLine("Воронка: /funnel [дней] [источник], /stuck - кто не подключил ящик")
             }
         }.trimEnd()
     }
@@ -162,6 +166,92 @@ class AdminService(
         logger.info("Trials reset for {} users, notified {}", reset.size, delivered)
         return "✅ Пробный период сброшен у ${reset.size} чел. (у ${reset.count { it.isActive(now) }} он еще действовал). " +
             "Сообщение получили: $delivered."
+    }
+
+    /** /funnel [дней] [источник]: сколько новых пользователей дошло до каждого шага. */
+    suspend fun funnelText(argument: String): String {
+        val service = funnel ?: return "Воронка выключена."
+        val parts = argument.split(Regex("\\s+")).filter(String::isNotEmpty)
+        val days = parts.firstNotNullOfOrNull(String::toIntOrNull)?.coerceIn(1, 365) ?: DEFAULT_FUNNEL_DAYS
+        val source = parts.firstOrNull { part -> part.toIntOrNull() == null }?.lowercase()?.removePrefix(FunnelService.SOURCE_PREFIX)
+        val report = service.report(days, source)
+
+        return buildString {
+            append("📊 Воронка за ${daysText(days)}")
+            append(if (source != null) ", источник $source" else ", все источники")
+            appendLine()
+            if (report.users == 0) {
+                appendLine()
+                appendLine("Новых пользователей за этот период нет.")
+                append("Считаются только те, кто впервые написал боту после установки воронки.")
+                if (report.sources.isNotEmpty()) append("\nИсточники: ${formatCounts(report.sources)}")
+                return@buildString
+            }
+            appendLine()
+            FunnelStep.entries.forEach { step ->
+                val count = report.steps[step] ?: 0
+                if (step == FunnelStep.CONNECT_ERROR) {
+                    val submitted = report.steps[FunnelStep.SUBMIT] ?: 0
+                    if (count > 0) appendLine("   ⚠️ из них с ошибкой: $count из $submitted")
+                    return@forEach
+                }
+                appendLine("${step.title}: $count (${percent(count, report.users)})")
+            }
+            if (report.sources.isNotEmpty()) {
+                appendLine()
+                appendLine("Источники: ${formatCounts(report.sources)}")
+            }
+            if (report.providers.isNotEmpty()) appendLine("Почты: ${formatCounts(report.providers)}")
+            if (report.errors.isNotEmpty()) appendLine("Ошибки: ${formatCounts(report.errors.mapKeys { (key, _) -> errorText(key) })}")
+            appendLine()
+            append("Ссылка с меткой: t.me/бот?start=src_habr. Кто не подключил ящик: /stuck")
+        }.trimEnd()
+    }
+
+    /** /stuck: новые пользователи, которые запустили бота, но так и не подключили ящик. */
+    suspend fun stuckText(): String {
+        val service = funnel ?: return "Воронка выключена."
+        val stuck = service.stuck()
+        if (stuck.isEmpty()) return "За последние 2 недели все новые пользователи подключили ящик (или новых не было)."
+
+        val names = botUsers.displayNames(stuck.map(StuckUser::userId))
+        return buildString {
+            appendLine("🧩 Не подключили ящик: ${stuck.size}")
+            appendLine()
+            stuck.take(LIST_LIMIT).forEach { user ->
+                append(user.userId)
+                names[user.userId]?.let { name -> append(" ").append(name) }
+                appendLine()
+                append("    ${dateTime.format(user.startedAt)} · ${user.source ?: "?"} · дошел до: ${user.lastStep.title.lowercase()}")
+                user.error?.let { error -> append(" · ошибка: ${errorText(error)}") }
+                appendLine()
+            }
+            if (stuck.size > LIST_LIMIT) appendLine("...и еще ${stuck.size - LIST_LIMIT}")
+            appendLine()
+            append("Им можно написать лично и спросить, что помешало.")
+        }.trimEnd()
+    }
+
+    private fun percent(part: Int, total: Int): String = if (total == 0) "0%" else "${part * 100 / total}%"
+
+    private fun formatCounts(counts: Map<String, Int>): String =
+        counts.entries.joinToString(", ") { (key, value) -> "$key $value" }
+
+    private fun daysText(days: Int): String = when {
+        days % 100 in 11..14 -> "$days дней"
+        days % 10 == 1 -> "$days день"
+        days % 10 in 2..4 -> "$days дня"
+        else -> "$days дней"
+    }
+
+    private fun errorText(reason: String): String = when (reason) {
+        AddMailAccountResult.REASON_AUTH -> "неверный пароль"
+        AddMailAccountResult.REASON_CONNECT -> "нет соединения"
+        AddMailAccountResult.REASON_TIMEOUT -> "сервер не ответил"
+        AddMailAccountResult.REASON_HOST -> "неверный сервер"
+        AddMailAccountResult.REASON_LIMIT -> "лимит ящиков"
+        AddMailAccountResult.REASON_INPUT -> "не заполнены поля"
+        else -> reason
     }
 
     /** /invite <pro|business> <срок>: одноразовая ссылка с подпиской. */
@@ -373,6 +463,7 @@ class AdminService(
             "Тариф: pro или business. Срок: 7d, 1m, 3m, 6m, 1y или forever (навсегда).\n" +
             "Пример: /grant 123456789 pro 1m или /grant @username business forever\n" +
             "Если такой тариф уже есть, срок добавится к текущему."
+        const val DEFAULT_FUNNEL_DAYS = 30
         const val REVOKE_USAGE = "Как отозвать подписку: /revoke ID (или @username). Тариф сразу станет Free, автопродление Stars отменится."
         const val INVITE_USAGE = "Как создать ссылку: /invite тариф срок\n" +
             "Пример: /invite business forever или /invite pro 1m. Ссылка одноразовая."

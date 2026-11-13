@@ -175,6 +175,8 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `/refs` | admins | Who invited how many friends |
 | `/subs`, `/users` | admins | Active subscriptions; latest users with ID and plan |
 | `/refund ID` | admins | Refund Stars for the latest payment and revoke the subscription |
+| `/funnel [days] [source]` | admins | New user funnel: start, app, mail provider, connection, first email, Pro trial, payment. The source comes from a link like `t.me/bot?start=src_habr` |
+| `/stuck` | admins | New users who started the bot but did not connect a mailbox |
 | `/reset_trials` | admins | Reset the Pro trial: everyone who had it goes back to Free and can start the trial with a button again (`/reset_trials confirm`) |
 
 ## Updating and backups

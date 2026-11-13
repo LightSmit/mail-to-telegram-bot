@@ -58,6 +58,8 @@ class TelegramUpdatePoller(
     private val groupLinks: GroupLinkService? = null,
     // Приглашение друзей (/referral, ссылки ?start=ref_)
     private val referrals: ReferralService? = null,
+    // Воронка новых пользователей (null - выключена)
+    private val funnel: FunnelService? = null,
     // Имя бота для реферальной ссылки
     private val botUsername: suspend () -> String? = { null },
 ) {
@@ -387,6 +389,10 @@ class TelegramUpdatePoller(
 
         // Ссылка-приглашение: t.me/бот?start=vip_код приходит как "/start vip_код"
         val startArgument = fullText.removePrefix(firstToken).trim()
+        if (command == "/start") {
+            // Новый пользователь и откуда он пришел: t.me/бот?start=src_habr -> habr
+            funnel?.onStart(message.fromUserId, startArgument)
+        }
         if (command == "/start" && startArgument.startsWith(SubscriptionService.INVITE_PREFIX)) {
             redeemInvite(message.chatId, message.fromUserId, startArgument, t)
         }
@@ -454,6 +460,8 @@ class TelegramUpdatePoller(
                 "/refs" -> admin.referralsText()
                 "/refund" -> admin.refundText(argument)
                 "/reset_trials" -> admin.resetTrialsText(argument)
+                "/funnel" -> admin.funnelText(argument)
+                "/stuck" -> admin.stuckText()
                 else -> return false
             }
         } catch (exception: CancellationException) {
@@ -711,6 +719,7 @@ class TelegramUpdatePoller(
             return
         }
         answerSafely(callbackQueryId = update.callbackQueryId, text = null, showAlert = false)
+        funnel?.record(update.fromUserId, FunnelStep.TRIAL)
         sendPlain(update.fromUserId, t.billing.trialStarted(trial.expiresAt))
     }
 
@@ -764,6 +773,7 @@ class TelegramUpdatePoller(
             sendPlain(chatId, t.billing.paymentUnknown)
             return
         }
+        funnel?.record(userId, FunnelStep.PAID, subscription.plan.name.lowercase())
         // Об автопродлениях не пишем: человек и так видит списание в Telegram
         if (!payment.recurring || payment.firstRecurring) {
             sendPlain(chatId, t.billing.paymentDone(subscription.plan, subscription.expiresAt, subscription.recurring))
