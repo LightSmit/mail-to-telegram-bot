@@ -39,14 +39,40 @@ class TelegramDeliveryFailureClassifier(
         }
     }
 
+    /**
+     * previousError - причина прошлой неудачи этой же задачи. Если и прошлая, и текущая
+     * отправка закончились без ответа Telegram (сообщение могло дойти), больше не повторяем:
+     * лучше одно уведомление, чем десятки дублей при плохой связи.
+     */
     fun classify(
         exception: Throwable,
         failedAttempts: Int,
+        previousError: String? = null,
     ): DeliveryFailureDecision {
         require(failedAttempts > 0) {
             "Failed attempts count must be greater than zero"
         }
 
+        if (exception is TelegramTransportException && exception.maybeDelivered &&
+            previousError?.contains(UNCONFIRMED_MARKER) == true
+        ) {
+            return DeliveryFailureDecision.Dead(
+                reason = "Telegram did not confirm delivery twice, not resending to avoid duplicates",
+            )
+        }
+
+        val decision = classifyException(exception, failedAttempts)
+        // Не повторяем бесконечно: после MAX_ATTEMPTS неудач задача закрывается
+        if (decision is DeliveryFailureDecision.Retry && failedAttempts >= MAX_ATTEMPTS) {
+            return DeliveryFailureDecision.Dead(reason = "Gave up after $failedAttempts attempts: ${decision.reason}")
+        }
+        return decision
+    }
+
+    private fun classifyException(
+        exception: Throwable,
+        failedAttempts: Int,
+    ): DeliveryFailureDecision {
         return when (exception) {
             is PermanentMailDeliveryException -> {
                 DeliveryFailureDecision.Dead(
@@ -160,7 +186,11 @@ class TelegramDeliveryFailureClassifier(
         return Duration.ofSeconds(delaySeconds)
     }
 
-    private companion object {
-        const val MAX_BACKOFF_EXPONENT = 8
+    companion object {
+        private const val MAX_BACKOFF_EXPONENT = 8
+        // Около 4 часов повторов с паузой до 15 минут
+        const val MAX_ATTEMPTS = 20
+        // Так помечается ошибка, после которой сообщение могло быть доставлено
+        const val UNCONFIRMED_MARKER = "delivery unknown"
     }
 }

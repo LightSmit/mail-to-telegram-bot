@@ -59,7 +59,12 @@ class TelegramApiException(
 class TelegramTransportException(
     operation: String,
     causeType: String,
-) : RuntimeException("Telegram $operation failed: $causeType")
+    /**
+     * true - запрос мог дойти до Telegram (ответ не пришел или оборвался), и сообщение,
+     * возможно, уже доставлено. Повторять такую отправку - значит рисковать дублем.
+     */
+    val maybeDelivered: Boolean = false,
+) : RuntimeException("Telegram $operation failed: $causeType" + if (maybeDelivered) " (delivery unknown)" else "")
 
 /** Кнопка под сообщением: ровно одно действие - callback, ссылка, копирование текста или Mini App. */
 data class TelegramInlineButton(
@@ -107,7 +112,7 @@ class TelegramClient(
         chatId: Long,
         text: String,
     ): Long {
-        val root = executeWithRetry("sendMessage") {
+        val root = executeWithRetry("sendMessage", idempotent = false) {
             httpClient.submitForm(
                 url = "$baseUrl/sendMessage",
                 formParameters = Parameters.build {
@@ -134,7 +139,7 @@ class TelegramClient(
         }
 
         val replyMarkup = createReplyMarkup(buttons, perRow)
-        val root = executeWithRetry("sendMessage") {
+        val root = executeWithRetry("sendMessage", idempotent = false) {
             httpClient.submitForm(
                 url = "$baseUrl/sendMessage",
                 formParameters = Parameters.build {
@@ -159,7 +164,7 @@ class TelegramClient(
             put("force_reply", true)
             put("input_field_placeholder", placeholder.take(64))
         }
-        val root = executeWithRetry("sendMessage") {
+        val root = executeWithRetry("sendMessage", idempotent = false) {
             httpClient.submitForm(
                 url = "$baseUrl/sendMessage",
                 formParameters = Parameters.build {
@@ -245,7 +250,7 @@ class TelegramClient(
     ): Long {
         val replyMarkup = createReplyMarkup(listOf(TelegramInlineButton(text = buttonText, webAppUrl = webAppUrl)))
 
-        val root = executeWithRetry("sendMessage") {
+        val root = executeWithRetry("sendMessage", idempotent = false) {
             httpClient.submitForm(
                 url = "$baseUrl/sendMessage",
                 formParameters = Parameters.build {
@@ -762,7 +767,7 @@ class TelegramClient(
             .replace('\r', '_')
             .replace('\n', '_')
 
-        executeWithRetry(operation) {
+        executeWithRetry(operation, idempotent = false) {
             httpClient.post("$baseUrl/$endpoint") {
                 timeout {
                     connectTimeoutMillis = 15_000
@@ -821,9 +826,17 @@ class TelegramClient(
         }
     }
 
+    /**
+     * Запрос с повторами при сетевых ошибках.
+     * idempotent = false (отправка сообщений и файлов): повторяем, только если запрос точно
+     * не дошел до Telegram (не удалось подключиться). Если запрос ушел, а ответа нет,
+     * сообщение могло быть доставлено - повтор дал бы дубль, поэтому сразу сообщаем об ошибке
+     * с maybeDelivered = true, а решение принимает вызывающий код.
+     */
     private suspend fun executeWithRetry(
         operation: String,
         maxAttempts: Int = 4,
+        idempotent: Boolean = true,
         request: suspend () -> HttpResponse,
     ): JsonObject {
         var lastFailureType = "unknown"
@@ -842,6 +855,14 @@ class TelegramClient(
                 delay(retryAfter.coerceIn(1, 60) * 1_000L)
             } catch (exception: Exception) {
                 lastFailureType = exception.javaClass.simpleName
+
+                if (!idempotent && !TelegramNetworkErrors.definitelyNotSent(exception)) {
+                    throw TelegramTransportException(
+                        operation = operation,
+                        causeType = lastFailureType,
+                        maybeDelivered = true,
+                    )
+                }
 
                 if (attempt == maxAttempts) {
                     break

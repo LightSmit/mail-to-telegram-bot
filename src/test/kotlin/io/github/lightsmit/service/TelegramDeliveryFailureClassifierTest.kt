@@ -100,4 +100,36 @@ class TelegramDeliveryFailureClassifierTest {
             dead.reason,
         )
     }
+
+    @Test
+    fun `unconfirmed send is retried once, then given up to avoid duplicates`() {
+        val unconfirmed = TelegramTransportException(
+            operation = "sendMessage",
+            causeType = "HttpRequestTimeoutException",
+            maybeDelivered = true,
+        )
+
+        val first = classifier.classify(exception = unconfirmed, failedAttempts = 1)
+        val retry = assertIs<DeliveryFailureDecision.Retry>(first)
+
+        val second = classifier.classify(exception = unconfirmed, failedAttempts = 2, previousError = retry.reason)
+        assertIs<DeliveryFailureDecision.Dead>(second)
+
+        // Если прошлая ошибка точно не дошла до Telegram, неподтвержденную отправку еще повторяем
+        val afterConnectError = classifier.classify(
+            exception = unconfirmed,
+            failedAttempts = 3,
+            previousError = "Telegram sendMessage failed: ConnectException",
+        )
+        assertIs<DeliveryFailureDecision.Retry>(afterConnectError)
+    }
+
+    @Test
+    fun `retries stop after the attempt limit`() {
+        val decision = classifier.classify(
+            exception = TelegramTransportException(operation = "sendMessage", causeType = "ConnectException"),
+            failedAttempts = TelegramDeliveryFailureClassifier.MAX_ATTEMPTS,
+        )
+        assertIs<DeliveryFailureDecision.Dead>(decision)
+    }
 }
