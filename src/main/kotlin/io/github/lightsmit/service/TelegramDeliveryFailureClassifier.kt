@@ -40,24 +40,21 @@ class TelegramDeliveryFailureClassifier(
     }
 
     /**
-     * previousError - причина прошлой неудачи этой же задачи. Если и прошлая, и текущая
-     * отправка закончились без ответа Telegram (сообщение могло дойти), больше не повторяем:
-     * лучше одно уведомление, чем десятки дублей при плохой связи.
+     * Запрос ушел, а ответа от Telegram нет: сообщение, скорее всего, уже доставлено
+     * (так было при всех сбоях связи). Повтор дал бы дубль, поэтому не повторяем ни разу,
+     * а владелец получит сводку о таких письмах, когда связь вернется.
      */
     fun classify(
         exception: Throwable,
         failedAttempts: Int,
-        previousError: String? = null,
     ): DeliveryFailureDecision {
         require(failedAttempts > 0) {
             "Failed attempts count must be greater than zero"
         }
 
-        if (exception is TelegramTransportException && exception.maybeDelivered &&
-            previousError?.contains(UNCONFIRMED_MARKER) == true
-        ) {
+        if (isUnconfirmed(exception)) {
             return DeliveryFailureDecision.Dead(
-                reason = "Telegram did not confirm delivery twice, not resending to avoid duplicates",
+                reason = "Telegram did not confirm delivery ($UNCONFIRMED_MARKER), not resending to avoid duplicates",
             )
         }
 
@@ -68,6 +65,10 @@ class TelegramDeliveryFailureClassifier(
         }
         return decision
     }
+
+    /** Сообщение могло дойти: в сводку после восстановления связи. */
+    fun isUnconfirmed(exception: Throwable): Boolean =
+        exception is TelegramTransportException && exception.maybeDelivered
 
     private fun classifyException(
         exception: Throwable,

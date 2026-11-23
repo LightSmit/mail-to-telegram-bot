@@ -2,6 +2,7 @@ package io.github.lightsmit.service
 
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailOutboxItem
+import io.github.lightsmit.storage.MailOutboxOperation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -143,7 +144,6 @@ class MailNotificationOutboxWorker(
             val decision = failureClassifier.classify(
                 exception = exception,
                 failedAttempts = failedAttempts,
-                previousError = item.lastError,
             )
         ) {
             is DeliveryFailureDecision.Retry -> {
@@ -172,12 +172,17 @@ class MailNotificationOutboxWorker(
                     error = decision.reason,
                     now = nowProvider(),
                 )
+                // Карточка могла не дойти: владелец получит сводку, когда связь вернется
+                if (item.operation == MailOutboxOperation.SEND_NOTIFICATION && failureClassifier.isUnconfirmed(exception)) {
+                    runCatching { repository.markNoticePending(item.id) }
+                }
 
                 logger.error(
-                    "Outbox item {} for email UID {} became DEAD after attempt {}",
+                    "Outbox item {} for email UID {} became DEAD after attempt {}: {}",
                     item.id,
                     item.uid,
                     failedAttempts,
+                    decision.reason,
                 )
             }
         }

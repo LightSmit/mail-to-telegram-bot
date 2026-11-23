@@ -1,4 +1,4 @@
-package io.github.lightsmit.i18n
+git pullpackage io.github.lightsmit.i18n
 
 /** Язык интерфейса. Русский - для русского, украинского, белорусского и казахского Telegram, остальным английский. */
 enum class Lang {
@@ -22,6 +22,9 @@ enum class Lang {
 interface Texts {
     // Общие
     val openApp: String
+
+    /** Сводка после сбоя связи: карточки этих писем могли не дойти или прийти без текста. */
+    fun deliveryNotice(lines: List<String>, more: Int): String
 
     // Тарифы, оплата, коды подтверждения
     val billing: BillingTexts
@@ -158,6 +161,14 @@ interface Texts {
 
 object RuTexts : Texts {
     override val openApp = "📬 Открыть приложение"
+    override fun deliveryNotice(lines: List<String>, more: Int) = buildString {
+        appendLine("⚠️ Связь с Telegram прерывалась. Уведомления об этих письмах могли не дойти или прийти без текста и вложений:")
+        appendLine()
+        lines.forEach { line -> appendLine("• $line") }
+        if (more > 0) appendLine("...и еще $more")
+        appendLine()
+        append("Сами письма в порядке: их можно открыть в приложении.")
+    }
     override val billing: BillingTexts = RuBillingTexts
     override val botDescription = "📬 Присылаю новые письма из Mail.ru, Gmail, Яндекса, iCloud и любой почты с IMAP прямо в Telegram за несколько секунд.\n\n" +
         "🔐 Нужен не пароль от почты, а отдельный пароль приложения: его можно отозвать в любой момент. " +
@@ -352,6 +363,14 @@ object RuTexts : Texts {
 
 object EnTexts : Texts {
     override val openApp = "📬 Open app"
+    override fun deliveryNotice(lines: List<String>, more: Int) = buildString {
+        appendLine("⚠️ The connection to Telegram was interrupted. Notifications about these emails may not have arrived or may be missing the text and attachments:")
+        appendLine()
+        lines.forEach { line -> appendLine("• $line") }
+        if (more > 0) appendLine("...and $more more")
+        appendLine()
+        append("The emails themselves are fine: you can open them in the app.")
+    }
     override val billing: BillingTexts = EnBillingTexts
     override val botDescription = "📬 I forward new emails from Gmail, Yandex, Mail.ru, iCloud and any IMAP mailbox right to Telegram within seconds.\n\n" +
         "🔐 You give me a separate app password, not your email password, and can revoke it at any time. " +

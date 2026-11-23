@@ -83,6 +83,8 @@ class MailNotificationOutboxRepository {
             ensureColumn(connection, "sent_at", "INTEGER")
             ensureColumn(connection, "received_at", "INTEGER")
             ensureColumn(connection, "summary_active", "INTEGER NOT NULL DEFAULT 0")
+            // 1 - карточка письма могла не дойти: рассказать о нем владельцу, когда связь вернется
+            ensureColumn(connection, "notice_pending", "INTEGER NOT NULL DEFAULT 0")
 
             connection.createStatement().use { statement ->
                 statement.executeUpdate(
@@ -347,6 +349,47 @@ class MailNotificationOutboxRepository {
             incrementAttempts = true,
             now = now,
         )
+    }
+
+    /** Карточка письма могла не дойти: попадет в сводку после восстановления связи. */
+    suspend fun markNoticePending(id: Long) = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement("UPDATE mail_notification_outbox SET notice_pending = 1 WHERE id = ?").use { statement ->
+                statement.setLong(1, id)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    /** Письма, о которых нужно рассказать в сводке после сбоя связи. */
+    suspend fun pendingNotices(limit: Int = 500): List<MailOutboxItem> = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT * FROM mail_notification_outbox WHERE notice_pending = 1 ORDER BY id LIMIT ?",
+            ).use { statement ->
+                statement.setInt(1, limit)
+                statement.executeQuery().use { result ->
+                    buildList {
+                        while (result.next()) add(result.toOutboxItem())
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun clearNotices(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        withContext(DatabaseManager.dispatcher) {
+            DatabaseManager.dataSource.connection.use { connection ->
+                connection.prepareStatement("UPDATE mail_notification_outbox SET notice_pending = 0 WHERE id = ?").use { statement ->
+                    ids.forEach { id ->
+                        statement.setLong(1, id)
+                        statement.addBatch()
+                    }
+                    statement.executeBatch()
+                }
+            }
+        }
     }
 
     suspend fun recoverInterrupted(now: Instant = Instant.now()): Int = withContext(DatabaseManager.dispatcher) {

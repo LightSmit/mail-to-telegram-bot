@@ -15,7 +15,10 @@ import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.mail.SmtpMailSender
 import io.github.lightsmit.service.AdminService
 import io.github.lightsmit.service.BackupService
+import io.github.lightsmit.service.DeliveryNoticeReporter
+import io.github.lightsmit.service.DeliveryNoticeSender
 import io.github.lightsmit.service.EmailContentLoader
+import io.github.lightsmit.service.MailAccountOwner
 import io.github.lightsmit.service.FunnelService
 import io.github.lightsmit.service.FunnelStep
 import io.github.lightsmit.service.GroupLinkService
@@ -431,6 +434,30 @@ fun main() = runBlocking {
         },
     )
 
+    // Сводка о письмах, чьи карточки могли не дойти во время сбоя связи с Telegram
+    val deliveryNoticeReporter = DeliveryNoticeReporter(
+        repository = mailOutboxRepository,
+        ownerOf = { accountKey ->
+            accountRegistry.findByKey(accountKey)?.let { account -> MailAccountOwner(account.ownerChatId, account.username) }
+        },
+        sender = object : DeliveryNoticeSender {
+            override suspend fun texts(ownerChatId: Long) = botUserRepository.language(ownerChatId).texts
+
+            override suspend fun send(ownerChatId: Long, text: String, buttonText: String) {
+                if (miniAppUrl.isNullOrBlank()) {
+                    telegramControlClient.sendMessage(chatId = ownerChatId, text = text)
+                } else {
+                    telegramControlClient.sendMessageWithWebAppButton(
+                        chatId = ownerChatId,
+                        text = text,
+                        buttonText = buttonText,
+                        webAppUrl = miniAppUrl,
+                    )
+                }
+            }
+        },
+    )
+
     try {
         val telegramUpdatePoller = TelegramUpdatePoller(
             registry = accountRegistry,
@@ -493,6 +520,10 @@ fun main() = runBlocking {
                 launch { mailOutboxWorker.run() }
             }
 
+            val deliveryNoticeJob = launch {
+                deliveryNoticeReporter.run()
+            }
+
             // Ежедневный бэкап базы (BACKUP_HOUR по времени сервера)
             val backupJob = launch {
                 backupService.runSchedule()
@@ -510,7 +541,7 @@ fun main() = runBlocking {
                 }
             }
 
-            (listOf(telegramUpdateJob, backupJob, subscriptionJob) + mailOutboxJobs).joinAll()
+            (listOf(telegramUpdateJob, backupJob, subscriptionJob, deliveryNoticeJob) + mailOutboxJobs).joinAll()
         }
     } finally {
         mailboxSupervisor.close()

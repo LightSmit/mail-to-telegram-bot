@@ -112,9 +112,11 @@ class TelegramUpdatePoller(
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
+                // Текст ошибки Telegram (например, 502 Bad Gateway) показывает, на чьей стороне сбой
                 logger.warn(
-                    "Telegram update polling failed: {}",
+                    "Telegram update polling failed: {} ({})",
                     exception.javaClass.simpleName,
+                    exception.message?.take(200),
                 )
                 delay(POLL_RETRY_DELAY_MILLIS)
             }

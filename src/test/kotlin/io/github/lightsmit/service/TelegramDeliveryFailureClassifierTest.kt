@@ -5,7 +5,9 @@ import io.github.lightsmit.telegram.TelegramTransportException
 import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class TelegramDeliveryFailureClassifierTest {
 
@@ -102,26 +104,21 @@ class TelegramDeliveryFailureClassifierTest {
     }
 
     @Test
-    fun `unconfirmed send is retried once, then given up to avoid duplicates`() {
+    fun `unconfirmed send is never repeated`() {
         val unconfirmed = TelegramTransportException(
             operation = "sendMessage",
             causeType = "HttpRequestTimeoutException",
             maybeDelivered = true,
         )
 
-        val first = classifier.classify(exception = unconfirmed, failedAttempts = 1)
-        val retry = assertIs<DeliveryFailureDecision.Retry>(first)
+        // Даже на первой попытке: сообщение, скорее всего, дошло, повтор дал бы дубль
+        assertIs<DeliveryFailureDecision.Dead>(classifier.classify(exception = unconfirmed, failedAttempts = 1))
+        assertTrue(classifier.isUnconfirmed(unconfirmed))
 
-        val second = classifier.classify(exception = unconfirmed, failedAttempts = 2, previousError = retry.reason)
-        assertIs<DeliveryFailureDecision.Dead>(second)
-
-        // Если прошлая ошибка точно не дошла до Telegram, неподтвержденную отправку еще повторяем
-        val afterConnectError = classifier.classify(
-            exception = unconfirmed,
-            failedAttempts = 3,
-            previousError = "Telegram sendMessage failed: ConnectException",
-        )
-        assertIs<DeliveryFailureDecision.Retry>(afterConnectError)
+        // А если не удалось даже подключиться, повторять безопасно
+        val notSent = TelegramTransportException(operation = "sendMessage", causeType = "ConnectException")
+        assertIs<DeliveryFailureDecision.Retry>(classifier.classify(exception = notSent, failedAttempts = 5))
+        assertFalse(classifier.isUnconfirmed(notSent))
     }
 
     @Test
