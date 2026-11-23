@@ -16,6 +16,17 @@ data class MailAccountConfig(
     val groupChatId: Long? = null,
     val groupTitle: String? = null,
 ) {
+    /**
+     * Ящик в режиме пересылки: почта сама пересылает письма на личный адрес бота
+     * (токен@домен), входа в ящик нет. Токен адреса хранится вместо пароля.
+     */
+    val isForward: Boolean get() = host == FORWARD_HOST
+
+    companion object {
+        // Условный «сервер» ящиков-пересылок: по нему их отличаем от IMAP
+        const val FORWARD_HOST = "forward.inbound"
+    }
+
     // Пароль не должен попадать в логи даже случайно
     override fun toString(): String =
         "MailAccountConfig(id=$id, owner=$ownerChatId, name=$name, host=$host, port=$port, username=$username)"

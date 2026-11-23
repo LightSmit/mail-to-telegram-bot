@@ -1,6 +1,8 @@
 package io.github.lightsmit.service
 
 import io.github.lightsmit.config.MailAccountConfig
+import io.github.lightsmit.config.MailAccountKeys
+import io.github.lightsmit.storage.InboundMessageRepository
 import io.github.lightsmit.mail.EmailSummary
 import io.github.lightsmit.mail.ImapMailClient
 import kotlinx.coroutines.CancellationException
@@ -27,6 +29,8 @@ private data class CachedEmailKey(
 class EmailContentLoader(
     private val imapClient: ImapMailClient,
     private val accountCode: (MailAccountConfig) -> String,
+    // Письма ящиков-пересылок: берутся из базы, а не из почты
+    private val inboundStore: InboundMessageRepository? = null,
 ) : AutoCloseable {
 
     private val logger =
@@ -95,6 +99,11 @@ class EmailContentLoader(
         uidValidity: Long,
         uid: Long,
     ): EmailSummary? {
+        if (account.isForward) {
+            val raw = inboundStore?.find(MailAccountKeys.accountKey(account), uid) ?: return null
+            return imapClient.parseRaw(raw, uid, full = true)
+        }
+
         val maximumAttempts = 3
 
         for (attempt in 1..maximumAttempts) {

@@ -63,7 +63,20 @@ class MailAccountService(
     private val healthMonitor: MailboxHealthMonitor,
     // Новый ящик подключен (для приглашений: друг засчитывается после первого ящика)
     private val onMailboxAdded: suspend (ownerChatId: Long) -> Unit = {},
+    // Письма ящиков-пересылок (null - режим пересылки выключен)
+    private val inbound: InboundMailService? = null,
 ) {
+
+    /** Режим «Пересылка без пароля» включен на сервере. */
+    val forwardingEnabled: Boolean get() = inbound != null
+
+    /** Адрес, на который нужно пересылать письма ящика, или null для обычного ящика. */
+    fun forwardAddress(account: MailAccountConfig): String? =
+        if (account.isForward) inbound?.addressOf(account.password) else null
+
+    /** На адрес ящика-пересылки уже приходило хотя бы одно письмо. */
+    suspend fun forwardReceived(account: MailAccountConfig): Boolean =
+        account.isForward && stateRepository.find(MailAccountKeys.accountKey(account)) != null
 
     private val logger = LoggerFactory.getLogger(MailAccountService::class.java)
 
@@ -156,6 +169,59 @@ class MailAccountService(
     }
 
     /**
+     * Ящик без пароля: бот выдает адрес, пользователь включает пересылку на него в своей почте.
+     * Вход в почту не проверяется, письма приходят через /api/inbound.
+     */
+    suspend fun addForward(ownerChatId: Long, email: String, name: String, lang: Lang = Lang.RU): AddMailAccountResult {
+        val t = lang.texts
+        if (inbound == null) return AddMailAccountResult.Rejected(t.forwardDisabled)
+
+        val username = email.trim().lowercase()
+        if (username.length > 254 || !EMAIL_PATTERN.matches(username)) {
+            return AddMailAccountResult.Rejected(t.enterAddress)
+        }
+
+        val existing = repository.findAllByOwnerId(ownerChatId).firstOrNull { account -> account.username == username }
+        if (existing != null) {
+            // Повторное нажатие: показываем тот же адрес. Ящик с паролем не переделываем молча
+            return if (existing.isForward) {
+                AddMailAccountResult.Added(existing)
+            } else {
+                AddMailAccountResult.Rejected(t.forwardAlreadyConnected(username))
+            }
+        }
+
+        val limit = mailboxLimit(ownerChatId)
+        if (repository.countByOwnerId(ownerChatId) >= limit) {
+            return AddMailAccountResult.LimitReached(limit)
+        }
+
+        val candidate = MailAccountConfig(
+            name = name.trim().ifEmpty { username }.take(64),
+            host = MailAccountConfig.FORWARD_HOST,
+            port = MailHostPolicy.IMAPS_PORT,
+            username = username,
+            password = InboundMailService.newToken(),
+            ownerChatId = ownerChatId,
+        )
+
+        val saved = repository.upsert(ownerChatId, candidate)
+        healthMonitor.forget(saved.id)
+        supervisor.start(saved)
+        healthMonitor.onConnected(saved)
+
+        logger.info("Forward mailbox {} (id {}) added by owner {}", saved.username, saved.id, ownerChatId)
+        try {
+            onMailboxAdded(ownerChatId)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Mailbox added hook failed for {}: {}", ownerChatId, exception.javaClass.simpleName)
+        }
+        return AddMailAccountResult.Added(saved)
+    }
+
+    /**
      * Новый пароль приложения для подключенного ящика: сначала проверяем вход с ним,
      * потом сохраняем и перезапускаем слежение. Фильтры и позиция чтения сохраняются.
      */
@@ -168,6 +234,7 @@ class MailAccountService(
         val t = lang.texts
         val existing = repository.findByIdAndOwner(accountId, ownerChatId)
             ?: return UpdatePasswordResult.NotFound
+        if (existing.isForward) return UpdatePasswordResult.Rejected(t.forwardNoPassword)
 
         val password = normalizePassword(existing.host, rawPassword)
         if (password.isEmpty() || password.length > 256) {
@@ -193,6 +260,7 @@ class MailAccountService(
         supervisor.stop(accountId)
         healthMonitor.forget(accountId)
         stateRepository.delete(MailAccountKeys.accountKey(deleted))
+        if (deleted.isForward) inbound?.forget(deleted)
         logger.info("Mailbox {} (id {}) deleted by owner {}", deleted.username, deleted.id, ownerChatId)
         return true
     }
@@ -208,7 +276,11 @@ class MailAccountService(
     /** Запускает слежение за всеми ящиками из базы. Вызывается один раз при старте. */
     suspend fun startAll(): Int {
         val accounts = repository.findAll()
-        accounts.forEach { account -> supervisor.start(account) }
+        accounts.forEach { account ->
+            supervisor.start(account)
+            // У ящика-пересылки нет подключения к почте: он всегда в порядке
+            if (account.isForward) healthMonitor.onConnected(account)
+        }
         return accounts.size
     }
 
@@ -259,5 +331,6 @@ class MailAccountService(
 
     private companion object {
         const val LOGIN_TIMEOUT_MILLIS = 40_000L
+        val EMAIL_PATTERN = Regex("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")
     }
 }

@@ -42,6 +42,9 @@ private data class ActiveView(
     val openedAt: Instant = Instant.now()
 )
 
+/** У писем ящика-пересылки одна «папка»: номер записи в базе служит UID. */
+const val FORWARD_UID_VALIDITY = 1L
+
 class MailForwardingService(
     private val registry: MailAccountRegistry,
     private val imapClient: ImapMailClient,
@@ -315,6 +318,65 @@ class MailForwardingService(
         }
     }
 
+    /**
+     * Письмо, пришедшее пересылкой на адрес бота (ящик без пароля). Письмо уже сохранено,
+     * uid - его номер в базе. Те же фильтры, лимит и расписание, что и у обычного ящика.
+     * true - карточка поставлена в очередь, false - письмо отфильтровано.
+     */
+    suspend fun receiveForwarded(
+        account: MailAccountConfig,
+        uid: Long,
+        message: EmailSummary,
+    ): Boolean = withAccountProcessingLock(account) {
+        val accountKey = buildAccountKey(account)
+        // Отметка «пересылка работает»: по ней приложение показывает статус ящика
+        stateRepository.save(accountKey = accountKey, uidValidity = FORWARD_UID_VALIDITY, lastUid = uid)
+        val currentAccount = registry.findByKey(accountKey) ?: account
+        val ownerPlan = runCatching { plan(account.ownerChatId) }.getOrDefault(Plan.BUSINESS)
+        val filters = if (ownerPlan.hasProFeatures) {
+            currentAccount.filters
+        } else {
+            currentAccount.filters.copy(blockedSenders = emptyList(), blockedSubjectWords = emptyList(), allowedSenders = emptyList())
+        }
+        val overLimit = runCatching { isOverLimit(currentAccount) }.getOrDefault(false)
+
+        val skipReason = if (overLimit) {
+            MailFilterReason.OVER_LIMIT
+        } else {
+            MailFilterEngine.check(
+                filters = filters,
+                senderAddress = message.senderAddress,
+                subject = message.subject,
+                isBulk = message.isBulk,
+            )
+        }
+        if (skipReason != null) {
+            logger.info("Skipped forwarded email {} for mailbox {}: filter {}", uid, account.username, skipReason)
+            return@withAccountProcessingLock false
+        }
+
+        val deliverAt = runCatching { notificationSettings(account.ownerChatId) }
+            .getOrNull()
+            ?.let { settings -> NotificationSchedule.nextDigestAt(settings, clock()) }
+
+        outboxRepository.enqueue(
+            deliverAt = deliverAt ?: clock(),
+            accountKey = accountKey,
+            accountCode = MailViewCallbackCodec.accountCode(account),
+            uidValidity = FORWARD_UID_VALIDITY,
+            uid = uid,
+            emailMetadata = MailOutboxEmailMetadata(
+                from = message.from,
+                subject = message.subject,
+                sentAt = message.sentAt,
+                receivedAt = message.receivedAt,
+            ),
+        )
+        contentLoader.prefetch(account = account, uidValidity = FORWARD_UID_VALIDITY, uid = uid)
+        logger.info("Enqueued notification for forwarded email {} for mailbox {}", uid, account.username)
+        true
+    }
+
     suspend fun processIdleAccount(
         account: MailAccountConfig,
         inbox: IMAPFolder,
@@ -542,6 +604,7 @@ class MailForwardingService(
         expectedUidValidity: Long,
         uid: Long,
     ): Boolean {
+        if (account.isForward) return false
         val marked = imapClient.markSeen(
             account = account,
             expectedUidValidity = expectedUidValidity,
@@ -959,7 +1022,7 @@ class MailForwardingService(
         button(t.buttonText, MailViewAction.TEXT, account, uidValidity, uid),
         button(t.buttonAttachments, MailViewAction.ATTACHMENTS, account, uidValidity, uid),
         replyButton(account, uidValidity, uid, t),
-        button(t.buttonRead, MailViewAction.READ, account, uidValidity, uid),
+        readButton(account, uidValidity, uid, t),
     )
 
     // Ответить на письмо: следующий текст пользователя уйдет ответом с его ящика
@@ -969,7 +1032,16 @@ class MailForwardingService(
         uid: Long,
         t: Texts,
     ): TelegramInlineButton? =
-        if (replyEnabled) button(t.buttonReply, MailViewAction.REPLY, account, uidValidity, uid) else null
+        if (replyEnabled && !account.isForward) button(t.buttonReply, MailViewAction.REPLY, account, uidValidity, uid) else null
+
+    // Пометить прочитанным: у ящика-пересылки нет доступа к почте, кнопки нет
+    private fun readButton(
+        account: MailAccountConfig,
+        uidValidity: Long,
+        uid: Long,
+        t: Texts,
+    ): TelegramInlineButton? =
+        if (account.isForward) null else button(t.buttonRead, MailViewAction.READ, account, uidValidity, uid)
 
     private fun summaryButtons(
         account: MailAccountConfig,
@@ -989,7 +1061,7 @@ class MailForwardingService(
                 null
             },
             replyButton(account, uidValidity, uid, t),
-            button(t.buttonRead, MailViewAction.READ, account, uidValidity, uid),
+            readButton(account, uidValidity, uid, t),
         )
     }
 
@@ -1009,7 +1081,7 @@ class MailForwardingService(
                 null
             },
             replyButton(account, uidValidity, uid, t),
-            button(t.buttonRead, MailViewAction.READ, account, uidValidity, uid),
+            readButton(account, uidValidity, uid, t),
         )
     }
 

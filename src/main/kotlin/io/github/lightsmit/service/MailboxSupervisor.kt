@@ -34,11 +34,16 @@ class MailboxSupervisor(
         mutex.withLock {
             stopLocked(account.id)
             registry.put(account)
-            val job = scope.launch { watcher.watch(account) }
+            // Ящику-пересылке подключение к почте не нужно: письма приходят сами
+            val job = if (account.isForward) Job().apply { complete() } else scope.launch { watcher.watch(account) }
             running[account.id] = account to job
         }
 
-        logger.info("Started watching mailbox {} (id {}) for owner {}", account.username, account.id, account.ownerChatId)
+        if (account.isForward) {
+            logger.info("Receiving forwarded mail for {} (id {}) for owner {}", account.username, account.id, account.ownerChatId)
+        } else {
+            logger.info("Started watching mailbox {} (id {}) for owner {}", account.username, account.id, account.ownerChatId)
+        }
     }
 
     /** Применяет новые настройки ящика (фильтры) без перезапуска слежения. */

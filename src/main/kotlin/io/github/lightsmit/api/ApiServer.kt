@@ -20,6 +20,8 @@ import io.github.lightsmit.service.BrowseResult
 import io.github.lightsmit.service.FunnelService
 import io.github.lightsmit.service.FunnelStep
 import io.github.lightsmit.service.GroupLinkService
+import io.github.lightsmit.service.InboundMailService
+import io.github.lightsmit.service.InboundResult
 import io.github.lightsmit.service.MailBrowserService
 import io.github.lightsmit.service.MailboxQuota
 import io.github.lightsmit.service.NewMailAccount
@@ -65,6 +67,23 @@ data class AccountResponseDto(
     // Групповой чат, куда приходят письма ящика (Business); null - в личный чат
     val groupTitle: String? = null,
     val groupLinked: Boolean = false,
+    // Ящик без пароля: письма пересылаются на этот адрес; null - обычный ящик с паролем
+    val forwardAddress: String? = null,
+    // На этот адрес уже пришло хотя бы одно письмо
+    val forwardReceived: Boolean = false,
+)
+
+@Serializable
+data class AddForwardRequestDto(
+    val name: String = "",
+    val email: String,
+)
+
+// Режим «Пересылка без пароля»: включен ли на сервере
+@Serializable
+data class ForwardingDto(
+    val enabled: Boolean,
+    val domain: String? = null,
 )
 
 @Serializable
@@ -265,6 +284,9 @@ class ApiServer(
     private val botUsername: suspend () -> String? = { null },
     // Приглашение друзей
     private val referrals: ReferralService? = null,
+    // Прием пересланных писем из Cloudflare Email Worker (null - режим выключен)
+    private val inbound: InboundMailService? = null,
+    private val inboundSecret: String? = null,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -360,6 +382,9 @@ class ApiServer(
 
                     // Перехватчик: Защита всех эндпоинтов /api
                     intercept(ApplicationCallPipeline.Call) {
+                        // Письма из Cloudflare: своя проверка по секрету, без данных Telegram
+                        if (call.request.path() == INBOUND_PATH) return@intercept
+
                         val initData = call.request.headers["X-Telegram-Init-Data"].orEmpty()
                         val auth = TelegramAuthValidator.inspect(initData, botToken)
 
@@ -397,6 +422,89 @@ class ApiServer(
                         )
                     }
 
+                    // Пересланное письмо от Cloudflare Email Worker: тело - письмо целиком (MIME)
+                    post("/inbound") {
+                        val service = inbound
+                        val secret = inboundSecret
+                        if (service == null || secret.isNullOrEmpty()) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Not found"))
+                            return@post
+                        }
+                        val given = call.request.headers["X-Inbound-Secret"].orEmpty()
+                        if (!java.security.MessageDigest.isEqual(given.toByteArray(), secret.toByteArray())) {
+                            call.application.environment.log.warn("Inbound email rejected: wrong secret")
+                            call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized"))
+                            return@post
+                        }
+                        val declared = call.request.contentLength()
+                        if (declared != null && declared > InboundMailService.MAX_MESSAGE_BYTES) {
+                            call.respond(HttpStatusCode.PayloadTooLarge, mapOf("error" to "Too large"))
+                            return@post
+                        }
+                        val recipient = call.request.headers["X-Inbound-To"].orEmpty()
+                        val raw = call.receive<ByteArray>()
+                        val result = service.receive(recipient, raw)
+                        when (result) {
+                            InboundResult.ACCEPTED, InboundResult.DUPLICATE, InboundResult.FILTERED ->
+                                call.respond(HttpStatusCode.Accepted, mapOf("status" to result.name.lowercase()))
+                            InboundResult.UNKNOWN_ADDRESS ->
+                                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Unknown address"))
+                            InboundResult.TOO_LARGE ->
+                                call.respond(HttpStatusCode.PayloadTooLarge, mapOf("error" to "Too large"))
+                            // Битое письмо: повтор не поможет, принимаем и не показываем
+                            InboundResult.BAD_MESSAGE ->
+                                call.respond(HttpStatusCode.Accepted, mapOf("status" to "unreadable"))
+                        }
+                    }
+
+                    // Режим «Пересылка без пароля»: показывать ли его в приложении
+                    get("/forwarding") {
+                        val service = inbound
+                        call.respond(ForwardingDto(enabled = service != null && accountService.forwardingEnabled, domain = service?.domain))
+                    }
+
+                    // Добавить ящик без пароля: бот выдает адрес для пересылки
+                    post("/accounts/forward") {
+                        val ownerId = call.attributes[UserIdKey]
+                        val request = call.receive<AddForwardRequestDto>()
+                        funnel?.record(ownerId, FunnelStep.SUBMIT)
+
+                        when (val result = accountService.addForward(ownerId, request.email, request.name, call.attributes[LangKey])) {
+                            is AddMailAccountResult.Added -> {
+                                val account = result.account
+                                funnel?.record(ownerId, FunnelStep.CONNECTED, "forward")
+                                call.respond(
+                                    HttpStatusCode.Created,
+                                    AccountResponseDto(
+                                        id = account.id,
+                                        name = account.name,
+                                        email = account.username,
+                                        host = account.host,
+                                        status = "OK",
+                                        forwardAddress = accountService.forwardAddress(account),
+                                    ),
+                                )
+                            }
+                            is AddMailAccountResult.Rejected -> {
+                                funnel?.record(ownerId, FunnelStep.CONNECT_ERROR, "forward_" + result.reason)
+                                call.respond(HttpStatusCode.BadRequest, mapOf("error" to result.message))
+                            }
+                            is AddMailAccountResult.LimitReached -> {
+                                funnel?.record(ownerId, FunnelStep.CONNECT_ERROR, AddMailAccountResult.REASON_LIMIT)
+                                call.respond(
+                                    HttpStatusCode.Conflict,
+                                    mapOf(
+                                        "error" to call.texts.billing.limitReached(
+                                            plan = planOf(ownerId),
+                                            limit = result.limit,
+                                            billingEnabled = subscriptions?.enabled == true,
+                                        ),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
                     // Ящики текущего пользователя
                     get("/accounts") {
                         val ownerId = call.attributes[UserIdKey]
@@ -414,6 +522,8 @@ class ApiServer(
                                 overLimit = account.id in overLimit,
                                 groupTitle = account.groupTitle,
                                 groupLinked = account.groupChatId != null,
+                                forwardAddress = accountService.forwardAddress(account),
+                                forwardReceived = accountService.forwardReceived(account),
                             )
                         }
                         call.respond(response)
@@ -836,6 +946,7 @@ class ApiServer(
                     BrowseFailure.TIMEOUT -> texts.browseTimeout
                     BrowseFailure.AUTH -> texts.browseAuth
                     BrowseFailure.NO_SENT_FOLDER -> texts.browseNoSent
+                    BrowseFailure.FORWARD_MODE -> texts.forwardNoBrowse
                     BrowseFailure.OTHER -> texts.browseFailed
                 }
                 call.respond(HttpStatusCode.BadGateway, mapOf("error" to message))
@@ -844,6 +955,7 @@ class ApiServer(
     }
 
     private companion object {
+        const val INBOUND_PATH = "/api/inbound"
         // Сколько последних писем видно в приложении на бесплатном тарифе
         const val FREE_BROWSE_LIMIT = 20
     }

@@ -26,6 +26,9 @@ export interface MailProvider {
   titleEn?: string;
   stepsEn: ProviderStep[];
   passwordHintEn: string;
+  /** Как включить пересылку на адрес бота (режим без пароля). Нет - общая инструкция. */
+  forwardSteps?: ProviderStep[];
+  forwardStepsEn?: ProviderStep[];
 }
 
 // Страница аккаунта Google. authuser выбирает нужный аккаунт, если в браузере их несколько
@@ -38,6 +41,13 @@ const MAILRU_APP_PASSWORDS_URL = 'https://account.mail.ru/user/2-step-auth/passw
 const YANDEX_IMAP_URL = 'https://mail.yandex.ru/#setup/client';
 const YANDEX_APP_PASSWORDS_URL = 'https://id.yandex.ru/security/app-passwords';
 const APPLE_ACCOUNT_URL = 'https://account.apple.com/account/manage';
+const MAILRU_FORWARD_URL = 'https://e.mail.ru/settings/filters';
+const YANDEX_FORWARD_URL = 'https://mail.yandex.ru/#setup/filters';
+// Настройки пересылки Gmail; authuser выбирает нужный аккаунт, если их несколько
+const gmailForwarding = (email: string) => {
+  const address = email.trim();
+  return 'https://mail.google.com/mail/' + (address.includes('@') ? `?authuser=${encodeURIComponent(address)}` : 'u/0/') + '#settings/fwdandpop';
+};
 
 export const CUSTOM_PROVIDER_ID = 'custom';
 
@@ -67,6 +77,24 @@ export const PROVIDERS: MailProvider[] = [
       'Copy the password: it is shown only once.',
     ],
     passwordHintEn: 'A password for an external application from Mail.ru settings, not your email password.',
+    forwardSteps: [
+      {
+        text: 'В настройках Mail.ru откройте «Фильтры и пересылка» и нажмите «Добавить пересылку».',
+        url: MAILRU_FORWARD_URL,
+        button: 'Открыть настройки пересылки',
+      },
+      'Вставьте адрес выше. Mail.ru может попросить пароль от почты: он вводится на сайте Mail.ru, боту он не передается.',
+      'Mail.ru пришлет на этот адрес письмо со ссылкой подтверждения. Оно придет сюда, в чат с ботом: откройте его кнопкой «Текст», перейдите по ссылке и включите пересылку.',
+    ],
+    forwardStepsEn: [
+      {
+        text: 'In Mail.ru settings open "Filters and forwarding" and click "Add forwarding".',
+        url: MAILRU_FORWARD_URL,
+        button: 'Open forwarding settings',
+      },
+      'Paste the address above. Mail.ru may ask for your email password: you enter it on the Mail.ru site, the bot never gets it.',
+      'Mail.ru will send a confirmation link to this address. It arrives here, in the chat with the bot: open it with the "Text" button, follow the link and turn forwarding on.',
+    ],
   },
   {
     id: 'yandex',
@@ -102,6 +130,24 @@ export const PROVIDERS: MailProvider[] = [
       'Copy the password right away: Yandex shows it only once.',
     ],
     passwordHintEn: 'An app password from Yandex ID, not your email password.',
+    forwardSteps: [
+      {
+        text: 'В настройках Яндекс Почты откройте «Правила обработки писем» и нажмите «Создать правило».',
+        url: YANDEX_FORWARD_URL,
+        button: 'Открыть правила',
+      },
+      'Уберите условия, чтобы правило срабатывало для всех писем, отметьте «Переслать по адресу» и вставьте адрес выше. Если Яндекс попросит пароль, он вводится на сайте Яндекса, боту он не передается.',
+      'Яндекс пришлет на этот адрес письмо со ссылкой подтверждения. Оно придет сюда, в чат с ботом: откройте его кнопкой «Текст» и перейдите по ссылке.',
+    ],
+    forwardStepsEn: [
+      {
+        text: 'In Yandex Mail settings open "Message filtering rules" and click "Create rule".',
+        url: YANDEX_FORWARD_URL,
+        button: 'Open rules',
+      },
+      'Remove the conditions so the rule applies to all emails, check "Forward to address" and paste the address above. If Yandex asks for a password, you enter it on the Yandex site, the bot never gets it.',
+      'Yandex will send a confirmation link to this address. It arrives here, in the chat with the bot: open it with the "Text" button and follow the link.',
+    ],
   },
   {
     id: 'gmail',
@@ -136,6 +182,24 @@ export const PROVIDERS: MailProvider[] = [
       'Copy the 16 letters. You can keep the spaces between them.',
     ],
     passwordHintEn: '16 Latin letters, for example abcd efgh ijkl mnop. Your regular Google password will not work.',
+    forwardSteps: [
+      {
+        text: 'Откройте настройки Gmail, вкладку «Пересылка и POP/IMAP», и нажмите «Добавить адрес пересылки». На телефоне откройте полную версию Gmail в браузере: в приложении Gmail этой настройки нет.',
+        url: gmailForwarding,
+        button: 'Открыть настройки пересылки',
+      },
+      'Вставьте адрес выше. Google пришлет на него письмо с кодом подтверждения: оно придет сюда, в чат с ботом, код будет в теме письма.',
+      'Введите код в Gmail, выберите «Пересылать копии входящих сообщений на адрес…» и нажмите «Сохранить изменения» внизу страницы.',
+    ],
+    forwardStepsEn: [
+      {
+        text: 'Open Gmail settings, the "Forwarding and POP/IMAP" tab, and click "Add a forwarding address". On a phone, open the full Gmail site in a browser: the Gmail app does not have this setting.',
+        url: gmailForwarding,
+        button: 'Open forwarding settings',
+      },
+      'Paste the address above. Google will send a confirmation code to it: the email arrives here, in the chat with the bot, with the code in its subject.',
+      'Enter the code in Gmail, choose "Forward a copy of incoming mail to…" and click "Save Changes" at the bottom of the page.',
+    ],
   },
   {
     id: 'rambler',
@@ -195,6 +259,22 @@ const CUSTOM_STEPS_EN = [
 ];
 
 export const CUSTOM_STEPS = lang === 'ru' ? CUSTOM_STEPS_RU : CUSTOM_STEPS_EN;
+
+const FORWARD_STEPS_RU: ProviderStep[] = [
+  'Найдите в настройках своей почты раздел «Пересылка» (бывает в «Правилах» или «Фильтрах»).',
+  'Включите пересылку всех входящих писем на адрес выше.',
+  'Если почта попросит подтвердить адрес, письмо с кодом или ссылкой придет сюда, в чат с ботом.',
+];
+
+const FORWARD_STEPS_EN: ProviderStep[] = [
+  'Find the "Forwarding" section in your email settings (sometimes under "Rules" or "Filters").',
+  'Turn on forwarding of all incoming emails to the address above.',
+  'If your email asks to confirm the address, the email with a code or link arrives here, in the chat with the bot.',
+];
+
+/** Как включить пересылку: инструкция сервиса или общая. */
+export const forwardSteps = (provider: MailProvider | undefined): ProviderStep[] =>
+  (lang === 'ru' ? provider?.forwardSteps : provider?.forwardStepsEn) ?? (lang === 'ru' ? FORWARD_STEPS_RU : FORWARD_STEPS_EN);
 
 export const providerTitle = (provider: MailProvider) =>
   lang === 'ru' ? provider.title : provider.titleEn ?? provider.title;

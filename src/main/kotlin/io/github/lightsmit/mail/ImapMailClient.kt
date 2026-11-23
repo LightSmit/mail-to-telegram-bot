@@ -98,6 +98,20 @@ class ImapMailClient(
         }
     }
 
+    /**
+     * Письмо, пришедшее пересылкой (исходный текст в формате MIME). full = false - только
+     * заголовки для карточки, true - еще текст и вложения.
+     */
+    fun parseRaw(raw: ByteArray, uid: Long, full: Boolean): EmailSummary {
+        val message = jakarta.mail.internet.MimeMessage(
+            jakarta.mail.Session.getInstance(java.util.Properties()),
+            java.io.ByteArrayInputStream(raw),
+        )
+        val summary = if (full) createFullSummary(message, uid) else createMetadataSummary(message, uid)
+        // В пересланном письме нет даты получения ящиком: берем дату отправки или текущее время
+        return if (summary.receivedAt != null) summary else summary.copy(receivedAt = summary.sentAt ?: java.time.Instant.now())
+    }
+
     private fun createCursor(
         inbox: Folder,
         uidFolder: UIDFolder,

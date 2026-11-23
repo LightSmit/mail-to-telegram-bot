@@ -156,6 +156,12 @@ interface Texts {
     val browseAuth: String
     val browseNoSent: String
     val browseFailed: String
+
+    // Режим «Пересылка без пароля»
+    val forwardDisabled: String
+    fun forwardAlreadyConnected(email: String): String
+    val forwardNoPassword: String
+    val forwardNoBrowse: String
     val browseTimeout: String
 }
 
@@ -358,6 +364,13 @@ object RuTexts : Texts {
     override val browseAuth = "Почта не пускает бота: обновите пароль приложения в настройках ящика"
     override val browseNoSent = "В этом ящике не нашлась папка «Отправленные»"
     override val browseFailed = "Не удалось получить письма из ящика. Попробуйте еще раз"
+
+    override val forwardDisabled = "Пересылка без пароля сейчас недоступна. Подключите ящик через пароль приложения"
+    override fun forwardAlreadyConnected(email: String) =
+        "Ящик $email уже подключен через пароль приложения. Чтобы перейти на пересылку, сначала удалите его"
+    override val forwardNoPassword = "Этот ящик подключен через пересылку: пароль для него не нужен"
+    override val forwardNoBrowse =
+        "Ящик подключен через пересылку: бот видит только пересланные письма. Папки и поиск доступны при подключении через пароль приложения"
     override val browseTimeout = "Почтовый сервер отвечает слишком долго. Попробуйте еще раз"
 }
 
@@ -551,6 +564,13 @@ object EnTexts : Texts {
     override val browseAuth = "The mailbox does not let the bot in: update the app password in the mailbox settings"
     override val browseNoSent = "The Sent folder was not found in this mailbox"
     override val browseFailed = "Could not load emails from the mailbox. Please try again"
+
+    override val forwardDisabled = "Forwarding without a password is not available right now. Connect the mailbox with an app password"
+    override fun forwardAlreadyConnected(email: String) =
+        "$email is already connected with an app password. To switch to forwarding, delete it first"
+    override val forwardNoPassword = "This mailbox is connected by forwarding: it needs no password"
+    override val forwardNoBrowse =
+        "This mailbox is connected by forwarding: the bot only sees forwarded emails. Folders and search work when connected with an app password"
     override val browseTimeout = "The mail server is taking too long to respond. Please try again"
 }
 

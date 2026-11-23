@@ -47,5 +47,9 @@ class MailAccountRegistry {
     fun findByOwner(ownerChatId: Long): List<MailAccountConfig> =
         accountsByKey.values.filter { account -> account.ownerChatId == ownerChatId }
 
+    /** Ящик-пересылка по токену из адреса токен@домен. */
+    fun findByForwardToken(token: String): MailAccountConfig? =
+        accountsByKey.values.firstOrNull { account -> account.isForward && account.password == token }
+
     fun size(): Int = accountsByKey.size
 }

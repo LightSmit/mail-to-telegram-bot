@@ -150,6 +150,7 @@ docker compose logs -f mail-bot
 | `PRICE_PRO_MONTH` / `PRICE_PRO_YEAR` | `100` / `1000` | Цены Pro в звездах |
 | `PRICE_BUSINESS_MONTH` / `PRICE_BUSINESS_YEAR` | `300` / `3000` | Цены Business в звездах |
 | `REFERRAL_GOAL` | `5` | Сколько друзей нужно пригласить за месяц Pro (0 - приглашения выключены) |
+| `INBOUND_DOMAIN` / `INBOUND_SECRET` | — | Пересылка без пароля: почтовый домен в Cloudflare Email Routing и общий секрет [Email Worker](deploy/cloudflare-email-worker.js). Пусто - режим выключен |
 | `SUPPORT_CONTACT` | — | Контакт для вопросов об оплате (`/paysupport`), например `@username` |
 | `TELEGRAM_PROXY_URL` | — | HTTP-прокси только для Telegram Bot API, если Telegram заблокирован |
 | `ENCRYPTION_KEY_LEGACY` | — | Прежний ключ, только для переноса старых записей |

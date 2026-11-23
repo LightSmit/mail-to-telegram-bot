@@ -1009,3 +1009,18 @@ textarea:focus {
 .referral .field-hint {
   margin: 0;
 }
+
+/* Ящик без пароля: адрес для пересылки и инструкция */
+.forward-panel .forward-address {
+  background: var(--surface);
+  font-size: 15px;
+}
+
+.forward-panel .secondary {
+  align-self: flex-start;
+  padding: 6px 0;
+}
+
+.forward-panel .steps {
+  margin: 0;
+}

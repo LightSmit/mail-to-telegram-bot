@@ -5,6 +5,7 @@ import { lang, rememberLang, t, type Lang } from './i18n'
 import { LanguageSwitch } from './LanguageSwitch'
 import { FiltersPanel, withDefaults, type MailFilters } from './FiltersPanel'
 import { PasswordPanel } from './PasswordPanel'
+import { ForwardPanel } from './ForwardPanel'
 import { NotificationsSection, type NotificationSettings } from './NotificationsSection'
 import { MailboxView } from './MailboxView'
 import { DataSection } from './DataSection'
@@ -28,7 +29,18 @@ interface Account {
   // Письма ящика приходят в групповой чат (Business)
   groupLinked?: boolean;
   groupTitle?: string | null;
+  // Ящик без пароля: письма пересылаются на этот адрес бота
+  forwardAddress?: string | null;
+  forwardReceived?: boolean;
 }
+
+// Режим «Пересылка без пароля» на сервере
+interface Forwarding {
+  enabled: boolean;
+  domain?: string | null;
+}
+
+type AddMode = 'forward' | 'password';
 
 type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | null;
 
@@ -41,9 +53,10 @@ const REFRESH_INTERVAL_MS = 15000;
 const PLAN_POLL_ATTEMPTS = 6;
 const PLAN_POLL_DELAY_MS = 1500;
 
-// Класс цвета статуса: пауза и ящик сверх лимита - серые
+// Класс цвета статуса: пауза и ящик сверх лимита - серые, пересылка без писем - «подключается»
 function statusKind(account: Account): string {
   if (account.filters?.paused || account.overLimit) return 'paused';
+  if (account.forwardAddress && !account.forwardReceived) return 'connecting';
   return (account.status ?? 'CONNECTING').toLowerCase();
 }
 
@@ -78,6 +91,7 @@ async function errorText(response: Response, prefix: string): Promise<string> {
 function statusLabel(account: Account): string {
   if (account.filters?.paused) return t.statusPaused;
   if (account.overLimit) return t.statusOverLimit;
+  if (account.forwardAddress) return account.forwardReceived ? t.forwardWorking : t.forwardStatus;
   switch (account.status) {
     case 'OK':
       return t.statusOk;
@@ -111,6 +125,11 @@ function App() {
   const [providerId, setProviderId] = useState('');
   const [providerTouched, setProviderTouched] = useState(false);
   const [customHost, setCustomHost] = useState('');
+  // Пересылка без пароля: доступна, если включена на сервере; по умолчанию предлагаем ее
+  const [forwarding, setForwarding] = useState<Forwarding | null>(null);
+  const [addMode, setAddMode] = useState<AddMode>('forward');
+  // Только что подключенный ящик-пересылка: его адрес показываем сразу
+  const [freshForwardId, setFreshForwardId] = useState<number | null>(null);
 
   // Воронка: какую почту выбрал человек (сервер записывает только первый выбор)
   useEffect(() => {
@@ -243,6 +262,15 @@ function App() {
     setTimeout(() => document.getElementById('plan')?.scrollIntoView({ behavior: 'smooth' }), 50);
   };
 
+  const fetchForwarding = async () => {
+    try {
+      const response = await request('/forwarding');
+      if (response.ok) setForwarding(await response.json());
+    } catch {
+      // без связи режим пересылки просто не предлагаем
+    }
+  };
+
   const fetchReferral = async () => {
     try {
       const response = await request('/referral');
@@ -256,6 +284,7 @@ function App() {
     fetchAccounts();
     fetchPlan();
     fetchReferral();
+    fetchForwarding();
     const timer = setInterval(() => fetchAccounts(true), REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -274,8 +303,37 @@ function App() {
   const host = isCustom ? customHost.trim() : provider?.host ?? '';
   const steps: ProviderStep[] | null = provider ? providerSteps(provider) : isCustom ? CUSTOM_STEPS : null;
 
+  const forwardMode = forwarding?.enabled === true && addMode === 'forward';
+
+  const handleAddForward = async () => {
+    setSubmitting(true);
+    setNotice({ kind: 'info', text: t.forwardCreating });
+    try {
+      const response = await request('/accounts/forward', 'POST', { name: name.trim(), email: email.trim() });
+      if (response.ok) {
+        const added: Account = await response.json();
+        setNotice({ kind: 'ok', text: t.forwardAdded });
+        setEmail(''); setName(''); setProviderId(''); setProviderTouched(false);
+        await fetchAccounts();
+        setFreshForwardId(added.id);
+        setFiltersOpenId(added.id);
+        setTimeout(() => document.getElementById(`mailbox-${added.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      } else {
+        setNotice({ kind: 'error', text: await errorText(response, t.addFailed) });
+      }
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeError(error) });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleAddAccount = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (forwardMode) {
+      await handleAddForward();
+      return;
+    }
     if (!host) {
       setNotice({ kind: 'error', text: t.chooseProvider });
       return;
@@ -474,21 +532,24 @@ function App() {
         ) : (
           <ul className="mailbox-list">
             {accounts.map((acc) => (
-              <li key={acc.id} className="mailbox-item">
+              <li key={acc.id} id={`mailbox-${acc.id}`} className="mailbox-item">
                 <div className="mailbox">
                   <span className={`status-dot status-${statusKind(acc)}`} aria-hidden="true" />
+                  {/* У ящика-пересылки нет папок: вместо писем открываем его адрес и настройки */}
                   <button
                     type="button"
                     className="mailbox-info mailbox-open"
-                    onClick={() => setBrowsingId(acc.id)}
-                    aria-label={t.openMailbox(acc.email)}
+                    onClick={() => (acc.forwardAddress
+                      ? setFiltersOpenId((current) => (current === acc.id ? null : acc.id))
+                      : setBrowsingId(acc.id))}
+                    aria-label={acc.forwardAddress ? t.forwardAddressTitle : t.openMailbox(acc.email)}
                   >
                     <span className="mailbox-name">{acc.name !== acc.email ? acc.name : acc.email}</span>
                     {acc.name !== acc.email && <span className="mailbox-address">{acc.email}</span>}
                     <span className={`mailbox-status status-text-${statusKind(acc)}`}>
                       {statusLabel(acc)}
                     </span>
-                    <span className="mailbox-open-hint">{t.emailsLink}</span>
+                    <span className="mailbox-open-hint">{acc.forwardAddress ? t.forwardBadge : t.emailsLink}</span>
                   </button>
                   <div className="mailbox-actions">
                     <button
@@ -512,6 +573,13 @@ function App() {
                 </div>
                 {filtersOpenId === acc.id && (
                   <div className={acc.status === 'ERROR' ? 'settings settings-broken' : 'settings'}>
+                    {acc.forwardAddress && (
+                      <ForwardPanel
+                        address={acc.forwardAddress}
+                        email={acc.email}
+                        fresh={freshForwardId === acc.id && !acc.forwardReceived}
+                      />
+                    )}
                     <FiltersPanel
                       initial={withDefaults(acc.filters)}
                       pro={hasPro(plan)}
@@ -529,12 +597,14 @@ function App() {
                         onUpgrade={plan.billingEnabled ? showPlans : undefined}
                       />
                     )}
-                    <PasswordPanel
-                      host={acc.host}
-                      email={acc.email}
-                      broken={acc.status === 'ERROR'}
-                      onSave={(newPassword) => handleUpdatePassword(acc, newPassword)}
-                    />
+                    {!acc.forwardAddress && (
+                      <PasswordPanel
+                        host={acc.host}
+                        email={acc.email}
+                        broken={acc.status === 'ERROR'}
+                        onSave={(newPassword) => handleUpdatePassword(acc, newPassword)}
+                      />
+                    )}
                   </div>
                 )}
               </li>
@@ -562,7 +632,15 @@ function App() {
       <section className="section" aria-labelledby="add-title">
         <h2 id="add-title" className="section-title">{t.addTitle}</h2>
 
+        {forwarding?.enabled && (
+          <div className="segmented" role="tablist">
+            <button type="button" role="tab" aria-selected={addMode === 'forward'} onClick={() => setAddMode('forward')}>{t.modeForward}</button>
+            <button type="button" role="tab" aria-selected={addMode === 'password'} onClick={() => setAddMode('password')}>{t.modePassword}</button>
+          </div>
+        )}
+
         <form onSubmit={handleAddAccount} className="add-form">
+          {forwardMode && <p className="field-hint">{t.forwardLede}</p>}
           <label className="field">
             <span className="field-label">{t.emailLabel}</span>
             <input
@@ -576,6 +654,7 @@ function App() {
             />
           </label>
 
+          {!forwardMode && <>
           <label className="field">
             <span className="field-label">{t.providerLabel}</span>
             <select
@@ -639,6 +718,7 @@ function App() {
             />
             {provider && <span className="field-hint">{providerHint(provider)}</span>}
           </label>
+          </>}
 
           <label className="field">
             <span className="field-label">{t.nameLabel} <span className="optional">{t.optional}</span></span>
@@ -646,7 +726,9 @@ function App() {
           </label>
 
           <button type="submit" className="primary" disabled={submitting}>
-            {submitting ? t.checkingShort : t.connect}
+            {forwardMode
+              ? (submitting ? t.forwardCreating : t.forwardConnect)
+              : (submitting ? t.checkingShort : t.connect)}
           </button>
         </form>
       </section>

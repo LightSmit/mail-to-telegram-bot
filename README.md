@@ -150,6 +150,7 @@ All settings live in `.env` (see [.env.example](.env.example)).
 | `PRICE_PRO_MONTH` / `PRICE_PRO_YEAR` | `100` / `1000` | Pro prices in Stars |
 | `PRICE_BUSINESS_MONTH` / `PRICE_BUSINESS_YEAR` | `300` / `3000` | Business prices in Stars |
 | `REFERRAL_GOAL` | `5` | How many friends give a month of Pro (0 - invitations off) |
+| `INBOUND_DOMAIN` / `INBOUND_SECRET` | — | Forwarding without a password: mail domain on Cloudflare Email Routing and the shared secret of [the Email Worker](deploy/cloudflare-email-worker.js). Off while empty |
 | `SUPPORT_CONTACT` | — | Contact for payment questions (`/paysupport`), for example `@username` |
 | `TELEGRAM_PROXY_URL` | — | HTTP proxy for Telegram Bot API only, if Telegram is blocked |
 | `ENCRYPTION_KEY_LEGACY` | — | Previous key, only for migrating old records |

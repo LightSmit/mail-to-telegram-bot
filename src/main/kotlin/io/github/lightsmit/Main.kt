@@ -22,6 +22,7 @@ import io.github.lightsmit.service.MailAccountOwner
 import io.github.lightsmit.service.FunnelService
 import io.github.lightsmit.service.FunnelStep
 import io.github.lightsmit.service.GroupLinkService
+import io.github.lightsmit.service.InboundMailService
 import io.github.lightsmit.service.MailAccountRegistry
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.service.MailboxHealthMonitor
@@ -39,6 +40,7 @@ import io.github.lightsmit.service.UserDataService
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.DatabaseManager
 import io.github.lightsmit.storage.FunnelRepository
+import io.github.lightsmit.storage.InboundMessageRepository
 import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailOutboxOperation
@@ -50,6 +52,7 @@ import io.github.lightsmit.storage.UserSettingsRepository
 import io.github.lightsmit.telegram.MailViewCallbackCodec
 import io.github.lightsmit.telegram.TelegramClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -229,9 +232,12 @@ fun main() = runBlocking {
         attachmentTempDirectory = attachmentTempDirectory,
         maxAttachmentSizeBytes = maxAttachmentSizeBytes,
     )
+    // Письма ящиков без пароля (режим пересылки) хранятся в базе несколько дней
+    val inboundRepository = InboundMessageRepository()
     val contentLoader = EmailContentLoader(
         imapClient = imapClient,
         accountCode = MailViewCallbackCodec::accountCode,
+        inboundStore = inboundRepository,
     )
 
     val mailStateRepository = MailStateRepository()
@@ -313,6 +319,21 @@ fun main() = runBlocking {
         onGroupMigrated = { oldChatId, newChatId -> groupLinkService.onMigrated(oldChatId, newChatId) },
     )
 
+    // Режим «Пересылка без пароля»: включен, только если заданы домен и секрет для Cloudflare Worker
+    val inboundDomain = Environment.get("INBOUND_DOMAIN")?.trim()?.lowercase()?.ifEmpty { null }
+    val inboundSecret = Environment.get("INBOUND_SECRET")?.trim()?.ifEmpty { null }
+    val inboundService = if (inboundDomain != null && inboundSecret != null) {
+        InboundMailService(
+            domain = inboundDomain,
+            findAccount = accountRegistry::findByForwardToken,
+            store = inboundRepository,
+            parse = { raw, uid -> imapClient.parseRaw(raw, uid, full = false) },
+            deliver = forwardingService::receiveForwarded,
+        )
+    } else {
+        null
+    }
+
     val healthMonitor = MailboxHealthMonitor(
         telegramClient = telegramControlClient,
         miniAppUrl = miniAppUrl,
@@ -350,6 +371,7 @@ fun main() = runBlocking {
         mailboxLimit = mailboxQuota::limit,
         healthMonitor = healthMonitor,
         onMailboxAdded = onMailboxAdded,
+        inbound = inboundService,
     )
 
     // Ящики должны быть в реестре до запуска воркеров outbox, иначе ожидающие
@@ -406,6 +428,8 @@ fun main() = runBlocking {
         groupLinks = groupLinkService,
         botUsername = botUsername,
         referrals = referralService,
+        inbound = inboundService,
+        inboundSecret = inboundSecret,
         mailBrowser = MailBrowserService(
             repository = mailAccountRepository,
             imapClient = imapClient,
@@ -508,6 +532,7 @@ fun main() = runBlocking {
             if (replyEnabled) "on" else "off",
         )
         logger.info("Admins: {}, daily backup at {}:00, keeping {} copies", adminChatIds.size, backupHour, backupKeep)
+        logger.info("Forwarding without password: {}", inboundDomain?.let { domain -> "on, *@$domain" } ?: "off")
         logger.info("Waiting for new emails...")
 
         supervisorScope {
@@ -541,7 +566,22 @@ fun main() = runBlocking {
                 }
             }
 
-            (listOf(telegramUpdateJob, backupJob, subscriptionJob, deliveryNoticeJob) + mailOutboxJobs).joinAll()
+            // Пересланные письма храним неделю: потом кнопки «Текст» и «Вложения» не работают
+            val inboundCleanupJob = launch {
+                while (true) {
+                    try {
+                        val removed = inboundRepository.deleteOlderThan(java.time.Instant.now().minus(InboundMailService.KEEP))
+                        if (removed > 0) logger.info("Removed {} old forwarded emails", removed)
+                    } catch (exception: CancellationException) {
+                        throw exception
+                    } catch (exception: Exception) {
+                        logger.warn("Forwarded emails cleanup failed: {}", exception.javaClass.simpleName)
+                    }
+                    delay(6 * 60 * 60 * 1000L)
+                }
+            }
+
+            (listOf(telegramUpdateJob, backupJob, subscriptionJob, deliveryNoticeJob, inboundCleanupJob) + mailOutboxJobs).joinAll()
         }
     } finally {
         mailboxSupervisor.close()

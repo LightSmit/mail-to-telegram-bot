@@ -22,7 +22,7 @@ sealed interface BrowseResult<out T> {
 }
 
 /** Почему не удалось получить письма; текст для пользователя подбирает API на его языке. */
-enum class BrowseFailure { TIMEOUT, AUTH, NO_SENT_FOLDER, OTHER }
+enum class BrowseFailure { TIMEOUT, AUTH, NO_SENT_FOLDER, FORWARD_MODE, OTHER }
 
 /**
  * Просмотр писем в Mini App. Письма читаются из ящика по запросу и на сервере
@@ -72,7 +72,7 @@ class MailBrowserService(
         }
 
     suspend fun sendAttachments(ownerId: Long, accountId: Long, uidValidity: Long, uid: Long): BrowseResult<Unit> =
-        withAccount(ownerId, accountId) { account ->
+        withAccount(ownerId, accountId, allowForward = true) { account ->
             sendAttachmentsToChat(account, uidValidity, uid)
         }
 
@@ -80,10 +80,13 @@ class MailBrowserService(
     private suspend fun <T> withAccount(
         ownerId: Long,
         accountId: Long,
+        // Ящик-пересылка: входа в почту нет, папки и поиск недоступны
+        allowForward: Boolean = false,
         block: suspend (MailAccountConfig) -> T?,
     ): BrowseResult<T> {
         val account = repository.findByIdAndOwner(accountId, ownerId)
             ?: return BrowseResult.MailboxNotFound
+        if (account.isForward && !allowForward) return BrowseResult.Failed(BrowseFailure.FORWARD_MODE)
 
         return try {
             val value = withTimeout(REQUEST_TIMEOUT_MILLIS) { block(account) }
