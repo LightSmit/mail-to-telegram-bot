@@ -1,4 +1,4 @@
-git pullpackage io.github.lightsmit.i18n
+package io.github.lightsmit.i18n
 
 /** Язык интерфейса. Русский - для русского, украинского, белорусского и казахского Telegram, остальным английский. */
 enum class Lang {
