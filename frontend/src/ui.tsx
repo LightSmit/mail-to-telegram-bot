@@ -169,7 +169,7 @@ export function Notice({ kind, text, onClose }: { kind: 'info' | 'ok' | 'error';
 export type IconName =
   | 'mail' | 'star' | 'settings' | 'shield' | 'chevron-left' | 'chevron-right' | 'plus' | 'close' | 'copy'
   | 'pause' | 'list' | 'filter' | 'group' | 'lock' | 'send' | 'check' | 'key' | 'sparkle' | 'globe' | 'trash' | 'external'
-  | 'bell' | 'pulse';
+  | 'bell' | 'pulse' | 'search';
 
 const PATHS: Record<IconName, ReactNode> = {
   'mail': <><rect x="3" y="5" width="18" height="14" rx="3" /><path d="M4 7l8 6 8-6" /></>,
@@ -195,6 +195,7 @@ const PATHS: Record<IconName, ReactNode> = {
   'external': <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5" />,
   'bell': <><path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15L6 16z" /><path d="M10 20.5a2 2 0 004 0" /></>,
   'pulse': <path d="M3 12h4l2.5-6 5 12L17 12h4" />,
+  'search': <><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></>,
 };
 
 export function Icon({ name, size = 20, className }: { name: IconName; size?: number; className?: string }) {

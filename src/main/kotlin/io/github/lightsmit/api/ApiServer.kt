@@ -224,6 +224,26 @@ data class PlanDto(
     // Пробный Pro можно включить кнопкой (TRIAL_MODE=button) и на сколько дней
     val trialAvailable: Boolean = false,
     val trialDays: Int = 0,
+    // Автопродление выключено, срок дорабатывает; его можно включить обратно
+    val renewalCancelled: Boolean = false,
+)
+
+@Serializable
+data class SearchGroupDto(
+    val accountId: Long,
+    val email: String,
+    val name: String,
+    val uidValidity: Long? = null,
+    val total: Int = 0,
+    val items: List<MailListItemDto> = emptyList(),
+    val hasMore: Boolean = false,
+    // Ящик не ответил: текст ошибки на языке пользователя
+    val error: String? = null,
+)
+
+@Serializable
+data class AutoRenewDto(
+    val enabled: Boolean,
 )
 
 @Serializable
@@ -342,6 +362,7 @@ class ApiServer(
             },
             trialAvailable = status.trialAvailable,
             trialDays = if (status.trialAvailable) service.config.trialDays else 0,
+            renewalCancelled = status.renewalCancelled,
         )
     }
 
@@ -793,6 +814,37 @@ class ApiServer(
                         }
                     }
 
+                    // Поиск по всем ящикам сразу (Pro): ?q=поиск&unread=true
+                    get("/search") {
+                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
+                        val ownerId = call.attributes[UserIdKey]
+                        val search = call.request.queryParameters["q"]?.trim().orEmpty()
+                        val unreadOnly = call.request.queryParameters["unread"] == "true"
+                        if (search.isEmpty() && !unreadOnly) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            return@get
+                        }
+                        if (!planOf(ownerId).hasProFeatures) {
+                            call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to call.texts.billing.proBrowse))
+                            return@get
+                        }
+
+                        val texts = call.texts
+                        val groups = browser.searchAll(ownerId, search.ifEmpty { null }, unreadOnly, SEARCH_ALL_PER_MAILBOX)
+                            .map { (account, result) ->
+                                val base = SearchGroupDto(accountId = account.id, email = account.username, name = account.name)
+                                when (result) {
+                                    is BrowseResult.Ok -> {
+                                        val page = result.value.toDto()
+                                        base.copy(uidValidity = page.uidValidity, total = page.total, items = page.items, hasMore = page.hasMore)
+                                    }
+                                    is BrowseResult.Failed -> base.copy(error = browseFailureText(texts, result.reason))
+                                    else -> base.copy(error = texts.browseFailed)
+                                }
+                            }
+                        call.respond(groups)
+                    }
+
                     // Одно письмо: ?folder=inbox|sent&v=UIDVALIDITY
                     get("/accounts/{id}/messages/{uid}") {
                         val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
@@ -892,6 +944,22 @@ class ApiServer(
                     }
 
                     // Включить пробный Pro кнопкой в приложении (один раз на человека)
+                    // Автопродление ежемесячной подписки: {"enabled": false} - выключить, true - вернуть
+                    put("/plan/autorenew") {
+                        val userId = call.attributes[UserIdKey]
+                        val service = subscriptions
+                            ?: return@put call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
+                        val body = runCatching { call.receive<AutoRenewDto>() }.getOrNull()
+                            ?: return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                        when (service.setAutoRenew(userId, body.enabled)) {
+                            SubscriptionService.AutoRenewResult.OK -> call.respond(planDto(userId))
+                            SubscriptionService.AutoRenewResult.NOT_SUBSCRIPTION ->
+                                call.respond(HttpStatusCode.Conflict, mapOf("error" to call.texts.billing.autoRenewUnavailable))
+                            SubscriptionService.AutoRenewResult.FAILED ->
+                                call.respond(HttpStatusCode.BadGateway, mapOf("error" to call.texts.billing.autoRenewFailed))
+                        }
+                    }
+
                     post("/plan/trial") {
                         val userId = call.attributes[UserIdKey]
                         val service = subscriptions
@@ -1005,23 +1073,25 @@ class ApiServer(
                 mapOf("error" to call.texts.emailNotFound),
             )
             is BrowseResult.Failed -> {
-                val texts = call.texts
-                val message = when (result.reason) {
-                    BrowseFailure.TIMEOUT -> texts.browseTimeout
-                    BrowseFailure.AUTH -> texts.browseAuth
-                    BrowseFailure.NO_SENT_FOLDER -> texts.browseNoSent
-                    BrowseFailure.FORWARD_MODE -> texts.forwardNoBrowse
-                    BrowseFailure.OTHER -> texts.browseFailed
-                }
-                call.respond(HttpStatusCode.BadGateway, mapOf("error" to message))
+                call.respond(HttpStatusCode.BadGateway, mapOf("error" to browseFailureText(call.texts, result.reason)))
             }
         }
+    }
+
+    private fun browseFailureText(texts: Texts, reason: BrowseFailure): String = when (reason) {
+        BrowseFailure.TIMEOUT -> texts.browseTimeout
+        BrowseFailure.AUTH -> texts.browseAuth
+        BrowseFailure.NO_SENT_FOLDER -> texts.browseNoSent
+        BrowseFailure.FORWARD_MODE -> texts.forwardNoBrowse
+        BrowseFailure.OTHER -> texts.browseFailed
     }
 
     private companion object {
         const val INBOUND_PATH = "/api/inbound"
         // Сколько последних писем видно в приложении на бесплатном тарифе
         const val FREE_BROWSE_LIMIT = 20
+        // Сколько писем каждого ящика показывать при поиске по всем ящикам
+        const val SEARCH_ALL_PER_MAILBOX = 15
     }
 
     // id пользователя и его language_code из уже проверенного initData

@@ -19,6 +19,7 @@ import { MailboxScreen } from './screens/Mailbox'
 import { FiltersScreen } from './screens/Filters'
 import { GroupScreen, PasswordScreen } from './screens/SubScreens'
 import { PlanScreen } from './screens/Plan'
+import { SearchScreen } from './screens/Search'
 import { SettingsScreen } from './screens/Settings'
 
 type Tab = 'home' | 'plan' | 'settings';
@@ -32,7 +33,8 @@ type Route =
   | { name: 'filters'; id: number }
   | { name: 'group'; id: number }
   | { name: 'password'; id: number }
-  | { name: 'mail'; id: number };
+  | { name: 'mail'; id: number }
+  | { name: 'search' };
 
 // Пока приложение открыто, статусы ящиков обновляются сами
 const REFRESH_INTERVAL_MS = 15000;
@@ -79,7 +81,8 @@ function App() {
 
   // Системная кнопка «Назад» Telegram; письма управляют ею сами
   useEffect(() => {
-    if (!top || top.name === 'mail') return;
+    // Просмотр писем и поиск сами ведут кнопку «Назад»: из письма - к списку
+    if (!top || top.name === 'mail' || top.name === 'search') return;
     return showBackButton(pop);
   }, [top, pop]);
 
@@ -274,6 +277,12 @@ function App() {
     });
   };
 
+  const setAutoRenew = (enabled: boolean) =>
+    withNotice(() => request('/plan/autorenew', 'PUT', { enabled }), t.autoRenewFailed, async (response) => {
+      setPlan(await response.json());
+      notify('ok', enabled ? t.autoRenewOn : t.autoRenewOff);
+    });
+
   // Настройки
 
   const loadSettings = async (): Promise<NotificationSettings | null> => {
@@ -317,6 +326,17 @@ function App() {
 
   const renderRoute = (route: Route) => {
     switch (route.name) {
+      case 'search':
+        return (
+          <SearchScreen
+            request={request}
+            pro={pro}
+            hasForwardMailboxes={accounts.some((account) => Boolean(account.forwardAddress))}
+            onUpgrade={upgrade}
+            onOpenMailbox={(id) => push({ name: 'mail', id })}
+            onBack={pop}
+          />
+        );
       case 'add':
         return (
           <AddScreen
@@ -417,6 +437,7 @@ function App() {
               onOpen={(account) => push({ name: 'mailbox', id: account.id })}
               onAdd={() => push({ name: 'add' })}
               onPlan={showPlans}
+              onSearch={() => push({ name: 'search' })}
             />
           );
       case 'plan':
@@ -427,6 +448,7 @@ function App() {
             createInvoice={createInvoice}
             onPaid={refreshAfterPayment}
             startTrial={startTrial}
+            setAutoRenew={setAutoRenew}
             notify={notify}
           />
         );

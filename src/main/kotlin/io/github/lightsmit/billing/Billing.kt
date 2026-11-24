@@ -54,6 +54,9 @@ data class Subscription(
     // Когда отправлено сообщение об окончании подписки
     val endedNotifiedAt: Instant? = null,
     val updatedAt: Instant,
+    // Пользователь выключил автопродление ежемесячной подписки: срок дорабатывает,
+    // а до его конца продление можно включить обратно (chargeId сохраняется)
+    val renewalCancelled: Boolean = false,
 ) {
     val lifetime: Boolean get() = plan != Plan.FREE && expiresAt == null
 
@@ -195,6 +198,8 @@ data class PlanStatus(
     val billingEnabled: Boolean,
     // Пробный период еще не использован и его можно включить кнопкой
     val trialAvailable: Boolean = false,
+    // Автопродление выключено, но его можно включить обратно до конца срока
+    val renewalCancelled: Boolean = false,
 )
 
 /** Сообщения пользователю о подписке, которые отправляет фоновая проверка. */

@@ -24,6 +24,8 @@ export interface PlanInfo {
   // Пробный Pro можно включить кнопкой
   trialAvailable?: boolean;
   trialDays?: number;
+  // Автопродление выключено, срок дорабатывает, включить можно обратно
+  renewalCancelled?: boolean;
 }
 
 /** Платный тариф: фильтры по отправителям, все письма с поиском, коды подтверждения. */

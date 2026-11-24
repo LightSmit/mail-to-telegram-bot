@@ -41,6 +41,8 @@ interface BillingTexts {
     fun trialButton(days: Int): String
     fun trialStarted(expiresAt: Instant?): String
     val trialUnavailable: String
+    val autoRenewUnavailable: String
+    val autoRenewFailed: String
     fun trialReset(days: Int): String
     fun paymentDone(plan: Plan, expiresAt: Instant?, recurring: Boolean): String
     val paymentUnknown: String
@@ -155,6 +157,8 @@ object RuBillingTexts : BillingTexts {
         "🎁 Пробный Pro включен" + (expiresAt?.let { " до ${formatDate(it)}" } ?: "") +
             ". Доступны все ящики, фильтры, поиск по письмам и коды подтверждения. Ничего не спишется: после пробного периода останется Free."
     override val trialUnavailable = "Пробный период уже был использован или сейчас недоступен. Тарифы: /premium"
+    override val autoRenewUnavailable = "Автопродление есть только у ежемесячной подписки за звезды"
+    override val autoRenewFailed = "Telegram не принял изменение. Попробуйте еще раз чуть позже"
     override fun trialReset(days: Int) =
         "🎁 Пробный Pro теперь включается кнопкой, когда вам удобно. Сейчас у вас Free, а попробовать Pro ${daysRu(days)} бесплатно можно в любой момент: /premium или раздел «Тариф» в приложении. Ничего не спишется."
 
@@ -320,6 +324,8 @@ object EnBillingTexts : BillingTexts {
         "🎁 Pro trial is on" + (expiresAt?.let { " until ${formatDate(it)}" } ?: "") +
             ". All mailboxes, filters, email search and confirmation codes are available. Nothing is charged: after the trial you stay on Free."
     override val trialUnavailable = "The trial has already been used or is not available right now. Plans: /premium"
+    override val autoRenewUnavailable = "Auto-renewal is only available for a monthly Stars subscription"
+    override val autoRenewFailed = "Telegram did not accept the change. Please try again a bit later"
     override fun trialReset(days: Int) =
         "🎁 The Pro trial now starts with a button, whenever you like. You are on Free now, and you can try Pro free for $days days at any time: /premium or the \"Plan\" section in the app. Nothing is charged."
 

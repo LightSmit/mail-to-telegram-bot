@@ -51,9 +51,12 @@ interface HomeProps {
   onOpen: (account: Account) => void;
   onAdd: () => void;
   onPlan: () => void;
+  onSearch: () => void;
 }
 
-export function Home({ accounts, loading, plan, onOpen, onAdd, onPlan }: HomeProps) {
+export function Home({ accounts, loading, plan, onOpen, onAdd, onPlan, onSearch }: HomeProps) {
+  // Поиск по всем ящикам имеет смысл, когда есть хотя бы один ящик с входом в почту
+  const searchable = accounts.some((account) => !account.forwardAddress);
   const limit = plan?.maxMailboxes;
   return (
     <div className="screen">
@@ -67,6 +70,14 @@ export function Home({ accounts, loading, plan, onOpen, onAdd, onPlan }: HomePro
           </button>
         )}
       />
+
+      {!loading && searchable && (
+        <button type="button" className="search-field search-bar" onClick={onSearch}>
+          <Icon name="search" size={18} />
+          <span className="search-bar-text">{t.searchAll}</span>
+          {plan && plan.billingEnabled && plan.plan === 'FREE' && <span className="pro-badge">{t.proBadge}</span>}
+        </button>
+      )}
 
       {loading ? (
         <p className="empty">{t.loadingMailboxes}</p>

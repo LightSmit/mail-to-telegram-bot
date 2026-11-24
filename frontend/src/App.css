@@ -1795,3 +1795,61 @@ button.row:active {
   color: var(--text);
   font-weight: 600;
 }
+
+/* Поиск по всем ящикам */
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 0 14px;
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--hint);
+  font-size: 16px;
+  text-align: left;
+}
+
+.search-field input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text);
+}
+
+.search-field input::placeholder {
+  color: var(--hint);
+}
+
+.search-field:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--link) 50%, transparent);
+}
+
+.search-bar {
+  cursor: pointer;
+}
+
+.search-bar-text {
+  flex: 1;
+}
+
+.search-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-group-title .avatar {
+  font-size: 10px !important;
+}
+
+.search-pro {
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--card);
+}

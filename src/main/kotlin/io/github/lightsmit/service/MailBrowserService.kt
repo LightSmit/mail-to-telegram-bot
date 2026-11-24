@@ -11,6 +11,9 @@ import io.github.lightsmit.storage.StarredRepository
 import jakarta.mail.AuthenticationFailedException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 
@@ -21,6 +24,12 @@ sealed interface BrowseResult<out T> {
     data object MessageNotFound : BrowseResult<Nothing>
     data class Failed(val reason: BrowseFailure) : BrowseResult<Nothing>
 }
+
+/** Результат поиска в одном ящике при поиске по всем сразу. */
+data class MailboxSearchResult(
+    val account: MailAccountConfig,
+    val result: BrowseResult<MailListPage>,
+)
 
 /** Почему не удалось получить письма; текст для пользователя подбирает API на его языке. */
 enum class BrowseFailure { TIMEOUT, AUTH, NO_SENT_FOLDER, FORWARD_MODE, OTHER }
@@ -67,6 +76,37 @@ class MailBrowserService(
         )
         val marked = starred?.uids(accountId, folder, page.uidValidity)?.toSet().orEmpty()
         if (marked.isEmpty()) page else page.copy(items = page.items.map { item -> item.copy(starred = item.uid in marked) })
+    }
+
+    /**
+     * Поиск сразу по всем ящикам пользователя (входящие). Ящики опрашиваются параллельно,
+     * ошибка одного ящика не мешает остальным. Ящики-пересылки пропускаются: входа в почту у них нет.
+     */
+    suspend fun searchAll(
+        ownerId: Long,
+        search: String?,
+        unreadOnly: Boolean,
+        perMailbox: Int,
+    ): List<MailboxSearchResult> = coroutineScope {
+        repository.findAllByOwnerId(ownerId)
+            .filterNot { account -> account.isForward }
+            .map { account ->
+                async {
+                    MailboxSearchResult(
+                        account = account,
+                        result = list(
+                            ownerId = ownerId,
+                            accountId = account.id,
+                            role = MailFolderRole.INBOX,
+                            offset = 0,
+                            limit = perMailbox,
+                            search = search,
+                            unreadOnly = unreadOnly,
+                        ),
+                    )
+                }
+            }
+            .awaitAll()
     }
 
     suspend fun read(

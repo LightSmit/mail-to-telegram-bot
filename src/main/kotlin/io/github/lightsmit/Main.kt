@@ -264,6 +264,7 @@ fun main() = runBlocking {
         adminIds = adminChatIds,
         cancelRenewal = { userId, chargeId -> telegramControlClient.editUserStarSubscription(userId, chargeId, canceled = true) },
         refundStars = { userId, chargeId -> telegramControlClient.refundStarPayment(userId, chargeId) },
+        resumeRenewal = { userId, chargeId -> telegramControlClient.editUserStarSubscription(userId, chargeId, canceled = false) },
     )
     val mailboxQuota = MailboxQuota(registry = accountRegistry, plan = subscriptionService::plan)
 

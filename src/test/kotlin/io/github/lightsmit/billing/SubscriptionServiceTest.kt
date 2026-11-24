@@ -50,6 +50,7 @@ class SubscriptionServiceTest {
     private val store = MemoryStore()
     private val cancelled = mutableListOf<Pair<Long, String>>()
     private val refunded = mutableListOf<Pair<Long, String>>()
+    private val resumed = mutableListOf<Pair<Long, String>>()
 
     private fun service(enabled: Boolean = true, trialDays: Int = 7, trialOnRequest: Boolean = false) = SubscriptionService(
         store = store,
@@ -57,6 +58,7 @@ class SubscriptionServiceTest {
         adminIds = setOf(ADMIN),
         cancelRenewal = { userId, chargeId -> cancelled += userId to chargeId },
         refundStars = { userId, chargeId -> refunded += userId to chargeId },
+        resumeRenewal = { userId, chargeId -> resumed += userId to chargeId },
         clock = { now },
     )
 
@@ -155,6 +157,40 @@ class SubscriptionServiceTest {
         assertEquals(listOf(USER to "charge-1"), cancelled)
         assertFalse(yearly.recurring)
         assertEquals(Instant.parse("2027-12-01T10:00:00Z"), yearly.expiresAt)
+    }
+
+    @Test
+    fun `auto-renewal can be turned off and back on until the term ends`() = runBlocking {
+        val service = service(trialDays = 0)
+        val monthEnd = start.plus(Duration.ofDays(30))
+        service.onPayment(USER, Offer.PRO_MONTH.payload, 100, "charge-1", monthEnd, firstRecurring = true)
+
+        assertEquals(SubscriptionService.AutoRenewResult.OK, service.setAutoRenew(USER, false))
+        assertEquals(listOf(USER to "charge-1"), cancelled)
+        val off = service.status(USER)
+        assertFalse(off.recurring)
+        assertTrue(off.renewalCancelled)
+        assertEquals(Plan.PRO, off.plan)
+        // Пока можно вернуть продление, новую ежемесячную подписку не продаем
+        assertFalse(service.canBuy(USER, Offer.PRO_MONTH))
+
+        assertEquals(SubscriptionService.AutoRenewResult.OK, service.setAutoRenew(USER, true))
+        assertEquals(listOf(USER to "charge-1"), resumed)
+        assertTrue(service.status(USER).recurring)
+
+        service.setAutoRenew(USER, false)
+        now = monthEnd.plusSeconds(60)
+        assertEquals(Plan.FREE, service.plan(USER))
+        assertEquals(SubscriptionService.AutoRenewResult.NOT_SUBSCRIPTION, service.setAutoRenew(USER, true))
+    }
+
+    @Test
+    fun `auto-renewal toggle needs a monthly subscription`() = runBlocking {
+        val service = service(trialDays = 0)
+        service.onPayment(USER, Offer.PRO_YEAR.payload, 1000, "charge-1", null, firstRecurring = false)
+        assertEquals(SubscriptionService.AutoRenewResult.NOT_SUBSCRIPTION, service.setAutoRenew(USER, false))
+        assertEquals(SubscriptionService.AutoRenewResult.NOT_SUBSCRIPTION, service.setAutoRenew(USER, true))
+        assertTrue(cancelled.isEmpty())
     }
 
     @Test

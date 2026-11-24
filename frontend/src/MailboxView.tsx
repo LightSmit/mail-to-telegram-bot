@@ -5,7 +5,7 @@ import { showBackButton } from './telegram'
 type Folder = 'inbox' | 'sent';
 type Sort = 'new' | 'old' | 'sender';
 
-interface MailItem {
+export interface MailItem {
   uid: number;
   fromName: string;
   fromAddress?: string | null;
@@ -40,7 +40,7 @@ interface MailMessage {
   starred?: boolean;
 }
 
-type Request = (
+export type Request = (
   path: string,
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE',
   body?: unknown,
@@ -59,9 +59,9 @@ interface Props {
 const PAGE_SIZE = 30;
 const FREE_PAGE_SIZE = 20;
 // Почтовый сервер может искать долго, особенно в больших ящиках
-const MAIL_TIMEOUT_MS = 65000;
+export const MAIL_TIMEOUT_MS = 65000;
 
-async function readError(response: Response, fallback: string): Promise<string> {
+export async function readError(response: Response, fallback: string): Promise<string> {
   try {
     const body = await response.json();
     if (body && typeof body.error === 'string') return body.error;
@@ -72,7 +72,7 @@ async function readError(response: Response, fallback: string): Promise<string> 
 }
 
 // Сегодня - время, в этом году - день и месяц, иначе - полная дата
-function formatListDate(millis?: number | null): string {
+export function formatListDate(millis?: number | null): string {
   if (!millis) return '';
   const date = new Date(millis);
   const now = new Date();
@@ -86,7 +86,7 @@ function formatListDate(millis?: number | null): string {
 }
 
 /** Поставить или снять звездочку. true - получилось. */
-async function setStar(request: Request, accountId: number, folder: Folder, uidValidity: number, uid: number, value: boolean): Promise<boolean> {
+export async function setStar(request: Request, accountId: number, folder: Folder, uidValidity: number, uid: number, value: boolean): Promise<boolean> {
   try {
     const response = await request(
       `/accounts/${accountId}/messages/${uid}/star?folder=${folder}&v=${uidValidity}`,
@@ -98,7 +98,7 @@ async function setStar(request: Request, accountId: number, folder: Folder, uidV
   }
 }
 
-function StarButton({ starred, onClick, disabled }: { starred: boolean; onClick: () => void; disabled?: boolean }) {
+export function StarButton({ starred, onClick, disabled }: { starred: boolean; onClick: () => void; disabled?: boolean }) {
   return (
     <button
       type="button"
@@ -358,7 +358,7 @@ interface MessageProps {
   onChanged: (patch: Partial<MailItem>) => void;
 }
 
-function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onChanged }: MessageProps) {
+export function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onChanged }: MessageProps) {
   const [message, setMessage] = useState<MailMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);

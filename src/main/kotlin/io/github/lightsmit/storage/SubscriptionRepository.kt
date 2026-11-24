@@ -68,6 +68,15 @@ class SubscriptionRepository : SubscriptionStore {
                     """.trimIndent(),
                 )
                 statement.executeUpdate("CREATE INDEX IF NOT EXISTS payments_user ON payments (user_id, created_at)")
+                // Автопродление выключено пользователем (патч 41)
+                val hasRenewalCancelled = statement.executeQuery("PRAGMA table_info(subscriptions)").use { rs ->
+                    var found = false
+                    while (rs.next()) if (rs.getString("name") == "renewal_cancelled") found = true
+                    found
+                }
+                if (!hasRenewalCancelled) {
+                    statement.executeUpdate("ALTER TABLE subscriptions ADD COLUMN renewal_cancelled INTEGER NOT NULL DEFAULT 0")
+                }
                 statement.executeUpdate(
                     """
                     CREATE TABLE IF NOT EXISTS invites (
@@ -99,8 +108,8 @@ class SubscriptionRepository : SubscriptionStore {
             DatabaseManager.dataSource.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                    INSERT INTO subscriptions (user_id, plan, expires_at, source, charge_id, recurring, reminded_at, ended_notified_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO subscriptions (user_id, plan, expires_at, source, charge_id, recurring, reminded_at, ended_notified_at, updated_at, renewal_cancelled)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(user_id) DO UPDATE SET
                         plan = excluded.plan,
                         expires_at = excluded.expires_at,
@@ -109,7 +118,8 @@ class SubscriptionRepository : SubscriptionStore {
                         recurring = excluded.recurring,
                         reminded_at = excluded.reminded_at,
                         ended_notified_at = excluded.ended_notified_at,
-                        updated_at = excluded.updated_at
+                        updated_at = excluded.updated_at,
+                        renewal_cancelled = excluded.renewal_cancelled
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, subscription.userId)
@@ -121,6 +131,7 @@ class SubscriptionRepository : SubscriptionStore {
                     statement.setNullableLong(7, subscription.remindedAt?.toEpochMilli())
                     statement.setNullableLong(8, subscription.endedNotifiedAt?.toEpochMilli())
                     statement.setLong(9, subscription.updatedAt.toEpochMilli())
+                    statement.setInt(10, if (subscription.renewalCancelled) 1 else 0)
                     statement.executeUpdate()
                 }
             }
@@ -263,6 +274,7 @@ class SubscriptionRepository : SubscriptionStore {
         remindedAt = nullableLong("reminded_at")?.let(Instant::ofEpochMilli),
         endedNotifiedAt = nullableLong("ended_notified_at")?.let(Instant::ofEpochMilli),
         updatedAt = Instant.ofEpochMilli(getLong("updated_at")),
+        renewalCancelled = getInt("renewal_cancelled") == 1,
     )
 
     private fun ResultSet.toPayment(): Payment? {

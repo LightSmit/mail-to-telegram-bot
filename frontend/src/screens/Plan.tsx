@@ -4,7 +4,7 @@ import type { Offer, PlanId, PlanInfo } from '../PlanSection'
 import type { ReferralInfo } from '../ReferralSection'
 import { openInvoice, openTelegramLink } from '../telegram'
 import type { Notify } from '../types'
-import { Icon, ScreenHeader } from '../ui'
+import { Group, Icon, Row, ScreenHeader, SwitchRow } from '../ui'
 
 interface Props {
   info: PlanInfo | null;
@@ -12,6 +12,8 @@ interface Props {
   createInvoice: (offerId: string) => Promise<string | null>;
   onPaid: () => Promise<void>;
   startTrial: () => Promise<boolean>;
+  // Выключить или включить автопродление месячной подписки
+  setAutoRenew: (enabled: boolean) => Promise<boolean>;
   notify: Notify;
 }
 
@@ -38,8 +40,10 @@ function yearSaving(offers: Offer[], year: Offer): number {
   return Math.round((1 - year.stars / (month.stars * 12)) * 100);
 }
 
-export function PlanScreen({ info, referral, createInvoice, onPaid, startTrial, notify }: Props) {
+export function PlanScreen({ info, referral, createInvoice, onPaid, startTrial, setAutoRenew, notify }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
+  // Подтверждение перед выключением автопродления
+  const [confirmOff, setConfirmOff] = useState(false);
   const [selected, setSelected] = useState<PlanId>(info?.plan === 'PRO' ? 'BUSINESS' : 'PRO');
   const [copied, setCopied] = useState(false);
 
@@ -86,6 +90,18 @@ export function PlanScreen({ info, referral, createInvoice, onPaid, startTrial, 
     }
   };
 
+  const toggleRenew = async (enabled: boolean) => {
+    setBusy('renew');
+    try {
+      if (await setAutoRenew(enabled)) setConfirmOff(false);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const renewable = (info.recurring || info.renewalCancelled === true) && Boolean(info.expiresAt);
+  const endDate = info.expiresAt ? formatDate(info.expiresAt) : '';
+
   const plans = (['PRO', 'BUSINESS'] as PlanId[]).filter((plan) => info.offers.some((offer) => offer.plan === plan));
   const shown = plans.includes(selected) ? selected : plans[0];
   const offers = info.offers.filter((offer) => offer.plan === shown);
@@ -120,8 +136,28 @@ export function PlanScreen({ info, referral, createInvoice, onPaid, startTrial, 
         <span className="plan-hero-name">{t.planName(info.plan)}</span>
         <span className="plan-hero-status">{statusLine(info)}</span>
         {info.plan !== 'FREE' && <span className="plan-hero-status">{t.planMailboxes(info.maxMailboxes)}</span>}
-        {info.recurring && <span className="plan-hero-note">{t.planCancelHint}</span>}
       </div>
+
+      {renewable && (
+        <Group footer={confirmOff ? t.autoRenewAskText(endDate) : info.recurring ? t.autoRenewOnHint(endDate) : t.autoRenewOffHint(endDate)}>
+          {confirmOff ? (
+            <>
+              <Row title={busy === 'renew' ? t.loading : t.autoRenewTurnOff} danger onClick={busy ? undefined : () => toggleRenew(false)} />
+              <Row title={t.cancel} accent onClick={() => setConfirmOff(false)} />
+            </>
+          ) : (
+            <SwitchRow
+              icon="sparkle"
+              iconBg="#5A4FB3"
+              title={t.autoRenew}
+              checked={info.recurring}
+              disabled={busy !== null}
+              // Выключение - с подтверждением, включение - сразу
+              onChange={(value) => (value ? toggleRenew(true) : setConfirmOff(true))}
+            />
+          )}
+        </Group>
+      )}
 
       {plans.length > 0 && (
         <>

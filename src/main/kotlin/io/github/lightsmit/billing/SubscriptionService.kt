@@ -28,6 +28,8 @@ class SubscriptionService(
     private val cancelRenewal: suspend (userId: Long, chargeId: String) -> Unit = { _, _ -> },
     // Вернуть звезды за оплату (refundStarPayment)
     private val refundStars: suspend (userId: Long, chargeId: String) -> Unit = { _, _ -> },
+    // Включить обратно отмененное автопродление (editUserStarSubscription, is_canceled=false)
+    private val resumeRenewal: suspend (userId: Long, chargeId: String) -> Unit = { _, _ -> },
     private val clock: () -> Instant = Instant::now,
 ) {
     private val logger = LoggerFactory.getLogger(SubscriptionService::class.java)
@@ -64,8 +66,56 @@ class SubscriptionService(
             admin = false,
             billingEnabled = config.enabled,
             trialAvailable = trialAvailable(userId),
+            renewalCancelled = subscription?.let { value -> canResume(value, clock()) } == true,
         )
     }
+
+    /**
+     * Выключить или включить автопродление ежемесячной подписки Stars из приложения.
+     * Выключенная подписка дорабатывает оплаченный срок, до его конца продление можно вернуть.
+     */
+    suspend fun setAutoRenew(userId: Long, enabled: Boolean): AutoRenewResult = writeLock.withLock {
+        val now = clock()
+        val current = cached(userId)?.takeIf { value -> value.isActive(now) }
+            ?: return@withLock AutoRenewResult.NOT_SUBSCRIPTION
+        val chargeId = current.chargeId ?: return@withLock AutoRenewResult.NOT_SUBSCRIPTION
+
+        if (!enabled) {
+            if (!current.recurring) {
+                return@withLock if (current.renewalCancelled) AutoRenewResult.OK else AutoRenewResult.NOT_SUBSCRIPTION
+            }
+            try {
+                cancelRenewal(userId, chargeId)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                logger.warn("Failed to cancel renewal for user {}: {}", userId, exception.message)
+                return@withLock AutoRenewResult.FAILED
+            }
+            // Подписка больше не продлится: напомним об окончании, как для обычного срока
+            persist(current.copy(recurring = false, renewalCancelled = true, remindedAt = null, updatedAt = now))
+            logger.info("Auto-renewal of user {} turned off", userId)
+            return@withLock AutoRenewResult.OK
+        }
+
+        if (current.recurring) return@withLock AutoRenewResult.OK
+        if (!canResume(current, now)) return@withLock AutoRenewResult.NOT_SUBSCRIPTION
+        try {
+            resumeRenewal(userId, chargeId)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Failed to resume renewal for user {}: {}", userId, exception.message)
+            return@withLock AutoRenewResult.FAILED
+        }
+        persist(current.copy(recurring = true, renewalCancelled = false, updatedAt = now))
+        logger.info("Auto-renewal of user {} turned on again", userId)
+        AutoRenewResult.OK
+    }
+
+    private fun canResume(subscription: Subscription, now: Instant): Boolean =
+        subscription.renewalCancelled && !subscription.recurring && subscription.chargeId != null &&
+            subscription.source == SubscriptionSource.STARS && subscription.isActive(now)
 
     /**
      * Можно ли включить пробный период кнопкой: оплата включена, пробный режим «по кнопке»
@@ -177,6 +227,8 @@ class SubscriptionService(
         if (current.lifetime) return false
         if (!offer.recurring) return true
         if (current.recurring) return false
+        // Автопродление выключено, но срок идет: его включают обратно, а не покупают заново
+        if (canResume(current, now)) return false
         val monthLater = offer.term.addTo(now) ?: return false
         return current.expiresAt?.isAfter(monthLater) != true
     }
@@ -460,6 +512,8 @@ class SubscriptionService(
     private fun randomCode(): String = buildString {
         repeat(INVITE_CODE_LENGTH) { append(INVITE_ALPHABET[random.nextInt(INVITE_ALPHABET.length)]) }
     }
+
+    enum class AutoRenewResult { OK, NOT_SUBSCRIPTION, FAILED }
 
     data class RevokeResult(val hadSubscription: Boolean, val renewalCancelled: Boolean, val previousPlan: Plan?)
 
