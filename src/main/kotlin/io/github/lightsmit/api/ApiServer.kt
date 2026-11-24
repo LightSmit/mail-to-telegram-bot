@@ -147,6 +147,8 @@ data class MailListPageDto(
     val hasMore: Boolean,
     // Бесплатный тариф: показаны только последние письма, остальные - в Pro
     val limited: Boolean = false,
+    // Быстрый поиск просмотрел не все свежие письма (почта отвечает медленно)
+    val partial: Boolean = false,
 )
 
 @Serializable
@@ -167,6 +169,7 @@ private fun MailListPage.toDto() = MailListPageDto(
     uidValidity = uidValidity,
     total = total,
     hasMore = hasMore,
+    partial = partial,
     items = items.map { item ->
         MailListItemDto(
             uid = item.uid,

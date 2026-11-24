@@ -36,6 +36,8 @@ data class MailListPage(
     val total: Int,
     val items: List<MailListItem>,
     val hasMore: Boolean,
+    // Быстрый поиск не успел просмотреть все свежие письма: почта отвечает медленно
+    val partial: Boolean = false,
 )
 
 /** Открытое письмо. Вложения - только имена, сами файлы присылаются в чат по кнопке. */

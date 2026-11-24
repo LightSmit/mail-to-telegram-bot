@@ -33,7 +33,7 @@ type Route =
   | { name: 'filters'; id: number }
   | { name: 'group'; id: number }
   | { name: 'password'; id: number }
-  | { name: 'mail'; id: number }
+  | { name: 'mail'; id: number; q?: string }
   | { name: 'search' };
 
 // Пока приложение открыто, статусы ящиков обновляются сами
@@ -334,7 +334,7 @@ function App() {
             mailboxes={accounts.filter((account) => !account.forwardAddress)}
             hasForwardMailboxes={accounts.some((account) => Boolean(account.forwardAddress))}
             onUpgrade={upgrade}
-            onOpenMailbox={(id) => push({ name: 'mail', id })}
+            onOpenMailbox={(id, q) => push({ name: 'mail', id, q })}
             onBack={pop}
           />
         );
@@ -418,6 +418,7 @@ function App() {
             limited={!pro}
             onUpgrade={upgrade}
             onClose={pop}
+            initialQuery={route.q}
           />
         );
     }

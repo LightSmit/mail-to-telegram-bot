@@ -381,7 +381,8 @@ const ru = {
   searchAllStart: 'Начните вводить, чтобы искать',
   searchAllSearching: 'Ищем…',
   searchAllWindow: 'Здесь ищем по последним 2000 письмам каждого ящика. Письма старше найдет поиск внутри ящика.',
-  searchAllMore: (n: number) => `и еще ${n} - открыть ящик`,
+  searchAllOpen: 'Искать дальше в этом ящике',
+  searchAllPartial: 'Почта отвечает медленно: здесь проверены не все свежие письма',
   searchAllForwardSkipped: 'Ящики с пересылкой без пароля в поиске не участвуют: бот не заходит в них.',
   searchAllFound: (n: number) => `Найдено: ${n}`,
 };
@@ -703,7 +704,8 @@ const en: Dictionary = {
   searchAllStart: 'Start typing to search',
   searchAllSearching: 'Searching…',
   searchAllWindow: 'Here we search the latest 2000 emails of each mailbox. Older emails are found by the search inside a mailbox.',
-  searchAllMore: (n: number) => `and ${n} more - open the mailbox`,
+  searchAllOpen: 'Search further in this mailbox',
+  searchAllPartial: 'The mailbox responds slowly: not all recent emails were checked here',
   searchAllForwardSkipped: 'Mailboxes connected by forwarding are not searched: the bot does not sign in to them.',
   searchAllFound: (n: number) => `Found: ${n}`,
 };

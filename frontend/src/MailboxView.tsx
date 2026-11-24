@@ -54,6 +54,8 @@ interface Props {
   limited?: boolean;
   onUpgrade?: () => void;
   onClose: () => void;
+  // Открыть сразу с поиском (переход из поиска по всем ящикам)
+  initialQuery?: string;
 }
 
 const PAGE_SIZE = 30;
@@ -125,10 +127,10 @@ function formatFullDate(millis?: number | null): string {
   });
 }
 
-export function MailboxView({ account, request, limited = false, onUpgrade, onClose }: Props) {
+export function MailboxView({ account, request, limited = false, onUpgrade, onClose, initialQuery = '' }: Props) {
   const [folder, setFolder] = useState<Folder>('inbox');
-  const [queryInput, setQueryInput] = useState('');
-  const [query, setQuery] = useState('');
+  const [queryInput, setQueryInput] = useState(limited ? '' : initialQuery);
+  const [query, setQuery] = useState(limited ? '' : initialQuery);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [starredOnly, setStarredOnly] = useState(false);
   const [starError, setStarError] = useState<string | null>(null);

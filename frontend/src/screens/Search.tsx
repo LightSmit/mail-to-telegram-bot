@@ -17,6 +17,9 @@ interface SearchGroup {
   uidValidity?: number | null;
   total: number;
   items: MailItem[];
+  // Дальше могут быть еще совпадения / почта медленная, просмотрены не все свежие письма
+  hasMore?: boolean;
+  partial?: boolean;
   error?: string | null;
 }
 
@@ -30,7 +33,7 @@ interface Props {
   mailboxes: Account[];
   hasForwardMailboxes: boolean;
   onUpgrade?: () => void;
-  onOpenMailbox: (accountId: number) => void;
+  onOpenMailbox: (accountId: number, query: string) => void;
   onBack: () => void;
 }
 
@@ -89,8 +92,11 @@ export function SearchScreen({ request, pro, mailboxes, hasForwardMailboxes, onU
           patch(account.id, { loading: false, error: await readError(response, t.loadEmailsFailed) });
           return;
         }
-        const page: { uidValidity: number; total: number; items: MailItem[] } = await response.json();
-        patch(account.id, { loading: false, uidValidity: page.uidValidity, total: page.total, items: page.items });
+        const page: { uidValidity: number; total: number; items: MailItem[]; hasMore: boolean; partial?: boolean } = await response.json();
+        patch(account.id, {
+          loading: false, uidValidity: page.uidValidity, total: page.total, items: page.items,
+          hasMore: page.hasMore, partial: page.partial === true,
+        });
       } catch {
         patch(account.id, { loading: false, error: t.mailServerTimeout });
       }
@@ -130,7 +136,7 @@ export function SearchScreen({ request, pro, mailboxes, hasForwardMailboxes, onU
 
   const found = groups?.reduce((sum, group) => sum + group.total, 0) ?? 0;
   const loading = groups?.some((group) => group.loading) ?? false;
-  const visibleGroups = groups?.filter((group) => group.loading || group.items.length > 0 || group.error) ?? [];
+  const visibleGroups = groups?.filter((group) => group.loading || group.items.length > 0 || group.error || group.partial) ?? [];
 
   return (
     <div className="screen">
@@ -201,10 +207,13 @@ export function SearchScreen({ request, pro, mailboxes, hasForwardMailboxes, onU
                       </button>
                     </li>
                   ))}
-                  {group.total > group.items.length && (
+                  {(group.hasMore || group.partial || group.total > group.items.length) && (
                     <li>
-                      <button type="button" className="row row-accent search-more" onClick={() => onOpenMailbox(group.accountId)}>
-                        <span className="row-text"><span className="row-title">{t.searchAllMore(group.total - group.items.length)}</span></span>
+                      <button type="button" className="row row-accent search-more" onClick={() => onOpenMailbox(group.accountId, query)}>
+                        <span className="row-text">
+                          <span className="row-title">{t.searchAllOpen}</span>
+                          {group.partial && <span className="row-subtitle">{t.searchAllPartial}</span>}
+                        </span>
                         <Icon name="chevron-right" size={14} className="row-chevron" />
                       </button>
                     </li>

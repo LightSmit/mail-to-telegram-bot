@@ -343,6 +343,29 @@ class ImapMailClient(
         withFolder(account, CONTENT_TIMEOUT_MILLIS, Folder.READ_ONLY, role) { folder, uidFolder ->
             val query = search?.trim()?.takeIf(String::isNotEmpty)
 
+            // Быстрый поиск: свежие письма пачками от новых к старым, пока не найдено нужное
+            // число или не вышло время. Медленная почта (Mail.ru) отдает письма неспешно
+            if (query != null && !serverSearch) {
+                val quick = quickSearch(folder, query, unreadOnly, want = offset + limit)
+                val page = quick.messages.drop(offset).take(limit).toTypedArray()
+                if (page.isNotEmpty()) {
+                    folder.fetch(
+                        page,
+                        FetchProfile().apply {
+                            add(FetchProfile.Item.CONTENT_INFO)
+                            add(UIDFolder.FetchProfileItem.UID)
+                        },
+                    )
+                }
+                return@withFolder MailListPage(
+                    uidValidity = uidFolder.uidValidity,
+                    total = quick.messages.size,
+                    items = page.map { message -> listItem(message, uidFolder.getUID(message)) },
+                    hasMore = quick.stoppedEarly,
+                    partial = quick.timedOut,
+                )
+            }
+
             // Без условий берем по номерам с конца папки
             val found: List<Message>? = when {
                 query != null -> searchMessages(folder, query, unreadOnly, serverSearch)
@@ -446,6 +469,40 @@ class ImapMailClient(
         }
 
         return found.values.sortedBy { message -> message.messageNumber }
+    }
+
+    private class QuickSearch(val messages: List<Message>, val stoppedEarly: Boolean, val timedOut: Boolean)
+
+    // Новые письма первыми. stoppedEarly - дальше могут быть еще совпадения
+    private fun quickSearch(folder: Folder, query: String, unreadOnly: Boolean, want: Int): QuickSearch {
+        val needle = normalizeForSearch(query)
+        val count = folder.messageCount
+        val lowest = maxOf(1, count - SEARCH_SCAN_LIMIT + 1)
+        val deadline = System.nanoTime() + QUICK_SEARCH_BUDGET_NANOS
+        val found = mutableListOf<Message>()
+        var end = count
+        var timedOut = false
+
+        while (end >= lowest && found.size < want) {
+            if (System.nanoTime() > deadline) {
+                timedOut = true
+                break
+            }
+            val start = maxOf(lowest, end - QUICK_SEARCH_CHUNK + 1)
+            val chunk = folder.getMessages(start, end)
+            folder.fetch(
+                chunk,
+                FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(FetchProfile.Item.FLAGS)
+                },
+            )
+            chunk.reversed()
+                .filter { message -> (!unreadOnly || !isSeen(message)) && matchesSearch(message, needle) }
+                .forEach { message -> found.add(message) }
+            end = start - 1
+        }
+        return QuickSearch(found.take(want), stoppedEarly = end >= lowest, timedOut = timedOut)
     }
 
     private fun matchesSearch(message: Message, needle: String): Boolean {
@@ -593,6 +650,9 @@ class ImapMailClient(
         private const val MAX_VIEW_BODY_CHARS = 100_000
         // Сколько последних писем бот просматривает сам при поиске
         private const val SEARCH_SCAN_LIMIT = 2000
+        // Быстрый поиск: пачка писем за один запрос и сколько всего ждем почту
+        private const val QUICK_SEARCH_CHUNK = 100
+        private const val QUICK_SEARCH_BUDGET_NANOS = 20_000_000_000L
         // Больше отмеченных писем за раз не показываем
         private const val MAX_UID_LIST = 500
         private val SENT_FOLDER_NAMES = setOf("sent", "sent items", "sent messages", "sent mail", "отправленные")
