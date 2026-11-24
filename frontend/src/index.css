@@ -1,90 +1,53 @@
 /*
-  Фон, текст и подсказки берутся из темы Telegram (переменные --tg-theme-*,
-  их выставляет telegram-web-app.js), поэтому приложение выглядит родным
-  и в светлой, и в темной теме. Значения после запятой - запасные, для браузера.
-  Акцентный цвет свой, фирменный: фиолетово-голубой, как на аватарке бота.
+  Цвета берутся из темы Telegram (переменные --tg-theme-*, их выставляет
+  telegram-web-app.js), поэтому приложение выглядит родным и в светлой,
+  и в темной теме. Значения после запятой - запасные (темная тема), для браузера.
 */
 :root {
-  --fb-bg: #ffffff;
-  --fb-surface: #f1f2f5;
-  --fb-text: #15181d;
-  --fb-hint: #7a8290;
-  --fb-accent-text: #ffffff;
+  --bg: var(--tg-theme-secondary-bg-color, #0e1621);
+  --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #17212b));
+  --text: var(--tg-theme-text-color, #f5f5f5);
+  --hint: var(--tg-theme-hint-color, #8a99a8);
+  --section-header: var(--tg-theme-section-header-text-color, var(--hint));
+  --link: var(--tg-theme-link-color, #6ab3f3);
+  --accent: var(--tg-theme-button-color, #3f78b8);
+  --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  --danger: var(--tg-theme-destructive-text-color, #f08a82);
+  --separator: var(--tg-theme-section-separator-color, rgba(128, 140, 152, 0.16));
+  --tint: color-mix(in srgb, var(--link) 16%, transparent);
+  --pressed: color-mix(in srgb, var(--text) 6%, transparent);
 
-  /* Фирменные цвета (аватарка бота) */
-  --brand-violet: #6c4dff;
-  --brand-blue: #2a7de1;
-  --brand-gradient: linear-gradient(135deg, var(--brand-violet), var(--brand-blue));
-  --brand-accent: #5b4ce8;
-  --brand-link: #5443d8;
-  --fb-danger: #e0423f;
-  --fb-separator: rgba(120, 128, 140, 0.22);
+  --ok: #4fbf67;
+  --ok-text: #6fcf86;
+  --warn: #e0a33b;
+  --warn-text: #e8b65a;
+  --err: #e5534b;
+  --err-text: #f08a82;
+  --violet: #a68bff;
 
-  --bg: var(--tg-theme-bg-color, var(--fb-bg));
-  --surface: var(--tg-theme-secondary-bg-color, var(--fb-surface));
-  --text: var(--tg-theme-text-color, var(--fb-text));
-  --hint: var(--tg-theme-hint-color, var(--fb-hint));
-  --accent: var(--brand-accent);
-  --accent-text: var(--fb-accent-text);
-  --link: var(--brand-link);
-  --danger: var(--tg-theme-destructive-text-color, var(--fb-danger));
-  --separator: var(--tg-theme-section-separator-color, var(--fb-separator));
-  --ok: #2fa66a;
-  --warn: #e0a019;
-
-  /* Полоска авиапочты в фирменных цветах: единственный декоративный элемент */
-  --airmail-red: var(--brand-violet);
-  --airmail-blue: #2fb8ff;
-  --airmail: repeating-linear-gradient(
-    -45deg,
-    var(--airmail-red) 0 12px,
-    transparent 12px 18px,
-    var(--airmail-blue) 18px 30px,
-    transparent 30px 36px
-  );
-
-  --font: -apple-system, 'SF Pro Text', Roboto, 'Segoe UI', system-ui, sans-serif;
+  --font: 'Inter', -apple-system, 'SF Pro Text', Roboto, 'Segoe UI', system-ui, sans-serif;
   --radius: 14px;
 
-  color-scheme: light dark;
-  font: 16px/1.45 var(--font);
+  color-scheme: dark;
+  font: 16px/1.4 var(--font);
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --fb-bg: #17191d;
-    --fb-surface: #22252b;
-    --fb-text: #eef0f3;
-    --fb-hint: #8d95a3;
-    --fb-separator: rgba(160, 168, 180, 0.18);
-  }
-}
-
-/* В темной теме фирменный цвет светлее, чтобы ссылки и переключатели читались на темном фоне */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --brand-accent: #7b6cff;
-    --brand-link: #a59bff;
-  }
-}
-
-/* Telegram сообщает свою тему атрибутом, он важнее настроек браузера */
-:root[data-tg-scheme='dark'] {
-  --brand-accent: #7b6cff;
-  --brand-link: #a59bff;
-}
-
+/* В светлой теме Telegram цвета статусов темнее, чтобы читались на белом */
 :root[data-tg-scheme='light'] {
-  --brand-accent: #5b4ce8;
-  --brand-link: #5443d8;
+  color-scheme: light;
+  --ok-text: #1f8a44;
+  --warn-text: #a86a00;
+  --err-text: #c8322b;
+  --violet: #6c4dff;
 }
 
 * {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -104,13 +67,14 @@ ul {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: inherit;
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--link);
   outline-offset: 2px;
 }
 

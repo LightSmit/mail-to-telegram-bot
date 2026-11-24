@@ -1,179 +1,99 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
-import { initData, openLink } from './telegram'
+import { initData, showBackButton } from './telegram'
 import { lang, rememberLang, t, type Lang } from './i18n'
-import { LanguageSwitch } from './LanguageSwitch'
-import { FiltersPanel, withDefaults, type MailFilters } from './FiltersPanel'
-import { PasswordPanel } from './PasswordPanel'
-import { ForwardPanel } from './ForwardPanel'
-import { NotificationsSection, type NotificationSettings } from './NotificationsSection'
+import { LOGIN_TIMEOUT_MS, describeError, errorText, request, sleep } from './api'
+import { withDefaults, type MailFilters } from './FiltersPanel'
+import type { NotificationSettings } from './NotificationsSection'
 import { MailboxView } from './MailboxView'
-import { DataSection } from './DataSection'
-import { PlanSection, hasPro, type PlanInfo } from './PlanSection'
-import { GroupPanel } from './GroupPanel'
-import { ReferralSection, type ReferralInfo } from './ReferralSection'
-import { CUSTOM_PROVIDER_ID, CUSTOM_STEPS, PROVIDERS, detectProvider, findProvider, providerHint, providerSteps, providerTitle, stepKey, stepUrl, type ProviderStep } from './providers'
+import { hasPro, type PlanInfo } from './PlanSection'
+import type { ReferralInfo } from './ReferralSection'
+import { Sky, loadSkyEnabled, saveSkyEnabled } from './Sky'
+import type { Account, Forwarding, NoticeKind } from './types'
+import { Icon, Notice } from './ui'
+import { Home, Onboarding } from './screens/Home'
+import { AddScreen, type AddMode } from './screens/Add'
+import { AddPassword, type PasswordForm } from './screens/AddPassword'
+import { ForwardSetup } from './screens/ForwardSetup'
+import { MailboxScreen } from './screens/Mailbox'
+import { FiltersScreen } from './screens/Filters'
+import { GroupScreen, PasswordScreen } from './screens/SubScreens'
+import { PlanScreen } from './screens/Plan'
+import { SettingsScreen } from './screens/Settings'
 
-type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
+type Tab = 'home' | 'plan' | 'settings';
 
-interface Account {
-  id: number;
-  name: string;
-  email: string;
-  host: string;
-  status?: MailboxStatus;
-  problem?: string | null;
-  filters?: MailFilters;
-  // Ящик сверх лимита тарифа: письма из него не приходят
-  overLimit?: boolean;
-  // Письма ящика приходят в групповой чат (Business)
-  groupLinked?: boolean;
-  groupTitle?: string | null;
-  // Ящик без пароля: письма пересылаются на этот адрес бота
-  forwardAddress?: string | null;
-  forwardReceived?: boolean;
-}
+// Экраны поверх вкладок: открываются по нажатию, «Назад» возвращает к предыдущему
+type Route =
+  | { name: 'add' }
+  | { name: 'addPassword'; email: string; providerId: string }
+  | { name: 'forward'; id: number }
+  | { name: 'mailbox'; id: number }
+  | { name: 'filters'; id: number }
+  | { name: 'group'; id: number }
+  | { name: 'password'; id: number }
+  | { name: 'mail'; id: number };
 
-// Режим «Пересылка без пароля» на сервере
-interface Forwarding {
-  enabled: boolean;
-  domain?: string | null;
-}
-
-type AddMode = 'forward' | 'password';
-
-type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | null;
-
-const REQUEST_TIMEOUT_MS = 20000;
-// Добавление включает проверку входа на почтовом сервере: это может занять до минуты
-const ADD_ACCOUNT_TIMEOUT_MS = 70000;
 // Пока приложение открыто, статусы ящиков обновляются сами
 const REFRESH_INTERVAL_MS = 15000;
 // После оплаты сервер узнает о ней из сообщения Telegram: проверяем тариф несколько раз
 const PLAN_POLL_ATTEMPTS = 6;
 const PLAN_POLL_DELAY_MS = 1500;
-
-// Класс цвета статуса: пауза и ящик сверх лимита - серые, пересылка без писем - «подключается»
-function statusKind(account: Account): string {
-  if (account.filters?.paused || account.overLimit) return 'paused';
-  if (account.forwardAddress && !account.forwardReceived) return 'connecting';
-  return (account.status ?? 'CONNECTING').toLowerCase();
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function describeError(error: unknown): string {
-  if (error instanceof DOMException && error.name === 'AbortError') {
-    return t.serverTimeout;
-  }
-  return t.noConnection;
-}
-
-// 401: Telegram не передал данные входа (приложение открыто не из чата с ботом)
-function httpError(prefix: string, status: number): string {
-  if (status === 401) return t.reopenFromChat(prefix);
-  return `${prefix} (HTTP ${status})`;
-}
-
-// Сервер присылает понятный текст ошибки в поле error
-async function errorText(response: Response, prefix: string): Promise<string> {
-  try {
-    const body = await response.json();
-    if (body && typeof body.error === 'string' && response.status !== 401) {
-      return body.error;
-    }
-  } catch {
-    // тело не JSON
-  }
-  return httpError(prefix, response.status);
-}
-
-function statusLabel(account: Account): string {
-  if (account.filters?.paused) return t.statusPaused;
-  if (account.overLimit) return t.statusOverLimit;
-  if (account.forwardAddress) return account.forwardReceived ? t.forwardWorking : t.forwardStatus;
-  switch (account.status) {
-    case 'OK':
-      return t.statusOk;
-    case 'ERROR':
-      return account.problem ?? t.statusError;
-    default:
-      return t.statusConnecting;
-  }
-}
+// Сообщения об успехе исчезают сами, об ошибке - висят, пока их не закроют
+const NOTICE_HIDE_MS = 4500;
 
 function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
-  const [filtersOpenId, setFiltersOpenId] = useState<number | null>(null);
-  // Открытый ящик: просмотр его писем вместо главного экрана
-  const [browsingId, setBrowsingId] = useState<number | null>(null);
-  // Тариф: null - еще не загружен (до загрузки ничего не блокируем)
+  // Список ящиков хоть раз загрузился: без этого при ошибке связи показали бы экран первого запуска
+  const [loaded, setLoaded] = useState(false);
   const [plan, setPlan] = useState<PlanInfo | null>(null);
   const [referral, setReferral] = useState<ReferralInfo | null>(null);
-  const [notice, setNotice] = useState<Notice>(
-    initData ? null : { kind: 'error', text: t.openFromTelegram }
-  );
-
-  // Форма
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [providerId, setProviderId] = useState('');
-  const [providerTouched, setProviderTouched] = useState(false);
-  const [customHost, setCustomHost] = useState('');
-  // Пересылка без пароля: доступна, если включена на сервере; по умолчанию предлагаем ее
   const [forwarding, setForwarding] = useState<Forwarding | null>(null);
-  const [addMode, setAddMode] = useState<AddMode>('forward');
-  // Только что подключенный ящик-пересылка: его адрес показываем сразу
-  const [freshForwardId, setFreshForwardId] = useState<number | null>(null);
+  const [notice, setNotice] = useState<{ kind: NoticeKind; text: string } | null>(
+    initData ? null : { kind: 'error', text: t.openFromTelegram },
+  );
+  const [tab, setTab] = useState<Tab>('home');
+  const [stack, setStack] = useState<Route[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [sky, setSky] = useState(loadSkyEnabled);
+  const mainRef = useRef<HTMLElement>(null);
 
-  // Воронка: какую почту выбрал человек (сервер записывает только первый выбор)
+  const notify = useCallback((kind: NoticeKind, text: string) => setNotice(text ? { kind, text } : null), []);
+
   useEffect(() => {
-    if (!providerId) return;
-    request('/funnel', 'POST', { step: 'provider', detail: providerId }).catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerId]);
+    if (!notice || notice.kind === 'error') return;
+    const timer = setTimeout(() => setNotice(null), NOTICE_HIDE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
-  // Относительный путь: в разработке его проксирует Vite, в проде - Caddy.
-  const API_URL = import.meta.env.VITE_API_URL ?? '/api';
+  const push = (route: Route) => setStack((current) => [...current, route]);
+  const pop = useCallback(() => setStack((current) => current.slice(0, -1)), []);
+  const reset = (routes: Route[] = []) => setStack(routes);
+  const top = stack[stack.length - 1];
 
-  const request = async (
-    path: string,
-    method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
-    body?: unknown,
-    timeoutMs: number = REQUEST_TIMEOUT_MS,
-  ) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetch(`${API_URL}${path}`, {
-        method,
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Telegram-Init-Data': initData
-        },
-        body: body === undefined ? undefined : JSON.stringify(body)
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  };
+  // Новый экран - с начала страницы
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [stack.length, tab]);
+
+  // Системная кнопка «Назад» Telegram; письма управляют ею сами
+  useEffect(() => {
+    if (!top || top.name === 'mail') return;
+    return showBackButton(pop);
+  }, [top, pop]);
 
   const fetchAccounts = async (silent = false) => {
     try {
       const response = await request('/accounts');
       if (response.ok) {
         setAccounts(await response.json());
+        setLoaded(true);
       } else if (!silent) {
-        setNotice({ kind: 'error', text: await errorText(response, t.loadMailboxesFailed) });
+        notify('error', await errorText(response, t.loadMailboxesFailed));
       }
     } catch (error) {
-      if (!silent) setNotice({ kind: 'error', text: describeError(error) });
+      if (!silent) notify('error', describeError(error));
     } finally {
       setLoading(false);
     }
@@ -191,90 +111,10 @@ function App() {
     }
   };
 
-  // Оплата прошла в Telegram: ждем, пока бот получит ее и обновит тариф
-  const refreshAfterPayment = async () => {
-    const before = plan;
-    for (let attempt = 0; attempt < PLAN_POLL_ATTEMPTS; attempt++) {
-      const info = await fetchPlan();
-      if (info && (info.plan !== before?.plan || info.expiresAt !== before?.expiresAt)) break;
-      await sleep(PLAN_POLL_DELAY_MS);
-    }
-    await fetchAccounts(true);
-  };
-
-  const createInvoice = async (offerId: string): Promise<string | null> => {
+  const fetchJson = async <T,>(path: string, set: (value: T) => void) => {
     try {
-      const response = await request('/plan/invoice', 'POST', { offer: offerId });
-      if (response.ok) return (await response.json()).link;
-      setNotice({ kind: 'error', text: await errorText(response, t.paymentFailed) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return null;
-  };
-
-  const startTrial = async (): Promise<boolean> => {
-    setNotice({ kind: 'info', text: t.trialStarting });
-    try {
-      const response = await request('/plan/trial', 'POST');
-      if (response.ok) {
-        setPlan(await response.json());
-        setNotice({ kind: 'ok', text: t.trialStarted });
-        await fetchAccounts(true);
-        return true;
-      }
-      setNotice({ kind: 'error', text: await errorText(response, t.trialFailed) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return false;
-  };
-
-  const createGroupLink = async (account: Account): Promise<string | null> => {
-    try {
-      const response = await request(`/accounts/${account.id}/group`, 'POST');
-      if (response.ok) return (await response.json()).link;
-      setNotice({ kind: 'error', text: await errorText(response, t.groupLinkFailed) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return null;
-  };
-
-  const unlinkGroup = async (account: Account): Promise<boolean> => {
-    try {
-      const response = await request(`/accounts/${account.id}/group`, 'DELETE');
-      if (response.ok) {
-        setNotice({ kind: 'ok', text: t.groupUnlinked });
-        await fetchAccounts(true);
-        return true;
-      }
-      setNotice({ kind: 'error', text: await errorText(response, t.groupUnlinkFailed) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return false;
-  };
-
-  const showPlans = () => {
-    setBrowsingId(null);
-    setFiltersOpenId(null);
-    setTimeout(() => document.getElementById('plan')?.scrollIntoView({ behavior: 'smooth' }), 50);
-  };
-
-  const fetchForwarding = async () => {
-    try {
-      const response = await request('/forwarding');
-      if (response.ok) setForwarding(await response.json());
-    } catch {
-      // без связи режим пересылки просто не предлагаем
-    }
-  };
-
-  const fetchReferral = async () => {
-    try {
-      const response = await request('/referral');
-      if (response.ok) setReferral(await response.json());
+      const response = await request(path);
+      if (response.ok) set(await response.json());
     } catch {
       // без связи раздел просто не показываем
     }
@@ -283,167 +123,12 @@ function App() {
   useEffect(() => {
     fetchAccounts();
     fetchPlan();
-    fetchReferral();
-    fetchForwarding();
+    fetchJson<ReferralInfo>('/referral', setReferral);
+    fetchJson<Forwarding>('/forwarding', setForwarding);
     const timer = setInterval(() => fetchAccounts(true), REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Сервис определяется по адресу, пока пользователь не выбрал его сам
-  const onEmailChange = (value: string) => {
-    setEmail(value);
-    if (!providerTouched) {
-      setProviderId(detectProvider(value)?.id ?? '');
-    }
-  };
-
-  const provider = findProvider(providerId);
-  const isCustom = providerId === CUSTOM_PROVIDER_ID;
-  const host = isCustom ? customHost.trim() : provider?.host ?? '';
-  const steps: ProviderStep[] | null = provider ? providerSteps(provider) : isCustom ? CUSTOM_STEPS : null;
-
-  const forwardMode = forwarding?.enabled === true && addMode === 'forward';
-
-  const handleAddForward = async () => {
-    setSubmitting(true);
-    setNotice({ kind: 'info', text: t.forwardCreating });
-    try {
-      const response = await request('/accounts/forward', 'POST', { name: name.trim(), email: email.trim() });
-      if (response.ok) {
-        const added: Account = await response.json();
-        setNotice({ kind: 'ok', text: t.forwardAdded });
-        setEmail(''); setName(''); setProviderId(''); setProviderTouched(false);
-        await fetchAccounts();
-        setFreshForwardId(added.id);
-        setFiltersOpenId(added.id);
-        setTimeout(() => document.getElementById(`mailbox-${added.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
-      } else {
-        setNotice({ kind: 'error', text: await errorText(response, t.addFailed) });
-      }
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleAddAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (forwardMode) {
-      await handleAddForward();
-      return;
-    }
-    if (!host) {
-      setNotice({ kind: 'error', text: t.chooseProvider });
-      return;
-    }
-
-    setSubmitting(true);
-    setNotice({ kind: 'info', text: t.checkingLogin });
-    try {
-      const response = await request('/accounts', 'POST', {
-        name: name.trim(),
-        host,
-        port: 993,
-        username: email.trim(),
-        appPassword: password.trim(),
-      }, ADD_ACCOUNT_TIMEOUT_MS);
-
-      if (response.ok) {
-        setNotice({ kind: 'ok', text: t.mailboxAdded });
-        setEmail(''); setPassword(''); setName(''); setProviderId(''); setProviderTouched(false); setCustomHost('');
-        await fetchAccounts();
-      } else {
-        setNotice({ kind: 'error', text: await errorText(response, t.addFailed) });
-      }
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleSaveFilters = async (account: Account, filters: MailFilters): Promise<boolean> => {
-    try {
-      const response = await request(`/accounts/${account.id}/filters`, 'PUT', filters);
-      if (response.ok) {
-        const saved = withDefaults(await response.json());
-        setAccounts((current) => current.map((item) => (item.id === account.id ? { ...item, filters: saved } : item)));
-        setNotice({ kind: 'ok', text: t.filtersSaved(account.email) });
-        return true;
-      }
-      setNotice({ kind: 'error', text: await errorText(response, t.filtersFailed) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return false;
-  };
-
-  const handleUpdatePassword = async (account: Account, newPassword: string): Promise<boolean> => {
-    setNotice({ kind: 'info', text: t.checkingPassword(account.email) });
-    try {
-      const response = await request(`/accounts/${account.id}/password`, 'PUT', { appPassword: newPassword }, ADD_ACCOUNT_TIMEOUT_MS);
-      if (response.ok) {
-        setNotice({ kind: 'ok', text: t.passwordUpdated(account.email) });
-        await fetchAccounts(true);
-        return true;
-      }
-      setNotice({ kind: 'error', text: await errorText(response, t.passwordFailed) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return false;
-  };
-
-  const loadNotificationSettings = async (): Promise<NotificationSettings | null> => {
-    try {
-      const response = await request('/settings');
-      return response.ok ? await response.json() : null;
-    } catch {
-      return null;
-    }
-  };
-
-  const saveNotificationSettings = async (settings: NotificationSettings): Promise<NotificationSettings | null> => {
-    try {
-      const response = await request('/settings', 'PUT', settings);
-      if (response.ok) {
-        setNotice({ kind: 'ok', text: t.notifySaved });
-        return await response.json();
-      }
-      setNotice({ kind: 'error', text: await errorText(response, t.notifyFailed) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return null;
-  };
-
-  const handleDeleteAllData = async (): Promise<boolean> => {
-    try {
-      const response = await request('/me', 'DELETE');
-      if (response.ok) {
-        setAccounts([]);
-        setNotice({ kind: 'ok', text: t.dataDeleted });
-        return true;
-      }
-      setNotice({ kind: 'error', text: await errorText(response, t.dataDeleteFailed) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return false;
-  };
-
-  const saveLanguage = async (value: Lang): Promise<boolean> => {
-    try {
-      const response = await request('/language', 'PUT', { language: value });
-      if (response.ok) return true;
-      setNotice({ kind: 'error', text: await errorText(response, t.noServer) });
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    }
-    return false;
-  };
 
   // Язык мог быть выбран в боте (/language) или на другом устройстве: сверяемся с сервером один раз
   useEffect(() => {
@@ -461,281 +146,332 @@ function App() {
         // без связи остаемся на текущем языке
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleDelete = async (account: Account) => {
-    // Удаление в два нажатия: первое спрашивает подтверждение
-    if (confirmDeleteId !== account.id) {
-      setConfirmDeleteId(account.id);
+  const withNotice = async (action: () => Promise<Response>, failPrefix: string, onOk: (response: Response) => Promise<void> | void): Promise<boolean> => {
+    try {
+      const response = await action();
+      if (response.ok) {
+        await onOk(response);
+        return true;
+      }
+      notify('error', await errorText(response, failPrefix));
+    } catch (error) {
+      notify('error', describeError(error));
+    }
+    return false;
+  };
+
+  const showPlans = () => {
+    reset();
+    setTab('plan');
+  };
+
+  // Подключение
+
+  const continueAdd = async (mode: AddMode, email: string, providerId: string) => {
+    if (mode === 'password') {
+      push({ name: 'addPassword', email, providerId });
       return;
     }
+    setBusy(true);
+    await withNotice(() => request('/accounts/forward', 'POST', { name: '', email }), t.addFailed, async (response) => {
+      const added: Account = await response.json();
+      await fetchAccounts(true);
+      reset([{ name: 'forward', id: added.id }]);
+    });
+    setBusy(false);
+  };
 
-    setConfirmDeleteId(null);
-    setDeletingId(account.id);
+  const addWithPassword = async (form: PasswordForm) => {
+    setBusy(true);
+    notify('info', t.checkingLogin);
+    await withNotice(
+      () => request('/accounts', 'POST', { name: form.name, host: form.host, port: 993, username: form.email, appPassword: form.password }, LOGIN_TIMEOUT_MS),
+      t.addFailed,
+      async () => {
+        notify('ok', t.mailboxAdded);
+        await fetchAccounts(true);
+        reset();
+      },
+    );
+    setBusy(false);
+  };
+
+  // Ящик
+
+  const saveFilters = (account: Account, filters: MailFilters) =>
+    withNotice(() => request(`/accounts/${account.id}/filters`, 'PUT', filters), t.filtersFailed, async (response) => {
+      const saved = withDefaults(await response.json());
+      setAccounts((current) => current.map((item) => (item.id === account.id ? { ...item, filters: saved } : item)));
+    });
+
+  const updatePassword = (account: Account, password: string) => {
+    notify('info', t.checkingPassword(account.email));
+    return withNotice(
+      () => request(`/accounts/${account.id}/password`, 'PUT', { appPassword: password }, LOGIN_TIMEOUT_MS),
+      t.passwordFailed,
+      async () => {
+        notify('ok', t.passwordUpdated(account.email));
+        await fetchAccounts(true);
+        pop();
+      },
+    );
+  };
+
+  const deleteAccount = (account: Account) =>
+    withNotice(() => request(`/accounts/${account.id}`, 'DELETE'), t.removeFailed, async () => {
+      notify('ok', t.mailboxRemoved(account.email));
+      reset();
+      await fetchAccounts(true);
+    });
+
+  const createGroupLink = async (account: Account): Promise<string | null> => {
+    let link: string | null = null;
+    await withNotice(() => request(`/accounts/${account.id}/group`, 'POST'), t.groupLinkFailed, async (response) => {
+      link = (await response.json()).link;
+    });
+    return link;
+  };
+
+  const unlinkGroup = (account: Account) =>
+    withNotice(() => request(`/accounts/${account.id}/group`, 'DELETE'), t.groupUnlinkFailed, async () => {
+      notify('ok', t.groupUnlinked);
+      await fetchAccounts(true);
+    });
+
+  // Тариф
+
+  const refreshAfterPayment = async () => {
+    const before = plan;
+    for (let attempt = 0; attempt < PLAN_POLL_ATTEMPTS; attempt++) {
+      const info = await fetchPlan();
+      if (info && (info.plan !== before?.plan || info.expiresAt !== before?.expiresAt)) break;
+      await sleep(PLAN_POLL_DELAY_MS);
+    }
+    await fetchAccounts(true);
+  };
+
+  const createInvoice = async (offerId: string): Promise<string | null> => {
+    let link: string | null = null;
+    await withNotice(() => request('/plan/invoice', 'POST', { offer: offerId }), t.paymentFailed, async (response) => {
+      link = (await response.json()).link;
+    });
+    return link;
+  };
+
+  const startTrial = async () => {
+    notify('info', t.trialStarting);
+    return withNotice(() => request('/plan/trial', 'POST'), t.trialFailed, async (response) => {
+      setPlan(await response.json());
+      notify('ok', t.trialStarted);
+      await fetchAccounts(true);
+    });
+  };
+
+  // Настройки
+
+  const loadSettings = async (): Promise<NotificationSettings | null> => {
     try {
-      const response = await request(`/accounts/${account.id}`, 'DELETE');
-      if (response.ok) {
-        setNotice({ kind: 'ok', text: t.mailboxRemoved(account.email) });
-        await fetchAccounts();
-      } else {
-        setNotice({ kind: 'error', text: await errorText(response, t.removeFailed) });
-      }
-    } catch (error) {
-      setNotice({ kind: 'error', text: describeError(error) });
-    } finally {
-      setDeletingId(null);
+      const response = await request('/settings');
+      return response.ok ? await response.json() : null;
+    } catch {
+      return null;
     }
   };
 
-  const browsing = accounts.find((acc) => acc.id === browsingId);
-  if (browsing) {
-    return (
-      <main className="app">
-        <MailboxView
-          account={browsing}
-          request={request}
-          limited={!hasPro(plan)}
-          onUpgrade={plan?.billingEnabled ? showPlans : undefined}
-          onClose={() => setBrowsingId(null)}
-        />
-      </main>
-    );
-  }
+  const saveSettings = async (settings: NotificationSettings): Promise<NotificationSettings | null> => {
+    let saved: NotificationSettings | null = null;
+    await withNotice(() => request('/settings', 'PUT', settings), t.notifyFailed, async (response) => {
+      notify('ok', t.notifySaved);
+      saved = await response.json();
+    });
+    return saved;
+  };
+
+  const saveLanguage = (value: Lang) => withNotice(() => request('/language', 'PUT', { language: value }), t.noServer, () => undefined);
+
+  const deleteAll = () =>
+    withNotice(() => request('/me', 'DELETE'), t.dataDeleteFailed, () => {
+      setAccounts([]);
+      notify('ok', t.dataDeleted);
+    });
+
+  const toggleSky = (enabled: boolean) => {
+    setSky(enabled);
+    saveSkyEnabled(enabled);
+  };
+
+  // Отрисовка
+
+  const accountOf = (id: number) => accounts.find((account) => account.id === id);
+  const pro = hasPro(plan);
+  const business = plan === null || plan.plan === 'BUSINESS';
+  const upgrade = plan?.billingEnabled ? showPlans : undefined;
+  const forwardingEnabled = forwarding?.enabled === true;
+
+  const renderRoute = (route: Route) => {
+    switch (route.name) {
+      case 'add':
+        return (
+          <AddScreen
+            forwardingEnabled={forwardingEnabled}
+            busy={busy}
+            onBack={pop}
+            onProvider={(detail) => request('/funnel', 'POST', { step: 'provider', detail }).catch(() => undefined)}
+            onContinue={continueAdd}
+          />
+        );
+      case 'addPassword':
+        return (
+          <AddPassword
+            email={route.email}
+            initialProviderId={route.providerId}
+            forwardingEnabled={forwardingEnabled}
+            busy={busy}
+            onBack={pop}
+            onSubmit={addWithPassword}
+            onSwitchToForward={() => continueAdd('forward', route.email, route.providerId)}
+          />
+        );
+    }
+
+    const account = accountOf(route.id);
+    if (!account) return <p className="empty">{loading ? t.loadingMailboxes : t.loadMailboxesFailed}</p>;
+
+    switch (route.name) {
+      case 'forward':
+        return <ForwardSetup account={account} onBack={pop} onDone={() => reset()} />;
+      case 'mailbox':
+        return (
+          <MailboxScreen
+            account={account}
+            onBack={pop}
+            onOpenMails={() => push({ name: 'mail', id: account.id })}
+            onFilters={() => push({ name: 'filters', id: account.id })}
+            onGroup={() => push({ name: 'group', id: account.id })}
+            onPassword={() => push({ name: 'password', id: account.id })}
+            onForward={() => push({ name: 'forward', id: account.id })}
+            onSaveFilters={(filters) => saveFilters(account, filters)}
+            onDelete={() => deleteAccount(account)}
+          />
+        );
+      case 'filters':
+        return (
+          <FiltersScreen
+            account={account}
+            pro={pro}
+            onUpgrade={upgrade}
+            onBack={pop}
+            onSave={async (filters) => {
+              const ok = await saveFilters(account, filters);
+              if (ok) notify('ok', t.filtersSaved(account.email));
+              return ok;
+            }}
+          />
+        );
+      case 'group':
+        return (
+          <GroupScreen
+            account={account}
+            business={business}
+            createLink={() => createGroupLink(account)}
+            unlink={() => unlinkGroup(account)}
+            onUpgrade={upgrade}
+            onBack={pop}
+          />
+        );
+      case 'password':
+        return <PasswordScreen account={account} onSave={(password) => updatePassword(account, password)} onBack={pop} />;
+      case 'mail':
+        return (
+          <MailboxView
+            account={account}
+            request={request}
+            limited={!pro}
+            onUpgrade={upgrade}
+            onClose={pop}
+          />
+        );
+    }
+  };
+
+  const onboarding = tab === 'home' && !top && loaded && accounts.length === 0 && Boolean(initData);
+
+  const renderTab = () => {
+    switch (tab) {
+      case 'home':
+        return onboarding
+          ? <Onboarding onStart={() => push({ name: 'add' })} />
+          : (
+            <Home
+              accounts={accounts}
+              loading={loading}
+              plan={plan}
+              onOpen={(account) => push({ name: 'mailbox', id: account.id })}
+              onAdd={() => push({ name: 'add' })}
+              onPlan={showPlans}
+            />
+          );
+      case 'plan':
+        return (
+          <PlanScreen
+            info={plan}
+            referral={referral}
+            createInvoice={createInvoice}
+            onPaid={refreshAfterPayment}
+            startTrial={startTrial}
+            notify={notify}
+          />
+        );
+      case 'settings':
+        return (
+          <SettingsScreen
+            load={loadSettings}
+            save={saveSettings}
+            saveLanguage={saveLanguage}
+            sky={sky}
+            onSky={toggleSky}
+            onDeleteAll={deleteAll}
+          />
+        );
+    }
+  };
+
+  const tabs: { id: Tab; icon: 'mail' | 'star' | 'settings'; label: string }[] = [
+    { id: 'home', icon: 'mail', label: t.tabMailboxes },
+    { id: 'plan', icon: 'star', label: t.tabPlan },
+    { id: 'settings', icon: 'settings', label: t.tabSettings },
+  ];
+  const showTabs = !top && !onboarding;
 
   return (
-    <main className="app">
-      <header className="masthead">
-        <div className="airmail-band" aria-hidden="true" />
-        <div className="title-row">
-          <h1>{t.title}</h1>
-          <LanguageSwitch onChange={saveLanguage} />
-        </div>
-        <p className="lede">{t.lede}</p>
-      </header>
+    <>
+      {sky && <Sky />}
+      <main ref={mainRef} className={showTabs ? 'app with-tabs' : 'app'}>
+        {top ? <div key={stack.length} className="screen-enter">{renderRoute(top)}</div> : <div key={tab} className="screen-fade">{renderTab()}</div>}
+      </main>
 
-      {notice && (
-        <p className={`notice notice-${notice.kind}`} role={notice.kind === 'error' ? 'alert' : 'status'}>
-          {notice.text}
-        </p>
-      )}
+      {notice && <Notice kind={notice.kind} text={notice.text} onClose={() => setNotice(null)} />}
 
-      <section className="section" aria-labelledby="mailboxes-title">
-        <h2 id="mailboxes-title" className="section-title">
-          {t.myMailboxes}{accounts.length > 0 && <span className="count">{accounts.length}</span>}
-        </h2>
-
-        {loading ? (
-          <p className="empty">{t.loadingMailboxes}</p>
-        ) : accounts.length === 0 ? (
-          <p className="empty">{t.noMailboxes}</p>
-        ) : (
-          <ul className="mailbox-list">
-            {accounts.map((acc) => (
-              <li key={acc.id} id={`mailbox-${acc.id}`} className="mailbox-item">
-                <div className="mailbox">
-                  <span className={`status-dot status-${statusKind(acc)}`} aria-hidden="true" />
-                  {/* У ящика-пересылки нет папок: вместо писем открываем его адрес и настройки */}
-                  <button
-                    type="button"
-                    className="mailbox-info mailbox-open"
-                    onClick={() => (acc.forwardAddress
-                      ? setFiltersOpenId((current) => (current === acc.id ? null : acc.id))
-                      : setBrowsingId(acc.id))}
-                    aria-label={acc.forwardAddress ? t.forwardAddressTitle : t.openMailbox(acc.email)}
-                  >
-                    <span className="mailbox-name">{acc.name !== acc.email ? acc.name : acc.email}</span>
-                    {acc.name !== acc.email && <span className="mailbox-address">{acc.email}</span>}
-                    <span className={`mailbox-status status-text-${statusKind(acc)}`}>
-                      {statusLabel(acc)}
-                    </span>
-                    <span className="mailbox-open-hint">{acc.forwardAddress ? t.forwardBadge : t.emailsLink}</span>
-                  </button>
-                  <div className="mailbox-actions">
-                    <button
-                      type="button"
-                      className="link-button"
-                      aria-expanded={filtersOpenId === acc.id}
-                      onClick={() => setFiltersOpenId((current) => (current === acc.id ? null : acc.id))}
-                    >
-                      {acc.status === 'ERROR' ? t.fix : t.settings}
-                    </button>
-                    <button
-                      type="button"
-                      className={confirmDeleteId === acc.id ? 'remove confirm' : 'remove'}
-                      disabled={deletingId === acc.id}
-                      onClick={() => handleDelete(acc)}
-                      onBlur={() => setConfirmDeleteId((current) => (current === acc.id ? null : current))}
-                    >
-                      {deletingId === acc.id ? t.disconnecting : confirmDeleteId === acc.id ? t.disconnectConfirm : t.disconnect}
-                    </button>
-                  </div>
-                </div>
-                {filtersOpenId === acc.id && (
-                  <div className={acc.status === 'ERROR' ? 'settings settings-broken' : 'settings'}>
-                    {acc.forwardAddress && (
-                      <ForwardPanel
-                        address={acc.forwardAddress}
-                        email={acc.email}
-                        fresh={freshForwardId === acc.id && !acc.forwardReceived}
-                      />
-                    )}
-                    <FiltersPanel
-                      initial={withDefaults(acc.filters)}
-                      pro={hasPro(plan)}
-                      onUpgrade={plan?.billingEnabled ? showPlans : undefined}
-                      onSave={(filters) => handleSaveFilters(acc, filters)}
-                      onClose={() => setFiltersOpenId(null)}
-                    />
-                    {plan && (plan.billingEnabled || plan.plan === 'BUSINESS') && (
-                      <GroupPanel
-                        linked={acc.groupLinked === true}
-                        groupTitle={acc.groupTitle}
-                        business={plan.plan === 'BUSINESS'}
-                        createLink={() => createGroupLink(acc)}
-                        unlink={() => unlinkGroup(acc)}
-                        onUpgrade={plan.billingEnabled ? showPlans : undefined}
-                      />
-                    )}
-                    {!acc.forwardAddress && (
-                      <PasswordPanel
-                        host={acc.host}
-                        email={acc.email}
-                        broken={acc.status === 'ERROR'}
-                        onSave={(newPassword) => handleUpdatePassword(acc, newPassword)}
-                      />
-                    )}
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {plan?.billingEnabled && (
-        <PlanSection
-          info={plan}
-          createInvoice={createInvoice}
-          onPaid={refreshAfterPayment}
-          startTrial={startTrial}
-          notify={(kind, text) => setNotice(text ? { kind, text } : null)}
-        />
-      )}
-
-      {referral?.enabled && <ReferralSection info={referral} />}
-
-      {accounts.length > 0 && (
-        <NotificationsSection load={loadNotificationSettings} save={saveNotificationSettings} />
-      )}
-
-      <section className="section" aria-labelledby="add-title">
-        <h2 id="add-title" className="section-title">{t.addTitle}</h2>
-
-        {forwarding?.enabled && (
-          <div className="segmented" role="tablist">
-            <button type="button" role="tab" aria-selected={addMode === 'forward'} onClick={() => setAddMode('forward')}>{t.modeForward}</button>
-            <button type="button" role="tab" aria-selected={addMode === 'password'} onClick={() => setAddMode('password')}>{t.modePassword}</button>
-          </div>
-        )}
-
-        <form onSubmit={handleAddAccount} className="add-form">
-          {forwardMode && <p className="field-hint">{t.forwardLede}</p>}
-          <label className="field">
-            <span className="field-label">{t.emailLabel}</span>
-            <input
-              type="email"
-              inputMode="email"
-              placeholder="name@mail.ru"
-              autoComplete="off"
-              value={email}
-              onChange={e => onEmailChange(e.target.value)}
-              required
-            />
-          </label>
-
-          {!forwardMode && <>
-          <label className="field">
-            <span className="field-label">{t.providerLabel}</span>
-            <select
-              value={providerId}
-              onChange={e => { setProviderId(e.target.value); setProviderTouched(true); }}
-              required
+      {showTabs && (
+        <nav className="tabbar" aria-label={t.tabMailboxes}>
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="tab"
+              aria-current={tab === item.id ? 'page' : undefined}
+              onClick={() => setTab(item.id)}
             >
-              <option value="" disabled>{t.chooseProviderOption}</option>
-              {PROVIDERS.map((item) => (
-                <option key={item.id} value={item.id}>{providerTitle(item)}</option>
-              ))}
-              <option value={CUSTOM_PROVIDER_ID}>{t.otherProvider}</option>
-            </select>
-          </label>
-
-          {isCustom && (
-            <label className="field">
-              <span className="field-label">{t.imapServer}</span>
-              <input
-                placeholder="imap.example.com"
-                autoComplete="off"
-                value={customHost}
-                onChange={e => setCustomHost(e.target.value)}
-                required
-              />
-            </label>
-          )}
-
-          <aside className="app-password" aria-labelledby="app-password-title">
-            <h3 id="app-password-title">{t.appPasswordTitle}</h3>
-            <p>{t.appPasswordLede}</p>
-            {steps ? (
-              <ol className="steps">
-                {steps.map((step) => (
-                  <li key={stepKey(step)}>
-                    {typeof step === 'string' ? step : (
-                      <>
-                        {step.text}
-                        <br />
-                        <button type="button" className="step-link" onClick={() => openLink(stepUrl(step, email))}>
-                          {step.button} <span aria-hidden="true">↗</span>
-                        </button>
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="steps-placeholder">{t.stepsPlaceholder}</p>
-            )}
-          </aside>
-
-          <label className="field">
-            <span className="field-label">{t.appPasswordLabel}</span>
-            <input
-              type="password"
-              autoComplete="off"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              required
-            />
-            {provider && <span className="field-hint">{providerHint(provider)}</span>}
-          </label>
-          </>}
-
-          <label className="field">
-            <span className="field-label">{t.nameLabel} <span className="optional">{t.optional}</span></span>
-            <input placeholder={t.namePlaceholder} value={name} onChange={e => setName(e.target.value)} />
-          </label>
-
-          <button type="submit" className="primary" disabled={submitting}>
-            {forwardMode
-              ? (submitting ? t.forwardCreating : t.forwardConnect)
-              : (submitting ? t.checkingShort : t.connect)}
-          </button>
-        </form>
-      </section>
-
-      {accounts.length > 0 && <DataSection onDelete={handleDeleteAllData} />}
-    </main>
-  )
+              <Icon name={item.icon} size={24} />
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      )}
+    </>
+  );
 }
 
 export default App
