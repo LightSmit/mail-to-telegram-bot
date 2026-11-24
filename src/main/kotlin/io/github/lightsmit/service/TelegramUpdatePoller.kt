@@ -650,7 +650,7 @@ class TelegramUpdatePoller(
             appendLine(t.mailboxesTitle)
             accounts.forEach { account ->
                 val health = service.health(account.id)
-                val (mark, status) = if (account.filters.paused) {
+                val (mark, status) = if (account.filters.isPausedAt()) {
                     "⏸" to t.statusPaused
                 } else if (account.id in overLimit) {
                     "🔒" to t.billing.statusOverLimit(limit)

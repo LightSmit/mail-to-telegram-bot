@@ -162,6 +162,10 @@ interface Texts {
     fun forwardAlreadyConnected(email: String): String
     val forwardNoPassword: String
     val forwardNoBrowse: String
+
+    // Проверка доставки из приложения
+    fun deliveryTest(email: String, toGroup: Boolean): String
+    val deliveryTestFailed: String
     val browseTimeout: String
 }
 
@@ -372,6 +376,9 @@ object RuTexts : Texts {
     override val forwardNoBrowse =
         "Ящик подключен через пересылку: бот видит только пересланные письма. Папки и поиск доступны при подключении через пароль приложения"
     override val browseTimeout = "Почтовый сервер отвечает слишком долго. Попробуйте еще раз"
+    override fun deliveryTest(email: String, toGroup: Boolean) =
+        "✅ Проверка доставки: письма из $email приходят " + (if (toGroup) "в эту группу." else "в этот чат.")
+    override val deliveryTestFailed = "Не удалось отправить проверочное сообщение. Если письма идут в группу, проверьте, что бот в ней остался"
 }
 
 object EnTexts : Texts {
@@ -572,6 +579,9 @@ object EnTexts : Texts {
     override val forwardNoBrowse =
         "This mailbox is connected by forwarding: the bot only sees forwarded emails. Folders and search work when connected with an app password"
     override val browseTimeout = "The mail server is taking too long to respond. Please try again"
+    override fun deliveryTest(email: String, toGroup: Boolean) =
+        "✅ Delivery check: emails from $email arrive " + (if (toGroup) "in this group." else "in this chat.")
+    override val deliveryTestFailed = "Could not send the test message. If emails go to a group, check that the bot is still in it"
 }
 
 /** Причина, по которой вложение не отправлено: файл больше лимита. */

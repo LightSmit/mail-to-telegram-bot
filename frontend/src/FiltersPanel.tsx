@@ -7,6 +7,15 @@ export interface MailFilters {
   blockedSenders: string[];
   blockedSubjectWords: string[];
   allowedSenders: string[];
+  // Конец паузы (мс UTC); null - пока не выключат
+  pausedUntil?: number | null;
+  // Письма ящика приходят без звука
+  silent?: boolean;
+}
+
+/** Пауза действует сейчас (временная пауза могла уже закончиться). */
+export function isPaused(filters?: MailFilters | null, now = Date.now()): boolean {
+  return Boolean(filters?.paused) && (filters?.pausedUntil == null || now < filters.pausedUntil);
 }
 
 /** Дополняет недостающие поля значениями по умолчанию (на случай неполного ответа сервера). */
@@ -17,6 +26,8 @@ export function withDefaults(filters?: Partial<MailFilters> | null): MailFilters
     blockedSenders: filters?.blockedSenders ?? [],
     blockedSubjectWords: filters?.blockedSubjectWords ?? [],
     allowedSenders: filters?.allowedSenders ?? [],
+    pausedUntil: filters?.pausedUntil ?? null,
+    silent: filters?.silent ?? false,
   };
 }
 

@@ -14,6 +14,8 @@ interface MailItem {
   date?: number | null;
   seen: boolean;
   hasAttachments: boolean;
+  // Отмечено звездочкой в приложении
+  starred?: boolean;
 }
 
 interface MailPage {
@@ -35,6 +37,7 @@ interface MailMessage {
   body?: string | null;
   attachments: string[];
   seen: boolean;
+  starred?: boolean;
 }
 
 type Request = (
@@ -82,6 +85,35 @@ function formatListDate(millis?: number | null): string {
   return date.toLocaleDateString(t.locale);
 }
 
+/** Поставить или снять звездочку. true - получилось. */
+async function setStar(request: Request, accountId: number, folder: Folder, uidValidity: number, uid: number, value: boolean): Promise<boolean> {
+  try {
+    const response = await request(
+      `/accounts/${accountId}/messages/${uid}/star?folder=${folder}&v=${uidValidity}`,
+      value ? 'POST' : 'DELETE',
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function StarButton({ starred, onClick, disabled }: { starred: boolean; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      className={starred ? 'star-button on' : 'star-button'}
+      aria-pressed={starred}
+      aria-label={starred ? t.starRemove : t.starAdd}
+      title={starred ? t.starRemove : t.starAdd}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {starred ? '★' : '☆'}
+    </button>
+  );
+}
+
 // Сервер ставит служебные заглушки вместо пустой темы и отправителя
 const displaySubject = (subject: string) => (!subject || subject === '(no subject)' ? t.noSubject : subject);
 const displaySender = (from: string) => (!from || from === '(sender unknown)' ? t.unknownSender : from);
@@ -98,6 +130,8 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
   const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [starredOnly, setStarredOnly] = useState(false);
+  const [starError, setStarError] = useState<string | null>(null);
   const [withAttachments, setWithAttachments] = useState(false);
   const [sort, setSort] = useState<Sort>('new');
 
@@ -120,6 +154,7 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
     const params = new URLSearchParams({ folder, offset: String(offset), limit: String(limited ? FREE_PAGE_SIZE : PAGE_SIZE) });
     if (query) params.set('q', query);
     if (unreadOnly) params.set('unread', 'true');
+    if (starredOnly) params.set('starred', 'true');
 
     try {
       const response = await request(`/accounts/${account.id}/messages?${params}`, 'GET', undefined, MAIL_TIMEOUT_MS);
@@ -152,7 +187,7 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
     setOpenUid(null);
     load(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [folder, query, unreadOnly]);
+  }, [folder, query, unreadOnly, starredOnly]);
 
   // Поиск запускается, когда пользователь перестал печатать
   useEffect(() => {
@@ -172,8 +207,20 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
     return sorted;
   }, [items, withAttachments, sort]);
 
-  const markSeenLocally = (uid: number) =>
-    setItems((current) => current.map((item) => (item.uid === uid ? { ...item, seen: true } : item)));
+  const updateLocally = (uid: number, patch: Partial<MailItem>) =>
+    setItems((current) => current.map((item) => (item.uid === uid ? { ...item, ...patch } : item)));
+
+  // Звездочка из списка: сразу меняем на экране, при ошибке возвращаем
+  const toggleStar = async (item: MailItem) => {
+    if (uidValidity === null) return;
+    const value = !item.starred;
+    setStarError(null);
+    updateLocally(item.uid, { starred: value });
+    if (!(await setStar(request, account.id, folder, uidValidity, item.uid, value))) {
+      updateLocally(item.uid, { starred: !value });
+      setStarError(t.starFailed);
+    }
+  };
 
   if (openUid !== null && uidValidity !== null) {
     return (
@@ -184,7 +231,7 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
         uidValidity={uidValidity}
         request={request}
         onBack={() => setOpenUid(null)}
-        onMarkedSeen={() => markSeenLocally(openUid)}
+        onChanged={(patch) => updateLocally(openUid, patch)}
       />
     );
   }
@@ -219,6 +266,9 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
         <button type="button" className="chip" aria-pressed={unreadOnly} disabled={limited} onClick={() => setUnreadOnly((value) => !value)}>
           {t.unread}{limited && <span className="pro-badge">{t.proBadge}</span>}
         </button>
+        <button type="button" className="chip" aria-pressed={starredOnly} disabled={limited} onClick={() => setStarredOnly((value) => !value)}>
+          {t.starredChip}{limited && <span className="pro-badge">{t.proBadge}</span>}
+        </button>
         <button type="button" className="chip" aria-pressed={withAttachments} onClick={() => setWithAttachments((value) => !value)}>
           {t.withAttachments}
         </button>
@@ -233,15 +283,20 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
         <p className="field-hint search-hint">{t.searchHint}</p>
       )}
 
+      {starredOnly && <p className="field-hint search-hint">{t.starredHint}</p>}
+
       {error && <div className="notice notice-error">{error}</div>}
+      {starError && <div className="notice notice-error">{starError}</div>}
 
       {!error && (
         <p className="mail-count">
           {loading && items.length === 0
             ? t.loadingEmails
-            : query || unreadOnly
-              ? t.found(total)
-              : t.inFolder(total)}
+            : starredOnly
+              ? t.starredCount(total)
+              : query || unreadOnly
+                ? t.found(total)
+                : t.inFolder(total)}
           {withAttachments && items.length > 0 && t.attachmentsAmongLoaded(visible.length)}
         </p>
       )}
@@ -249,7 +304,8 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
       {visible.length > 0 && (
         <ul className="mail-list">
           {visible.map((item) => (
-            <li key={item.uid}>
+            <li key={item.uid} className="mail-item">
+              <StarButton starred={item.starred === true} onClick={() => toggleStar(item)} />
               <button type="button" className={item.seen ? 'mail-row' : 'mail-row unread'} onClick={() => setOpenUid(item.uid)}>
                 <span className="mail-row-top">
                   <span className="mail-from">{folder === 'sent' ? `${t.toPrefix}${item.to || '—'}` : item.fromName || t.unknownSender}</span>
@@ -270,7 +326,7 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
       )}
 
       {!loading && !error && items.length === 0 && (
-        <p className="empty">{query || unreadOnly ? t.nothingFound : t.emptyFolder}</p>
+        <p className="empty">{starredOnly ? t.starredEmpty : query || unreadOnly ? t.nothingFound : t.emptyFolder}</p>
       )}
 
       {limited && !error && (pageLimited || items.length === 0) && (
@@ -298,10 +354,11 @@ interface MessageProps {
   uidValidity: number;
   request: Request;
   onBack: () => void;
-  onMarkedSeen: () => void;
+  // Письмо прочитано или снова непрочитано, звездочка поставлена или снята
+  onChanged: (patch: Partial<MailItem>) => void;
 }
 
-function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onMarkedSeen }: MessageProps) {
+function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onChanged }: MessageProps) {
   const [message, setMessage] = useState<MailMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -326,21 +383,36 @@ function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onM
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]);
 
-  const markRead = async () => {
+  const markRead = async (seen: boolean) => {
     setBusy(true);
     try {
-      const response = await request(`${base}/read?${params}`, 'POST');
+      const response = await request(`${base}/${seen ? 'read' : 'unread'}?${params}`, 'POST');
       if (response.ok) {
-        setMessage((current) => (current ? { ...current, seen: true } : current));
-        onMarkedSeen();
-        setStatus(t.markedRead);
+        setMessage((current) => (current ? { ...current, seen } : current));
+        onChanged({ seen });
+        setStatus(seen ? t.markedRead : t.markedUnread);
       } else {
-        setStatus(await readError(response, t.markReadFailed));
+        setStatus(await readError(response, seen ? t.markReadFailed : t.markUnreadFailed));
       }
     } catch {
       setStatus(t.noServer);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const toggleStar = async () => {
+    if (!message) return;
+    const value = !message.starred;
+    setBusy(true);
+    const ok = await setStar(request, accountId, folder, uidValidity, uid, value);
+    setBusy(false);
+    if (ok) {
+      setMessage((current) => (current ? { ...current, starred: value } : current));
+      onChanged({ starred: value });
+      setStatus(null);
+    } else {
+      setStatus(t.starFailed);
     }
   };
 
@@ -369,7 +441,10 @@ function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onM
 
       {message && (
         <article className="message">
-          <h2 className="message-subject">{displaySubject(message.subject)}</h2>
+          <div className="message-subject-row">
+            <h2 className="message-subject">{displaySubject(message.subject)}</h2>
+            <StarButton starred={message.starred === true} disabled={busy} onClick={toggleStar} />
+          </div>
           <dl className="message-meta">
             <dt>{t.metaFrom}</dt><dd>{displaySender(message.from)}</dd>
             <dt>{t.metaTo}</dt><dd>{message.to || '—'}</dd>
@@ -386,8 +461,10 @@ function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onM
           )}
 
           <div className="message-actions">
-            {folder === 'inbox' && !message.seen && (
-              <button type="button" className="secondary" disabled={busy} onClick={markRead}>{t.markRead}</button>
+            {folder === 'inbox' && (
+              <button type="button" className="secondary" disabled={busy} onClick={() => markRead(!message.seen)}>
+                {message.seen ? t.markUnread : t.markRead}
+              </button>
             )}
             {folder === 'inbox' && message.attachments.length > 0 && (
               <button type="button" className="secondary" disabled={busy} onClick={sendAttachments}>

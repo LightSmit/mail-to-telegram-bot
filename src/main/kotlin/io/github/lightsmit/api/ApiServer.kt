@@ -7,6 +7,7 @@ import io.github.lightsmit.billing.ReferralService
 import io.github.lightsmit.billing.SubscriptionService
 import io.github.lightsmit.billing.SubscriptionSource
 import io.github.lightsmit.config.MailFilters
+import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.service.AddMailAccountResult
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.mail.MailFolderRole
@@ -93,11 +94,19 @@ data class FiltersDto(
     val blockedSenders: List<String> = emptyList(),
     val blockedSubjectWords: List<String> = emptyList(),
     val allowedSenders: List<String> = emptyList(),
+    // Пауза до этого момента (мс); null - бессрочно
+    val pausedUntil: Long? = null,
+    // Письма ящика без звука
+    val silent: Boolean = false,
 )
 
-private fun MailFilters.toDto() = FiltersDto(paused, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders)
+// Закончившаяся пауза на время показывается как выключенная
+private fun MailFilters.toDto(): FiltersDto {
+    val active = isPausedAt()
+    return FiltersDto(active, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders, pausedUntil.takeIf { active }, silent)
+}
 
-private fun FiltersDto.toModel() = MailFilters(paused, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders)
+private fun FiltersDto.toModel() = MailFilters(paused, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders, pausedUntil, silent)
 
 @Serializable
 data class NotificationSettingsDto(
@@ -127,6 +136,7 @@ data class MailListItemDto(
     val date: Long? = null,
     val seen: Boolean,
     val hasAttachments: Boolean,
+    val starred: Boolean = false,
 )
 
 @Serializable
@@ -150,6 +160,7 @@ data class MailMessageDto(
     val body: String? = null,
     val attachments: List<String>,
     val seen: Boolean,
+    val starred: Boolean = false,
 )
 
 private fun MailListPage.toDto() = MailListPageDto(
@@ -166,6 +177,7 @@ private fun MailListPage.toDto() = MailListPageDto(
             date = item.date?.toEpochMilli(),
             seen = item.seen,
             hasAttachments = item.hasAttachments,
+            starred = item.starred,
         )
     },
 )
@@ -180,6 +192,7 @@ private fun MailMessageView.toDto() = MailMessageDto(
     body = body,
     attachments = attachments,
     seen = seen,
+    starred = starred,
 )
 
 @Serializable
@@ -287,6 +300,8 @@ class ApiServer(
     // Прием пересланных писем из Cloudflare Email Worker (null - режим выключен)
     private val inbound: InboundMailService? = null,
     private val inboundSecret: String? = null,
+    // Тестовое сообщение «доставка работает» туда, куда приходят письма ящика
+    private val sendTest: (suspend (MailAccountConfig) -> Boolean)? = null,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -742,11 +757,12 @@ class ApiServer(
                         var limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 30
                         val search = call.request.queryParameters["q"]
                         val unreadOnly = call.request.queryParameters["unread"] == "true"
+                        val starredOnly = call.request.queryParameters["starred"] == "true"
 
                         // Free: только последние FREE_BROWSE_LIMIT входящих, без поиска и фильтра "непрочитанные"
                         val limited = !planOf(ownerId).hasProFeatures
                         if (limited) {
-                            if (role != MailFolderRole.INBOX || !search.isNullOrBlank() || unreadOnly || offset >= FREE_BROWSE_LIMIT) {
+                            if (role != MailFolderRole.INBOX || !search.isNullOrBlank() || unreadOnly || starredOnly || offset >= FREE_BROWSE_LIMIT) {
                                 call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to call.texts.billing.proBrowse))
                                 return@get
                             }
@@ -761,6 +777,7 @@ class ApiServer(
                             limit = limit,
                             search = search,
                             unreadOnly = unreadOnly,
+                            starredOnly = starredOnly,
                         )
                         if (result is BrowseResult.Ok) {
                             val page = result.value.toDto()
@@ -807,6 +824,39 @@ class ApiServer(
                         if (result is BrowseResult.Ok) call.respond(mapOf("status" to "read")) else respondBrowseError(call, result)
                     }
 
+                    // Вернуть письму статус «непрочитано» (только входящие)
+                    post("/accounts/{id}/messages/{uid}/unread") {
+                        val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val uid = call.parameters["uid"]?.toLongOrNull()
+                        val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
+                        if (accountId == null || uid == null || uidValidity == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            return@post
+                        }
+
+                        val result = browser.markRead(call.attributes[UserIdKey], accountId, uidValidity, uid, seen = false)
+                        if (result is BrowseResult.Ok) call.respond(mapOf("status" to "unread")) else respondBrowseError(call, result)
+                    }
+
+                    // Звездочка «важное»: POST - поставить, DELETE - снять. ?folder=inbox|sent&v=UIDVALIDITY
+                    route("/accounts/{id}/messages/{uid}/star") {
+                        suspend fun ApplicationCall.star(value: Boolean) {
+                            val browser = mailBrowser ?: return respond(HttpStatusCode.NotFound, mapOf("error" to texts.unavailable))
+                            val accountId = parameters["id"]?.toLongOrNull()
+                            val uid = parameters["uid"]?.toLongOrNull()
+                            val uidValidity = request.queryParameters["v"]?.toLongOrNull()
+                            val role = MailFolderRole.parse(request.queryParameters["folder"])
+                            if (accountId == null || uid == null || uidValidity == null || role == null) {
+                                return respond(HttpStatusCode.BadRequest, mapOf("error" to texts.badRequest))
+                            }
+                            val result = browser.star(attributes[UserIdKey], accountId, role, uidValidity, uid, value)
+                            if (result is BrowseResult.Ok) respond(mapOf("status" to if (value) "starred" else "unstarred")) else respondBrowseError(this, result)
+                        }
+                        post { call.star(true) }
+                        delete { call.star(false) }
+                    }
+
                     // Прислать вложения письма в чат с ботом (только входящие)
                     post("/accounts/{id}/messages/{uid}/attachments") {
                         val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
@@ -820,6 +870,20 @@ class ApiServer(
 
                         val result = browser.sendAttachments(call.attributes[UserIdKey], accountId, uidValidity, uid)
                         if (result is BrowseResult.Ok) call.respond(mapOf("status" to "sending")) else respondBrowseError(call, result)
+                    }
+
+                    // Проверка доставки: бот присылает тестовое сообщение туда, куда приходят письма ящика
+                    post("/accounts/{id}/test") {
+                        val send = sendTest ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                            ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                        val account = accountService.find(call.attributes[UserIdKey], accountId)
+                            ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.mailboxNotFound))
+                        if (send(account)) {
+                            call.respond(mapOf("status" to "sent"))
+                        } else {
+                            call.respond(HttpStatusCode.BadGateway, mapOf("error" to call.texts.deliveryTestFailed))
+                        }
                     }
 
                     // Тариф пользователя и что можно купить

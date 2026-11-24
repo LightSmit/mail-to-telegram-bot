@@ -44,7 +44,15 @@ data class MailFilters(
     val blockedSubjectWords: List<String> = emptyList(),
     /** Если список не пуст, присылать только письма от этих адресов и доменов. */
     val allowedSenders: List<String> = emptyList(),
-)
+    /** Пауза до этого момента (мс, UTC); null - пока не выключат вручную. */
+    val pausedUntil: Long? = null,
+    /** Письма этого ящика приходят без звука. */
+    val silent: Boolean = false,
+) {
+    /** Действует ли пауза сейчас: пауза на время сама заканчивается в pausedUntil. */
+    fun isPausedAt(nowMillis: Long = System.currentTimeMillis()): Boolean =
+        paused && (pausedUntil == null || nowMillis < pausedUntil)
+}
 
 object MailAccountKeys {
 

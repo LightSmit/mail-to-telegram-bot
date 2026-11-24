@@ -41,6 +41,9 @@ class MailAccountRepository {
             // Групповой чат для писем ящика (тариф Business)
             ensureColumn(connection, "group_chat_id", "INTEGER")
             ensureColumn(connection, "group_title", "TEXT")
+            // Пауза на время и ящик без звука
+            ensureColumn(connection, "paused_until", "INTEGER")
+            ensureColumn(connection, "silent", "INTEGER NOT NULL DEFAULT 0")
         }
     }
 
@@ -68,7 +71,8 @@ class MailAccountRepository {
                 val updated = connection.prepareStatement(
                     """
                     UPDATE mail_accounts
-                    SET paused = ?, skip_bulk = ?, blocked_senders = ?, blocked_subject_words = ?, allowed_senders = ?
+                    SET paused = ?, skip_bulk = ?, blocked_senders = ?, blocked_subject_words = ?, allowed_senders = ?,
+                        paused_until = ?, silent = ?
                     WHERE id = ? AND owner_id = ?
                     """.trimIndent(),
                 ).use { statement ->
@@ -77,8 +81,11 @@ class MailAccountRepository {
                     statement.setString(3, filters.blockedSenders.joinToString("\n"))
                     statement.setString(4, filters.blockedSubjectWords.joinToString("\n"))
                     statement.setString(5, filters.allowedSenders.joinToString("\n"))
-                    statement.setLong(6, id)
-                    statement.setLong(7, ownerId)
+                    val until = filters.pausedUntil
+                    if (until == null) statement.setNull(6, java.sql.Types.INTEGER) else statement.setLong(6, until)
+                    statement.setInt(7, if (filters.silent) 1 else 0)
+                    statement.setLong(8, id)
+                    statement.setLong(9, ownerId)
                     statement.executeUpdate()
                 }
                 if (updated == 0) return@withContext null
@@ -299,6 +306,8 @@ class MailAccountRepository {
                     blockedSenders = getString("blocked_senders").splitLines(),
                     blockedSubjectWords = getString("blocked_subject_words").splitLines(),
                     allowedSenders = getString("allowed_senders").splitLines(),
+                    pausedUntil = getLong("paused_until").takeUnless { wasNull() },
+                    silent = getInt("silent") == 1,
                 ),
             )
         } catch (exception: Exception) {

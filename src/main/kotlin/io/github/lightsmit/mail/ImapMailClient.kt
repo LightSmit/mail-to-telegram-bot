@@ -270,6 +270,8 @@ class ImapMailClient(
         account: MailAccountConfig,
         expectedUidValidity: Long,
         uid: Long,
+        // false - вернуть письму статус «непрочитано»
+        seen: Boolean = true,
     ): Boolean = withContext(Dispatchers.IO) {
         withInbox(account, METADATA_TIMEOUT_MILLIS, Folder.READ_WRITE) { _, uidFolder ->
             if (uidFolder.uidValidity != expectedUidValidity) {
@@ -279,7 +281,7 @@ class ImapMailClient(
             val message = uidFolder.getMessageByUID(uid)
                 ?: return@withInbox false
 
-            message.setFlag(Flags.Flag.SEEN, true)
+            message.setFlag(Flags.Flag.SEEN, seen)
             true
         }
     }
@@ -371,6 +373,37 @@ class ImapMailClient(
                 items = messages.reversed().map { message -> listItem(message, uidFolder.getUID(message)) },
                 hasMore = start > 0,
             )
+        }
+    }
+
+    /**
+     * Письма с данными UID (отмеченные звездочкой), новые сверху. uidsFor получает текущий
+     * UIDVALIDITY папки: если он сменился, старые отметки не подходят и список пуст.
+     */
+    suspend fun listByUids(
+        account: MailAccountConfig,
+        role: MailFolderRole,
+        uidsFor: (Long) -> List<Long>,
+    ): MailListPage = withContext(Dispatchers.IO) {
+        withFolder(account, CONTENT_TIMEOUT_MILLIS, Folder.READ_ONLY, role) { folder, uidFolder ->
+            val uids = uidsFor(uidFolder.uidValidity).take(MAX_UID_LIST)
+            val messages = if (uids.isEmpty()) {
+                emptyArray()
+            } else {
+                uidFolder.getMessagesByUID(uids.toLongArray()).filterNotNull().toTypedArray()
+            }
+            if (messages.isNotEmpty()) {
+                val profile = FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(FetchProfile.Item.FLAGS)
+                    add(FetchProfile.Item.CONTENT_INFO)
+                    add(UIDFolder.FetchProfileItem.UID)
+                }
+                folder.fetch(messages, profile)
+            }
+            val items = messages.map { message -> listItem(message, uidFolder.getUID(message)) }
+                .sortedByDescending { item -> item.date }
+            MailListPage(uidValidity = uidFolder.uidValidity, total = items.size, items = items, hasMore = false)
         }
     }
 
@@ -557,6 +590,8 @@ class ImapMailClient(
         private const val MAX_VIEW_BODY_CHARS = 100_000
         // Сколько последних писем бот просматривает сам при поиске
         private const val SEARCH_SCAN_LIMIT = 2000
+        // Больше отмеченных писем за раз не показываем
+        private const val MAX_UID_LIST = 500
         private val SENT_FOLDER_NAMES = setOf("sent", "sent items", "sent messages", "sent mail", "отправленные")
     }
 }

@@ -24,7 +24,7 @@ class MailboxQuota(
     companion object {
         fun overLimit(accounts: List<MailAccountConfig>, limit: Int): Set<Long> =
             accounts
-                .filter { account -> !account.filters.paused }
+                .filter { account -> !account.filters.isPausedAt() }
                 .sortedBy { account -> account.id }
                 .drop(limit)
                 .map { account -> account.id }

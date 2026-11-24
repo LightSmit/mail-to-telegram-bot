@@ -206,6 +206,11 @@ function App() {
       setAccounts((current) => current.map((item) => (item.id === account.id ? { ...item, filters: saved } : item)));
     });
 
+  const testDelivery = (account: Account) =>
+    withNotice(() => request(`/accounts/${account.id}/test`, 'POST'), t.deliveryTestFailed, () => {
+      notify('ok', t.deliveryTestSent);
+    });
+
   const updatePassword = (account: Account, password: string) => {
     notify('info', t.checkingPassword(account.email));
     return withNotice(
@@ -353,6 +358,7 @@ function App() {
             onPassword={() => push({ name: 'password', id: account.id })}
             onForward={() => push({ name: 'forward', id: account.id })}
             onSaveFilters={(filters) => saveFilters(account, filters)}
+            onTest={() => testDelivery(account)}
             onDelete={() => deleteAccount(account)}
           />
         );

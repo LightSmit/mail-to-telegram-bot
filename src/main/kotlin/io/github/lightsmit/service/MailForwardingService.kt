@@ -175,7 +175,8 @@ class MailForwardingService(
             chatId = chatId,
             account = account,
         )
-        val silent = shouldSendSilently(account.ownerChatId)
+        // Тихий ящик - всегда без звука; shouldSendSilently вызываем всегда: он запоминает время карточки
+        val silent = shouldSendSilently(account.ownerChatId) || currentFilters(account).silent
 
         return try {
             telegramControlClient.sendMessageWithButtons(chatId = chatId, text = text, buttons = buttons, silent = silent)
@@ -184,6 +185,28 @@ class MailForwardingService(
             val newChatId = exception.migrateToChatId ?: throw exception
             onGroupMigrated(chatId, newChatId)
             telegramControlClient.sendMessageWithButtons(chatId = newChatId, text = text, buttons = buttons, silent = silent)
+        }
+    }
+
+    // Фильтры из реестра: там последние настройки, сохраненные в приложении
+    private fun currentFilters(account: MailAccountConfig) =
+        (registry.findByKey(buildAccountKey(account)) ?: account).filters
+
+    /**
+     * Проверка доставки из приложения: короткое сообщение туда же, куда приходят письма ящика.
+     * false - Telegram не принял сообщение (например, бота удалили из группы).
+     */
+    suspend fun sendTestMessage(account: MailAccountConfig): Boolean {
+        val t = texts(account)
+        val chatId = cardChatId(account)
+        return try {
+            telegramControlClient.sendMessage(chatId, t.deliveryTest(account.username, chatId != account.ownerChatId))
+            true
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.warn("Test message for mailbox {} failed: {}", account.username, exception.javaClass.simpleName)
+            false
         }
     }
 

@@ -7,6 +7,7 @@ import io.github.lightsmit.mail.MailFolderRole
 import io.github.lightsmit.mail.MailListPage
 import io.github.lightsmit.mail.MailMessageView
 import io.github.lightsmit.storage.MailAccountRepository
+import io.github.lightsmit.storage.StarredRepository
 import jakarta.mail.AuthenticationFailedException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -33,6 +34,8 @@ class MailBrowserService(
     private val imapClient: ImapMailClient,
     // Прислать вложения письма в чат (использует уже готовую отправку из бота)
     private val sendAttachmentsToChat: suspend (MailAccountConfig, Long, Long) -> Unit,
+    // Звездочки писем (null - отметки не хранятся)
+    private val starred: StarredRepository? = null,
 ) {
 
     private val logger = LoggerFactory.getLogger(MailBrowserService::class.java)
@@ -45,8 +48,16 @@ class MailBrowserService(
         limit: Int,
         search: String?,
         unreadOnly: Boolean,
+        // Только отмеченные звездочкой
+        starredOnly: Boolean = false,
     ): BrowseResult<MailListPage> = withAccount(ownerId, accountId) { account ->
-        imapClient.listMessages(
+        val folder = folderKey(role)
+        if (starredOnly) {
+            val marks = starred?.byValidity(accountId, folder).orEmpty()
+            val page = imapClient.listByUids(account, role) { validity -> marks[validity].orEmpty() }
+            return@withAccount page.copy(items = page.items.map { item -> item.copy(starred = true) })
+        }
+        val page = imapClient.listMessages(
             account = account,
             role = role,
             offset = offset.coerceAtLeast(0),
@@ -54,6 +65,8 @@ class MailBrowserService(
             search = search?.trim()?.take(MAX_SEARCH_LENGTH)?.takeIf(String::isNotEmpty),
             unreadOnly = unreadOnly,
         )
+        val marked = starred?.uids(accountId, folder, page.uidValidity)?.toSet().orEmpty()
+        if (marked.isEmpty()) page else page.copy(items = page.items.map { item -> item.copy(starred = item.uid in marked) })
     }
 
     suspend fun read(
@@ -63,13 +76,26 @@ class MailBrowserService(
         uidValidity: Long,
         uid: Long,
     ): BrowseResult<MailMessageView> = withAccount(ownerId, accountId) { account ->
-        imapClient.readMessage(account, role, uidValidity, uid)
+        val message = imapClient.readMessage(account, role, uidValidity, uid) ?: return@withAccount null
+        val marked = starred?.uids(accountId, folderKey(role), uidValidity)?.contains(uid) == true
+        message.copy(starred = marked)
     }
 
-    suspend fun markRead(ownerId: Long, accountId: Long, uidValidity: Long, uid: Long): BrowseResult<Unit> =
+    // seen = false - вернуть письму статус «непрочитано»
+    suspend fun markRead(ownerId: Long, accountId: Long, uidValidity: Long, uid: Long, seen: Boolean = true): BrowseResult<Unit> =
         withAccount(ownerId, accountId) { account ->
-            if (imapClient.markSeen(account, uidValidity, uid)) Unit else null
+            if (imapClient.markSeen(account, uidValidity, uid, seen)) Unit else null
         }
+
+    /** Звездочка у письма. В ящик не ходим: отметка хранится у бота. */
+    suspend fun star(ownerId: Long, accountId: Long, role: MailFolderRole, uidValidity: Long, uid: Long, value: Boolean): BrowseResult<Unit> {
+        val store = starred ?: return BrowseResult.Failed(BrowseFailure.OTHER)
+        repository.findByIdAndOwner(accountId, ownerId) ?: return BrowseResult.MailboxNotFound
+        store.set(ownerId, accountId, folderKey(role), uidValidity, uid, value)
+        return BrowseResult.Ok(Unit)
+    }
+
+    private fun folderKey(role: MailFolderRole) = role.name.lowercase()
 
     suspend fun sendAttachments(ownerId: Long, accountId: Long, uidValidity: Long, uid: Long): BrowseResult<Unit> =
         withAccount(ownerId, accountId, allowForward = true) { account ->

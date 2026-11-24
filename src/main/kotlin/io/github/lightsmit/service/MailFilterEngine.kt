@@ -16,7 +16,7 @@ object MailFilterEngine {
         subject: String,
         isBulk: Boolean,
     ): MailFilterReason? {
-        if (filters.paused) return MailFilterReason.PAUSED
+        if (filters.isPausedAt()) return MailFilterReason.PAUSED
 
         val sender = senderAddress?.trim()?.lowercase()
         // "Присылать только от": письма от остальных (и без понятного отправителя) не присылаем

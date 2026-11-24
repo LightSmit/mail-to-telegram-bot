@@ -40,6 +40,7 @@ import io.github.lightsmit.service.UserDataService
 import io.github.lightsmit.storage.BotUserRepository
 import io.github.lightsmit.storage.DatabaseManager
 import io.github.lightsmit.storage.FunnelRepository
+import io.github.lightsmit.storage.StarredRepository
 import io.github.lightsmit.storage.InboundMessageRepository
 import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
@@ -362,6 +363,9 @@ fun main() = runBlocking {
         plan = subscriptionService::plan,
     )
 
+    // Звездочки писем в приложении
+    val starredRepository = StarredRepository()
+
     val accountService = MailAccountService(
         repository = mailAccountRepository,
         supervisor = mailboxSupervisor,
@@ -372,6 +376,7 @@ fun main() = runBlocking {
         healthMonitor = healthMonitor,
         onMailboxAdded = onMailboxAdded,
         inbound = inboundService,
+        starred = starredRepository,
     )
 
     // Ящики должны быть в реестре до запуска воркеров outbox, иначе ожидающие
@@ -407,6 +412,7 @@ fun main() = runBlocking {
         backupKeepDays = backupKeep,
         subscriptions = subscriptionService,
         funnel = funnelService,
+        starred = starredRepository,
     )
 
     val apiServer = ApiServer(
@@ -430,6 +436,7 @@ fun main() = runBlocking {
         referrals = referralService,
         inbound = inboundService,
         inboundSecret = inboundSecret,
+        sendTest = forwardingService::sendTestMessage,
         mailBrowser = MailBrowserService(
             repository = mailAccountRepository,
             imapClient = imapClient,
@@ -439,6 +446,7 @@ fun main() = runBlocking {
                     runCatching { forwardingService.sendAttachments(account, uidValidity, uid) }
                 }
             },
+            starred = starredRepository,
         ),
     )
     apiServer.start()

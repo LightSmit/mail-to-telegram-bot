@@ -26,6 +26,8 @@ data class MailListItem(
     val date: Instant?,
     val seen: Boolean,
     val hasAttachments: Boolean,
+    // Отмечено звездочкой в приложении (хранится у бота, не в ящике)
+    val starred: Boolean = false,
 )
 
 data class MailListPage(
@@ -47,6 +49,7 @@ data class MailMessageView(
     val body: String?,
     val attachments: List<String>,
     val seen: Boolean,
+    val starred: Boolean = false,
 )
 
 /** Нужной папки в ящике нет (например, сервис не отмечает папку "Отправленные"). */

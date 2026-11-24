@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { t } from './i18n'
 import { telegramScriptLoaded } from './telegram'
 
@@ -168,7 +168,8 @@ export function Notice({ kind, text, onClose }: { kind: 'info' | 'ok' | 'error';
 
 export type IconName =
   | 'mail' | 'star' | 'settings' | 'shield' | 'chevron-left' | 'chevron-right' | 'plus' | 'close' | 'copy'
-  | 'pause' | 'list' | 'filter' | 'group' | 'lock' | 'send' | 'check' | 'key' | 'sparkle' | 'globe' | 'trash' | 'external';
+  | 'pause' | 'list' | 'filter' | 'group' | 'lock' | 'send' | 'check' | 'key' | 'sparkle' | 'globe' | 'trash' | 'external'
+  | 'bell' | 'pulse';
 
 const PATHS: Record<IconName, ReactNode> = {
   'mail': <><rect x="3" y="5" width="18" height="14" rx="3" /><path d="M4 7l8 6 8-6" /></>,
@@ -192,6 +193,8 @@ const PATHS: Record<IconName, ReactNode> = {
   'globe': <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9S9.5 5.5 12 3z" /></>,
   'trash': <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />,
   'external': <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5" />,
+  'bell': <><path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15L6 16z" /><path d="M10 20.5a2 2 0 004 0" /></>,
+  'pulse': <path d="M3 12h4l2.5-6 5 12L17 12h4" />,
 };
 
 export function Icon({ name, size = 20, className }: { name: IconName; size?: number; className?: string }) {
@@ -210,5 +213,106 @@ export function Icon({ name, size = 20, className }: { name: IconName; size?: nu
     >
       {PATHS[name]}
     </svg>
+  );
+}
+
+const WHEEL_ROW = 40;
+
+/**
+ * Барабан выбора как в часах iPhone: список прокручивается и защелкивается
+ * на строке по центру. value - индекс выбранной строки.
+ */
+export function WheelPicker({ options, value, onChange, label }: {
+  options: string[];
+  value: number;
+  onChange: (index: number) => void;
+  label: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const timer = useRef<number | undefined>(undefined);
+
+  // Начальная позиция и смена значения снаружи (клик по строке)
+  useEffect(() => {
+    const element = ref.current;
+    if (element && Math.round(element.scrollTop / WHEEL_ROW) !== value) {
+      element.scrollTo({ top: value * WHEEL_ROW, behavior: element.scrollTop === 0 && value > 0 ? 'auto' : 'smooth' });
+    }
+  }, [value]);
+
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const onScroll = () => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      const element = ref.current;
+      if (!element) return;
+      const index = Math.min(options.length - 1, Math.max(0, Math.round(element.scrollTop / WHEEL_ROW)));
+      if (index !== value) {
+        onChange(index);
+        try {
+          (window as unknown as { Telegram?: { WebApp?: { HapticFeedback?: { selectionChanged?: () => void } } } })
+            .Telegram?.WebApp?.HapticFeedback?.selectionChanged?.();
+        } catch {
+          // без вибрации
+        }
+      }
+    }, 90);
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent) => {
+    if (event.key === 'ArrowDown' && value < options.length - 1) onChange(value + 1);
+    else if (event.key === 'ArrowUp' && value > 0) onChange(value - 1);
+    else return;
+    event.preventDefault();
+  };
+
+  return (
+    <div className="wheel">
+      <div className="wheel-highlight" aria-hidden="true" />
+      <div
+        ref={ref}
+        className="wheel-scroll"
+        role="listbox"
+        aria-label={label}
+        aria-activedescendant={`wheel-${value}`}
+        tabIndex={0}
+        onScroll={onScroll}
+        onKeyDown={onKeyDown}
+      >
+        {options.map((option, index) => (
+          <div
+            key={option}
+            id={`wheel-${index}`}
+            role="option"
+            aria-selected={index === value}
+            className={index === value ? 'wheel-item selected' : 'wheel-item'}
+            onClick={() => onChange(index)}
+          >
+            {option}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Нижняя шторка поверх экрана. */
+export function Sheet({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
+        <div className="sheet-grip" aria-hidden="true" />
+        <h2 className="sheet-title">{title}</h2>
+        {children}
+      </div>
+    </div>
   );
 }

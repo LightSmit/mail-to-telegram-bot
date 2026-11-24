@@ -1,5 +1,5 @@
 import { t } from './i18n'
-import type { MailFilters } from './FiltersPanel'
+import { isPaused, type MailFilters } from './FiltersPanel'
 import type { Tone } from './ui'
 
 export type MailboxStatus = 'CONNECTING' | 'OK' | 'ERROR';
@@ -35,7 +35,10 @@ export type Notify = (kind: NoticeKind, text: string) => void;
 export const displayName = (account: Account) => (account.name && account.name !== account.email ? account.name : account.email);
 
 export function statusLabel(account: Account): string {
-  if (account.filters?.paused) return t.statusPaused;
+  if (isPaused(account.filters)) {
+    const until = account.filters?.pausedUntil;
+    return until ? t.statusPausedUntil(formatPauseEnd(until)) : t.statusPaused;
+  }
   if (account.overLimit) return t.statusOverLimit;
   if (account.forwardAddress) return account.forwardReceived ? t.forwardWorking : t.forwardStatus;
   switch (account.status) {
@@ -49,7 +52,7 @@ export function statusLabel(account: Account): string {
 }
 
 export function statusTone(account: Account): Tone {
-  if (account.filters?.paused || account.overLimit) return 'muted';
+  if (isPaused(account.filters) || account.overLimit) return 'muted';
   if (account.forwardAddress) return account.forwardReceived ? 'ok' : 'warn';
   if (account.status === 'ERROR') return 'error';
   if (account.status === 'OK') return 'ok';
@@ -60,4 +63,12 @@ export function statusTone(account: Account): Tone {
 export function rulesCount(filters?: MailFilters): number {
   if (!filters) return 0;
   return filters.allowedSenders.length + filters.blockedSenders.length + filters.blockedSubjectWords.length;
+}
+
+/** Конец паузы: сегодня - только время, иначе день, месяц и время. */
+export function formatPauseEnd(millis: number, now = new Date()): string {
+  const date = new Date(millis);
+  const time = date.toLocaleTimeString(t.locale, { hour: '2-digit', minute: '2-digit' });
+  if (date.toDateString() === now.toDateString()) return time;
+  return `${date.toLocaleDateString(t.locale, { day: 'numeric', month: 'short' })}, ${time}`;
 }

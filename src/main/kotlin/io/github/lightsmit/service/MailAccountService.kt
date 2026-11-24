@@ -9,6 +9,7 @@ import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.storage.MailAccountRepository
 import io.github.lightsmit.storage.MailNotificationOutboxRepository
 import io.github.lightsmit.storage.MailStateRepository
+import io.github.lightsmit.storage.StarredRepository
 import jakarta.mail.AuthenticationFailedException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +66,8 @@ class MailAccountService(
     private val onMailboxAdded: suspend (ownerChatId: Long) -> Unit = {},
     // Письма ящиков-пересылок (null - режим пересылки выключен)
     private val inbound: InboundMailService? = null,
+    // Звездочки писем: удаляются вместе с ящиком
+    private val starred: StarredRepository? = null,
 ) {
 
     /** Режим «Пересылка без пароля» включен на сервере. */
@@ -94,6 +97,9 @@ class MailAccountService(
     suspend fun updateFilters(ownerChatId: Long, accountId: Long, filters: MailFilters): MailAccountConfig? {
         val normalized = MailFilters(
             paused = filters.paused,
+            // Срок паузы имеет смысл, только пока пауза включена
+            pausedUntil = filters.pausedUntil?.takeIf { filters.paused },
+            silent = filters.silent,
             skipBulk = filters.skipBulk,
             blockedSenders = MailFilterEngine.normalizeSenders(filters.blockedSenders),
             blockedSubjectWords = MailFilterEngine.normalizeWords(filters.blockedSubjectWords),
@@ -261,6 +267,7 @@ class MailAccountService(
         healthMonitor.forget(accountId)
         stateRepository.delete(MailAccountKeys.accountKey(deleted))
         if (deleted.isForward) inbound?.forget(deleted)
+        starred?.deleteAccount(accountId)
         logger.info("Mailbox {} (id {}) deleted by owner {}", deleted.username, deleted.id, ownerChatId)
         return true
     }
