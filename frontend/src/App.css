@@ -62,7 +62,7 @@
   top: -70px;
   width: 360px;
   height: 280px;
-  background: radial-gradient(closest-side, rgba(124, 92, 230, 0.22), transparent);
+  background: radial-gradient(closest-side, rgba(124, 92, 230, 0.28), transparent);
 }
 
 .nebula-blue {
@@ -70,7 +70,7 @@
   top: 45%;
   width: 340px;
   height: 300px;
-  background: radial-gradient(closest-side, rgba(70, 120, 220, 0.15), transparent);
+  background: radial-gradient(closest-side, rgba(60, 100, 230, 0.16), transparent);
 }
 
 .star {

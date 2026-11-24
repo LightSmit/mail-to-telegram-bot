@@ -16,6 +16,17 @@ if (telegramScriptLoaded) {
   // Светлая или темная тема Telegram: от нее зависит оттенок фирменного цвета
   const applyScheme = () => {
     document.documentElement.dataset.tgScheme = WebApp.colorScheme;
+    // В темной теме у приложения своя палитра: красим шапку и низ Telegram в те же цвета
+    if (WebApp.colorScheme !== 'light') {
+      const colors = WebApp as unknown as Record<string, ((color: string) => void) | undefined>;
+      try {
+        colors.setHeaderColor?.call(WebApp, '#0b1320');
+        colors.setBackgroundColor?.call(WebApp, '#0b1320');
+        colors.setBottomBarColor?.call(WebApp, '#152030');
+      } catch {
+        // старый клиент Telegram: оставляем его цвета
+      }
+    }
   };
   applyScheme();
   WebApp.onEvent('themeChanged', applyScheme);

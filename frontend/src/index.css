@@ -1,31 +1,34 @@
 /*
-  Цвета берутся из темы Telegram (переменные --tg-theme-*, их выставляет
-  telegram-web-app.js), поэтому приложение выглядит родным и в светлой,
-  и в темной теме. Значения после запятой - запасные (темная тема), для браузера.
+  Темная тема - своя палитра (как в макете), светлая - цвета темы Telegram
+  (переменные --tg-theme-*, их выставляет telegram-web-app.js).
 */
 :root {
-  --bg: var(--tg-theme-secondary-bg-color, #0e1621);
-  --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #17212b));
-  --text: var(--tg-theme-text-color, #f5f5f5);
-  --hint: var(--tg-theme-hint-color, #8a99a8);
-  --section-header: var(--tg-theme-section-header-text-color, var(--hint));
-  --link: var(--tg-theme-link-color, #6ab3f3);
-  --accent: var(--tg-theme-button-color, #3f78b8);
-  --accent-text: var(--tg-theme-button-text-color, #ffffff);
-  --danger: var(--tg-theme-destructive-text-color, #f08a82);
-  --separator: var(--tg-theme-section-separator-color, rgba(128, 140, 152, 0.16));
-  --tint: color-mix(in srgb, var(--link) 16%, transparent);
-  --pressed: color-mix(in srgb, var(--text) 6%, transparent);
+  /*
+    Темная тема - своя «космическая» палитра, как в макете: серые цвета темной
+    темы Telegram делали приложение блеклым. Светлая тема берет цвета Telegram.
+  */
+  --bg: #0b1320;
+  --card: #152030;
+  --text: #f5f7fa;
+  --hint: #8d9cab;
+  --section-header: #8d9cab;
+  --link: #6ab3f3;
+  --accent: #3f7fd0;
+  --accent-text: #ffffff;
+  --danger: #f08a82;
+  --separator: rgba(140, 160, 180, 0.13);
+  --tint: rgba(106, 179, 243, 0.16);
+  --pressed: rgba(255, 255, 255, 0.05);
 
   --ok: #4fbf67;
-  --ok-text: #6fcf86;
+  --ok-text: #6fd389;
   --warn: #e0a33b;
-  --warn-text: #e8b65a;
+  --warn-text: #ecbc62;
   --err: #e5534b;
-  --err-text: #f08a82;
-  --violet: #a68bff;
+  --err-text: #f2948c;
+  --violet: #ad94ff;
 
-  --font: 'Inter', -apple-system, 'SF Pro Text', Roboto, 'Segoe UI', system-ui, sans-serif;
+  --font: -apple-system, 'SF Pro Text', Roboto, 'Segoe UI', system-ui, sans-serif;
   --radius: 14px;
 
   color-scheme: dark;
@@ -36,9 +39,21 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* В светлой теме Telegram цвета статусов темнее, чтобы читались на белом */
+/* Светлая тема Telegram: родные цвета, статусы темнее, чтобы читались на белом */
 :root[data-tg-scheme='light'] {
   color-scheme: light;
+  --bg: var(--tg-theme-secondary-bg-color, #f1f2f5);
+  --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #ffffff));
+  --text: var(--tg-theme-text-color, #15181d);
+  --hint: var(--tg-theme-hint-color, #7a8290);
+  --section-header: var(--tg-theme-section-header-text-color, var(--hint));
+  --link: var(--tg-theme-link-color, #2a7de1);
+  --accent: var(--tg-theme-button-color, #2a7de1);
+  --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  --danger: var(--tg-theme-destructive-text-color, #e0423f);
+  --separator: var(--tg-theme-section-separator-color, rgba(120, 128, 140, 0.22));
+  --tint: color-mix(in srgb, var(--link) 12%, transparent);
+  --pressed: rgba(0, 0, 0, 0.05);
   --ok-text: #1f8a44;
   --warn-text: #a86a00;
   --err-text: #c8322b;
