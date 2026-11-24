@@ -12,6 +12,7 @@ data class BotUserInfo(
     val firstName: String?,
     val lastSeenAt: Instant,
     val blocked: Boolean,
+    val firstSeenAt: Instant? = null,
 )
 
 /** Все, кто хоть раз писал боту или открывал приложение: для статистики, рассылок и языка интерфейса. */
@@ -238,6 +239,37 @@ class BotUserRepository {
                                     firstName = rs.getString(3),
                                     lastSeenAt = Instant.ofEpochMilli(rs.getLong(4)),
                                     blocked = rs.getInt(5) == 1,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Все пользователи для админ-панели, недавние первыми. */
+    suspend fun all(): List<BotUserInfo> = select("ORDER BY last_seen_at DESC")
+
+    suspend fun find(userId: Long): BotUserInfo? = select("WHERE user_id = $userId").firstOrNull()
+
+    // Условие формируется только внутри класса из чисел, без пользовательского ввода
+    private suspend fun select(condition: String): List<BotUserInfo> = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery(
+                    "SELECT user_id, username, first_name, last_seen_at, blocked, first_seen_at FROM bot_users $condition",
+                ).use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                BotUserInfo(
+                                    userId = rs.getLong(1),
+                                    username = rs.getString(2),
+                                    firstName = rs.getString(3),
+                                    lastSeenAt = Instant.ofEpochMilli(rs.getLong(4)),
+                                    blocked = rs.getInt(5) == 1,
+                                    firstSeenAt = Instant.ofEpochMilli(rs.getLong(6)),
                                 ),
                             )
                         }

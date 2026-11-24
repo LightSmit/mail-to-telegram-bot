@@ -9,6 +9,7 @@ import io.github.lightsmit.billing.SubscriptionSource
 import io.github.lightsmit.config.MailFilters
 import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.service.AddMailAccountResult
+import io.github.lightsmit.service.AdminPanelService
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.mail.MailFolderRole
 import io.github.lightsmit.mail.MailListPage
@@ -239,6 +240,18 @@ data class PlanDto(
 )
 
 @Serializable
+data class AdminGrantDto(
+    val plan: String,
+    // Срок как в /grant: 7d, 1m, 3m, 1y, 45d, forever
+    val term: String,
+)
+
+@Serializable
+data class AdminRevokeDto(
+    val refund: Boolean = false,
+)
+
+@Serializable
 data class AutoRenewDto(
     val enabled: Boolean,
 )
@@ -319,6 +332,8 @@ class ApiServer(
     private val inboundSecret: String? = null,
     // Тестовое сообщение «доставка работает» туда, куда приходят письма ящика
     private val sendTest: (suspend (MailAccountConfig) -> Boolean)? = null,
+    // Админ-панель в приложении (только для админов из .env)
+    private val adminPanel: AdminPanelService? = null,
 ) {
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
@@ -891,6 +906,72 @@ class ApiServer(
 
                         val result = browser.sendAttachments(call.attributes[UserIdKey], accountId, uidValidity, uid)
                         if (result is BrowseResult.Ok) call.respond(mapOf("status" to "sending")) else respondBrowseError(call, result)
+                    }
+
+                    // Админ-панель: только админы из .env, остальным 403
+                    route("/admin") {
+                        suspend fun ApplicationCall.panel(): AdminPanelService? {
+                            val panel = adminPanel
+                            if (panel == null || !panel.isAdmin(attributes[UserIdKey])) {
+                                respond(HttpStatusCode.Forbidden, mapOf("error" to "Только для администратора"))
+                                return null
+                            }
+                            return panel
+                        }
+
+                        suspend fun ApplicationCall.targetId(): Long? =
+                            parameters["id"]?.toLongOrNull()?.takeIf { value -> value > 0 }
+                                ?: run {
+                                    respond(HttpStatusCode.BadRequest, mapOf("error" to texts.badRequest))
+                                    null
+                                }
+
+                        get("/overview") {
+                            val panel = call.panel() ?: return@get
+                            call.respond(panel.overview())
+                        }
+
+                        // ?q=поиск&filter=all|paid|free|nobox|errors&limit=100
+                        get("/users") {
+                            val panel = call.panel() ?: return@get
+                            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 100
+                            call.respond(panel.users(call.request.queryParameters["q"], call.request.queryParameters["filter"], limit))
+                        }
+
+                        get("/users/{id}") {
+                            val panel = call.panel() ?: return@get
+                            val id = call.targetId() ?: return@get
+                            val card = panel.card(id)
+                                ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Пользователь не найден"))
+                            call.respond(card)
+                        }
+
+                        post("/users/{id}/grant") {
+                            val panel = call.panel() ?: return@post
+                            val id = call.targetId() ?: return@post
+                            val body = runCatching { call.receive<AdminGrantDto>() }.getOrNull()
+                                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            call.respond(panel.grant(id, body.plan, body.term))
+                        }
+
+                        post("/users/{id}/revoke") {
+                            val panel = call.panel() ?: return@post
+                            val id = call.targetId() ?: return@post
+                            val body = runCatching { call.receive<AdminRevokeDto>() }.getOrNull() ?: AdminRevokeDto()
+                            call.respond(panel.revoke(id, body.refund))
+                        }
+
+                        post("/users/{id}/reset-trial") {
+                            val panel = call.panel() ?: return@post
+                            val id = call.targetId() ?: return@post
+                            call.respond(panel.resetTrial(id))
+                        }
+
+                        delete("/users/{id}") {
+                            val panel = call.panel() ?: return@delete
+                            val id = call.targetId() ?: return@delete
+                            call.respond(panel.deleteData(id))
+                        }
                     }
 
                     // Проверка доставки: бот присылает тестовое сообщение туда, куда приходят письма ящика

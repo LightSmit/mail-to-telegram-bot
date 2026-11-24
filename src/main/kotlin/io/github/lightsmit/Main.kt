@@ -13,6 +13,7 @@ import io.github.lightsmit.i18n.botCommands
 import io.github.lightsmit.mail.ImapIdleWatcher
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.mail.SmtpMailSender
+import io.github.lightsmit.service.AdminPanelService
 import io.github.lightsmit.service.AdminService
 import io.github.lightsmit.service.BackupService
 import io.github.lightsmit.service.DeliveryNoticeReporter
@@ -438,6 +439,18 @@ fun main() = runBlocking {
         inbound = inboundService,
         inboundSecret = inboundSecret,
         sendTest = forwardingService::sendTestMessage,
+        adminPanel = AdminPanelService(
+            adminIds = adminChatIds,
+            botUsers = botUserRepository,
+            accounts = mailAccountRepository,
+            outbox = mailOutboxRepository,
+            healthMonitor = healthMonitor,
+            backupService = backupService,
+            telegramClient = telegramControlClient,
+            subscriptions = subscriptionService,
+            funnel = funnelService,
+            deleteUserData = userDataService::deleteAll,
+        ),
         mailBrowser = MailBrowserService(
             repository = mailAccountRepository,
             imapClient = imapClient,

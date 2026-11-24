@@ -355,6 +355,25 @@ class SubscriptionService(
         trials
     }
 
+    /** Все записи о подписках (и закончившихся): для списка в админ-панели. */
+    suspend fun allSubscriptions(): Map<Long, Subscription> = store.findAll().associateBy(Subscription::userId)
+
+    /** Последняя оплата без возврата: показать в карточке перед возвратом. */
+    suspend fun lastPayment(userId: Long): Payment? = store.lastPayment(userId)
+
+    /**
+     * Сбросить пробный период одному пользователю: запись о пробном Pro удаляется,
+     * человек на Free и может включить пробный период снова. false - пробного периода не было.
+     */
+    suspend fun resetTrial(userId: Long): Boolean = writeLock.withLock {
+        val current = cached(userId)
+        if (current == null || current.source != SubscriptionSource.TRIAL) return@withLock false
+        store.delete(userId)
+        cache.remove(userId)
+        logger.info("Trial of user {} reset by admin", userId)
+        true
+    }
+
     /** Действующие подписки (без админов из .env): для /subs. */
     suspend fun activeSubscriptions(): List<Subscription> {
         val now = clock()

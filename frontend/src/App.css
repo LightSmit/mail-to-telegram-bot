@@ -1866,3 +1866,104 @@ button.row:active {
 @keyframes search-pulse {
   50% { opacity: 0.55; }
 }
+
+/* Админ-панель */
+.admin-period {
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 14px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  text-align: left;
+}
+
+button.tile {
+  cursor: pointer;
+}
+
+button.tile:active {
+  background: color-mix(in srgb, var(--card) 85%, var(--text));
+}
+
+.tile-label {
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.tile-value {
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 700;
+}
+
+.tile-note {
+  font-size: 12px;
+  color: var(--hint);
+}
+
+.tone-text-ok { color: var(--ok-text); }
+.tone-text-warn { color: var(--warn-text); }
+.tone-text-error { color: var(--err-text); }
+
+.admin-pill {
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 11px;
+  vertical-align: 2px;
+  pointer-events: none;
+}
+
+.admin-user-row .row-title {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: wrap;
+}
+
+.admin-user-row .badge {
+  margin-left: 6px;
+}
+
+.admin-grant {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.admin-grant .chips {
+  margin: 0;
+}
+
+.admin-custom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.admin-amount {
+  width: 80px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--separator);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+}

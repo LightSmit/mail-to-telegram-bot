@@ -93,6 +93,13 @@ class FunnelService(
         recorded.removeIf { key -> key.startsWith("$userId:") }
     }
 
+    /** Шаги пользователя по порядку (с подробностями): для карточки в админ-панели. */
+    suspend fun events(userId: Long): List<FunnelEvent> = store.eventsOf(userId)
+
+    /** Последние события новых пользователей (без админов): для обзора в админ-панели. */
+    suspend fun recentEvents(limit: Int): List<FunnelEvent> =
+        store.recent(limit * 2).filter { event -> event.userId !in excludedIds }.take(limit)
+
     suspend fun report(days: Int, source: String? = null): FunnelReport {
         val cohort = cohort(days)
         val sources = cohort.values.mapNotNull { events -> events[FunnelStep.START]?.detail }.groupingBy { it }.eachCount()

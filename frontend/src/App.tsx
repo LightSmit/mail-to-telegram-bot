@@ -20,9 +20,10 @@ import { FiltersScreen } from './screens/Filters'
 import { GroupScreen, PasswordScreen } from './screens/SubScreens'
 import { PlanScreen } from './screens/Plan'
 import { SearchScreen } from './screens/Search'
+import { AdminTab, AdminUserScreen, type AdminSection, type UserFilter } from './screens/Admin'
 import { SettingsScreen } from './screens/Settings'
 
-type Tab = 'home' | 'plan' | 'settings';
+type Tab = 'home' | 'plan' | 'settings' | 'admin';
 
 // Экраны поверх вкладок: открываются по нажатию, «Назад» возвращает к предыдущему
 type Route =
@@ -34,7 +35,8 @@ type Route =
   | { name: 'group'; id: number }
   | { name: 'password'; id: number }
   | { name: 'mail'; id: number; q?: string }
-  | { name: 'search' };
+  | { name: 'search' }
+  | { name: 'adminUser'; id: number };
 
 // Пока приложение открыто, статусы ящиков обновляются сами
 const REFRESH_INTERVAL_MS = 15000;
@@ -59,6 +61,9 @@ function App() {
   const [stack, setStack] = useState<Route[]>([]);
   const [busy, setBusy] = useState(false);
   const [sky, setSky] = useState(loadSkyEnabled);
+  // Админ-панель: раздел и фильтр людей сохраняются при переходах
+  const [adminSection, setAdminSection] = useState<AdminSection>('overview');
+  const [adminFilter, setAdminFilter] = useState<UserFilter>('all');
   const mainRef = useRef<HTMLElement>(null);
 
   const notify = useCallback((kind: NoticeKind, text: string) => setNotice(text ? { kind, text } : null), []);
@@ -326,6 +331,8 @@ function App() {
 
   const renderRoute = (route: Route) => {
     switch (route.name) {
+      case 'adminUser':
+        return <AdminUserScreen key={route.id} userId={route.id} notify={notify} onBack={pop} />;
       case 'search':
         return (
           <SearchScreen
@@ -454,6 +461,17 @@ function App() {
             notify={notify}
           />
         );
+      case 'admin':
+        return (
+          <AdminTab
+            section={adminSection}
+            onSection={setAdminSection}
+            filter={adminFilter}
+            onFilter={setAdminFilter}
+            onOpenUser={(id) => push({ name: 'adminUser', id })}
+            notify={notify}
+          />
+        );
       case 'settings':
         return (
           <SettingsScreen
@@ -468,10 +486,12 @@ function App() {
     }
   };
 
-  const tabs: { id: Tab; icon: 'mail' | 'star' | 'settings'; label: string }[] = [
+  const tabs: { id: Tab; icon: 'mail' | 'star' | 'settings' | 'shield'; label: string }[] = [
     { id: 'home', icon: 'mail', label: t.tabMailboxes },
     { id: 'plan', icon: 'star', label: t.tabPlan },
     { id: 'settings', icon: 'settings', label: t.tabSettings },
+    // Только админам из .env (сервер проверяет каждый запрос)
+    ...(plan?.admin ? [{ id: 'admin' as const, icon: 'shield' as const, label: 'Админ' }] : []),
   ];
   const showTabs = !top && !onboarding;
 

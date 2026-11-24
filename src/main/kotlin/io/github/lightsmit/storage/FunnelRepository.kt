@@ -19,6 +19,12 @@ interface FunnelStore {
     /** Все шаги пользователей, которые впервые запустили бота (шаг start) не раньше since. */
     suspend fun cohortEvents(since: Instant): List<FunnelEvent>
 
+    /** Все шаги одного пользователя (карточка в админ-панели). */
+    suspend fun eventsOf(userId: Long): List<FunnelEvent> = emptyList()
+
+    /** Последние шаги всех пользователей, новые первыми (лента в админ-панели). */
+    suspend fun recent(limit: Int): List<FunnelEvent> = emptyList()
+
     suspend fun deleteUser(userId: Long)
 }
 
@@ -67,6 +73,34 @@ class FunnelRepository : FunnelStore {
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, since.toEpochMilli())
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                FunnelEvent(
+                                    userId = rs.getLong("user_id"),
+                                    step = rs.getString("step"),
+                                    detail = rs.getString("detail"),
+                                    at = Instant.ofEpochMilli(rs.getLong("at")),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override suspend fun eventsOf(userId: Long): List<FunnelEvent> =
+        select("SELECT user_id, step, detail, at FROM funnel_events WHERE user_id = ? ORDER BY at", userId)
+
+    override suspend fun recent(limit: Int): List<FunnelEvent> =
+        select("SELECT user_id, step, detail, at FROM funnel_events ORDER BY at DESC LIMIT ?", limit.toLong())
+
+    private suspend fun select(sql: String, parameter: Long): List<FunnelEvent> = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement(sql).use { statement ->
+                statement.setLong(1, parameter)
                 statement.executeQuery().use { rs ->
                     buildList {
                         while (rs.next()) {
