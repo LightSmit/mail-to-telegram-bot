@@ -331,6 +331,7 @@ function App() {
           <SearchScreen
             request={request}
             pro={pro}
+            mailboxes={accounts.filter((account) => !account.forwardAddress)}
             hasForwardMailboxes={accounts.some((account) => Boolean(account.forwardAddress))}
             onUpgrade={upgrade}
             onOpenMailbox={(id) => push({ name: 'mail', id })}

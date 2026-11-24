@@ -229,19 +229,6 @@ data class PlanDto(
 )
 
 @Serializable
-data class SearchGroupDto(
-    val accountId: Long,
-    val email: String,
-    val name: String,
-    val uidValidity: Long? = null,
-    val total: Int = 0,
-    val items: List<MailListItemDto> = emptyList(),
-    val hasMore: Boolean = false,
-    // Ящик не ответил: текст ошибки на языке пользователя
-    val error: String? = null,
-)
-
-@Serializable
 data class AutoRenewDto(
     val enabled: Boolean,
 )
@@ -779,6 +766,8 @@ class ApiServer(
                         val search = call.request.queryParameters["q"]
                         val unreadOnly = call.request.queryParameters["unread"] == "true"
                         val starredOnly = call.request.queryParameters["starred"] == "true"
+                        // quick=true - быстрый поиск по свежим письмам (поиск по всем ящикам)
+                        val quick = call.request.queryParameters["quick"] == "true"
 
                         // Free: только последние FREE_BROWSE_LIMIT входящих, без поиска и фильтра "непрочитанные"
                         val limited = !planOf(ownerId).hasProFeatures
@@ -799,6 +788,7 @@ class ApiServer(
                             search = search,
                             unreadOnly = unreadOnly,
                             starredOnly = starredOnly,
+                            quick = quick,
                         )
                         if (result is BrowseResult.Ok) {
                             val page = result.value.toDto()
@@ -812,37 +802,6 @@ class ApiServer(
                         } else {
                             respondBrowseError(call, result)
                         }
-                    }
-
-                    // Поиск по всем ящикам сразу (Pro): ?q=поиск&unread=true
-                    get("/search") {
-                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
-                        val ownerId = call.attributes[UserIdKey]
-                        val search = call.request.queryParameters["q"]?.trim().orEmpty()
-                        val unreadOnly = call.request.queryParameters["unread"] == "true"
-                        if (search.isEmpty() && !unreadOnly) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
-                            return@get
-                        }
-                        if (!planOf(ownerId).hasProFeatures) {
-                            call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to call.texts.billing.proBrowse))
-                            return@get
-                        }
-
-                        val texts = call.texts
-                        val groups = browser.searchAll(ownerId, search.ifEmpty { null }, unreadOnly, SEARCH_ALL_PER_MAILBOX)
-                            .map { (account, result) ->
-                                val base = SearchGroupDto(accountId = account.id, email = account.username, name = account.name)
-                                when (result) {
-                                    is BrowseResult.Ok -> {
-                                        val page = result.value.toDto()
-                                        base.copy(uidValidity = page.uidValidity, total = page.total, items = page.items, hasMore = page.hasMore)
-                                    }
-                                    is BrowseResult.Failed -> base.copy(error = browseFailureText(texts, result.reason))
-                                    else -> base.copy(error = texts.browseFailed)
-                                }
-                            }
-                        call.respond(groups)
                     }
 
                     // Одно письмо: ?folder=inbox|sent&v=UIDVALIDITY
@@ -1090,8 +1049,6 @@ class ApiServer(
         const val INBOUND_PATH = "/api/inbound"
         // Сколько последних писем видно в приложении на бесплатном тарифе
         const val FREE_BROWSE_LIMIT = 20
-        // Сколько писем каждого ящика показывать при поиске по всем ящикам
-        const val SEARCH_ALL_PER_MAILBOX = 15
     }
 
     // id пользователя и его language_code из уже проверенного initData

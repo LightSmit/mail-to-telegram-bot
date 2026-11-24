@@ -1853,3 +1853,16 @@ button.row:active {
   border-radius: var(--radius);
   background: var(--card);
 }
+
+.search-group-loading {
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--hint);
+  font-size: 14px;
+  animation: search-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes search-pulse {
+  50% { opacity: 0.55; }
+}

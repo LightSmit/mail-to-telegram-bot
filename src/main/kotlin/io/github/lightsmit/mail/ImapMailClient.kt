@@ -333,6 +333,9 @@ class ImapMailClient(
         limit: Int,
         search: String?,
         unreadOnly: Boolean,
+        // false - быстрый поиск только по последним SEARCH_SCAN_LIMIT письмам, без поиска
+        // на почтовом сервере (он в больших ящиках может идти больше минуты)
+        serverSearch: Boolean = true,
     ): MailListPage = withContext(Dispatchers.IO) {
         require(offset >= 0) { "Offset must not be negative" }
         require(limit in 1..100) { "Limit must be between 1 and 100" }
@@ -342,7 +345,7 @@ class ImapMailClient(
 
             // Без условий берем по номерам с конца папки
             val found: List<Message>? = when {
-                query != null -> searchMessages(folder, query, unreadOnly)
+                query != null -> searchMessages(folder, query, unreadOnly, serverSearch)
                 unreadOnly -> folder.search(FlagTerm(Flags(Flags.Flag.SEEN), false)).toList()
                 else -> null
             }
@@ -409,7 +412,7 @@ class ImapMailClient(
 
     // Серверный IMAP SEARCH у Gmail и Mail.ru ищет только целые слова, а Gmail плохо ищет
     // по-русски. Поэтому свежие письма проверяем сами по любой части текста.
-    private fun searchMessages(folder: Folder, query: String, unreadOnly: Boolean): List<Message> {
+    private fun searchMessages(folder: Folder, query: String, unreadOnly: Boolean, serverSearch: Boolean): List<Message> {
         val needle = normalizeForSearch(query)
         val count = folder.messageCount
         val found = LinkedHashMap<Int, Message>()
@@ -429,7 +432,7 @@ class ImapMailClient(
         }
 
         // Письма старше окна: только то, что найдет сам сервер. Ошибка сервера поиск не ломает
-        if (count > SEARCH_SCAN_LIMIT) {
+        if (serverSearch && count > SEARCH_SCAN_LIMIT) {
             val text = OrTerm(
                 arrayOf(
                     SubjectTerm(query),
