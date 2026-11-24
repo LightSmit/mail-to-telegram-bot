@@ -7,12 +7,7 @@ import jakarta.mail.Folder
 import jakarta.mail.Message
 import jakarta.mail.Store
 import jakarta.mail.UIDFolder
-import jakarta.mail.search.AndTerm
 import jakarta.mail.search.FlagTerm
-import jakarta.mail.search.FromStringTerm
-import jakarta.mail.search.OrTerm
-import jakarta.mail.search.RecipientStringTerm
-import jakarta.mail.search.SubjectTerm
 import jakarta.mail.internet.InternetAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -323,8 +318,9 @@ class ImapMailClient(
 
     /**
      * Страница писем для просмотра в приложении, новые сверху.
-     * search - поиск по части темы, отправителя или получателя: бот сам просматривает
-     * последние SEARCH_SCAN_LIMIT писем, а в более старых ищет почтовый сервер (целыми словами).
+     * search - поиск по любой части темы, отправителя или получателя. Бот сам просматривает
+     * письма пачками от новых к старым, не дольше SEARCH_BUDGET за запрос: медленная почта
+     * (Mail.ru) отдает письма неспешно. Продолжение поиска - с курсора nextCursor.
      */
     suspend fun listMessages(
         account: MailAccountConfig,
@@ -333,9 +329,8 @@ class ImapMailClient(
         limit: Int,
         search: String?,
         unreadOnly: Boolean,
-        // false - быстрый поиск только по последним SEARCH_SCAN_LIMIT письмам, без поиска
-        // на почтовом сервере (он в больших ящиках может идти больше минуты)
-        serverSearch: Boolean = true,
+        // Поиск: с какого номера письма продолжить (null - с самого нового)
+        cursor: Int? = null,
     ): MailListPage = withContext(Dispatchers.IO) {
         require(offset >= 0) { "Offset must not be negative" }
         require(limit in 1..100) { "Limit must be between 1 and 100" }
@@ -343,11 +338,9 @@ class ImapMailClient(
         withFolder(account, CONTENT_TIMEOUT_MILLIS, Folder.READ_ONLY, role) { folder, uidFolder ->
             val query = search?.trim()?.takeIf(String::isNotEmpty)
 
-            // Быстрый поиск: свежие письма пачками от новых к старым, пока не найдено нужное
-            // число или не вышло время. Медленная почта (Mail.ru) отдает письма неспешно
-            if (query != null && !serverSearch) {
-                val quick = quickSearch(folder, query, unreadOnly, want = offset + limit)
-                val page = quick.messages.drop(offset).take(limit).toTypedArray()
+            if (query != null) {
+                val scan = scanSearch(folder, query, unreadOnly, from = cursor, want = limit)
+                val page = scan.messages.toTypedArray()
                 if (page.isNotEmpty()) {
                     folder.fetch(
                         page,
@@ -359,16 +352,18 @@ class ImapMailClient(
                 }
                 return@withFolder MailListPage(
                     uidValidity = uidFolder.uidValidity,
-                    total = quick.messages.size,
+                    total = page.size,
                     items = page.map { message -> listItem(message, uidFolder.getUID(message)) },
-                    hasMore = quick.stoppedEarly,
-                    partial = quick.timedOut,
+                    hasMore = scan.nextCursor != null,
+                    partial = scan.timedOut,
+                    nextCursor = scan.nextCursor,
+                    scanned = scan.scanned,
+                    folderSize = scan.folderSize,
                 )
             }
 
             // Без условий берем по номерам с конца папки
             val found: List<Message>? = when {
-                query != null -> searchMessages(folder, query, unreadOnly, serverSearch)
                 unreadOnly -> folder.search(FlagTerm(Flags(Flags.Flag.SEEN), false)).toList()
                 else -> null
             }
@@ -433,62 +428,31 @@ class ImapMailClient(
         }
     }
 
-    // Серверный IMAP SEARCH у Gmail и Mail.ru ищет только целые слова, а Gmail плохо ищет
-    // по-русски. Поэтому свежие письма проверяем сами по любой части текста.
-    private fun searchMessages(folder: Folder, query: String, unreadOnly: Boolean, serverSearch: Boolean): List<Message> {
+    private class SearchScan(
+        val messages: List<Message>,
+        // С какого номера продолжить; null - папка просмотрена до конца
+        val nextCursor: Int?,
+        val timedOut: Boolean,
+        // Сколько писем просмотрено от начала поиска и сколько всего в папке
+        val scanned: Int,
+        val folderSize: Int,
+    )
+
+    // Новые письма первыми. Возвращает все совпадения из просмотренных пачек
+    private fun scanSearch(folder: Folder, query: String, unreadOnly: Boolean, from: Int?, want: Int): SearchScan {
         val needle = normalizeForSearch(query)
         val count = folder.messageCount
-        val found = LinkedHashMap<Int, Message>()
-
-        if (count > 0) {
-            val recent = folder.getMessages(maxOf(1, count - SEARCH_SCAN_LIMIT + 1), count)
-            folder.fetch(
-                recent,
-                FetchProfile().apply {
-                    add(FetchProfile.Item.ENVELOPE)
-                    add(FetchProfile.Item.FLAGS)
-                },
-            )
-            recent
-                .filter { message -> (!unreadOnly || !isSeen(message)) && matchesSearch(message, needle) }
-                .forEach { message -> found[message.messageNumber] = message }
-        }
-
-        // Письма старше окна: только то, что найдет сам сервер. Ошибка сервера поиск не ломает
-        if (serverSearch && count > SEARCH_SCAN_LIMIT) {
-            val text = OrTerm(
-                arrayOf(
-                    SubjectTerm(query),
-                    FromStringTerm(query),
-                    RecipientStringTerm(Message.RecipientType.TO, query),
-                ),
-            )
-            val term = if (unreadOnly) AndTerm(arrayOf(text, FlagTerm(Flags(Flags.Flag.SEEN), false))) else text
-            runCatching { folder.search(term) }.getOrNull()
-                ?.forEach { message -> found.putIfAbsent(message.messageNumber, message) }
-        }
-
-        return found.values.sortedBy { message -> message.messageNumber }
-    }
-
-    private class QuickSearch(val messages: List<Message>, val stoppedEarly: Boolean, val timedOut: Boolean)
-
-    // Новые письма первыми. stoppedEarly - дальше могут быть еще совпадения
-    private fun quickSearch(folder: Folder, query: String, unreadOnly: Boolean, want: Int): QuickSearch {
-        val needle = normalizeForSearch(query)
-        val count = folder.messageCount
-        val lowest = maxOf(1, count - SEARCH_SCAN_LIMIT + 1)
-        val deadline = System.nanoTime() + QUICK_SEARCH_BUDGET_NANOS
+        val deadline = System.nanoTime() + SEARCH_BUDGET_NANOS
         val found = mutableListOf<Message>()
-        var end = count
+        var end = (from ?: count).coerceAtMost(count)
         var timedOut = false
 
-        while (end >= lowest && found.size < want) {
+        while (end >= 1 && found.size < want) {
             if (System.nanoTime() > deadline) {
                 timedOut = true
                 break
             }
-            val start = maxOf(lowest, end - QUICK_SEARCH_CHUNK + 1)
+            val start = maxOf(1, end - SEARCH_CHUNK + 1)
             val chunk = folder.getMessages(start, end)
             folder.fetch(
                 chunk,
@@ -502,7 +466,13 @@ class ImapMailClient(
                 .forEach { message -> found.add(message) }
             end = start - 1
         }
-        return QuickSearch(found.take(want), stoppedEarly = end >= lowest, timedOut = timedOut)
+        return SearchScan(
+            messages = found,
+            nextCursor = end.takeIf { value -> value >= 1 },
+            timedOut = timedOut,
+            scanned = count - maxOf(end, 0),
+            folderSize = count,
+        )
     }
 
     private fun matchesSearch(message: Message, needle: String): Boolean {
@@ -648,11 +618,9 @@ class ImapMailClient(
         private val WHITESPACE = Regex("\\s+")
         private const val CONTENT_TIMEOUT_MILLIS = 180_000
         private const val MAX_VIEW_BODY_CHARS = 100_000
-        // Сколько последних писем бот просматривает сам при поиске
-        private const val SEARCH_SCAN_LIMIT = 2000
-        // Быстрый поиск: пачка писем за один запрос и сколько всего ждем почту
-        private const val QUICK_SEARCH_CHUNK = 100
-        private const val QUICK_SEARCH_BUDGET_NANOS = 20_000_000_000L
+        // Поиск: пачка писем за один запрос к почте и сколько ждем почту за один поиск
+        private const val SEARCH_CHUNK = 100
+        private const val SEARCH_BUDGET_NANOS = 20_000_000_000L
         // Больше отмеченных писем за раз не показываем
         private const val MAX_UID_LIST = 500
         private val SENT_FOLDER_NAMES = setOf("sent", "sent items", "sent messages", "sent mail", "отправленные")

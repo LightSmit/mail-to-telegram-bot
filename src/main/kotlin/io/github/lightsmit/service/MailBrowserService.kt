@@ -50,8 +50,8 @@ class MailBrowserService(
         unreadOnly: Boolean,
         // Только отмеченные звездочкой
         starredOnly: Boolean = false,
-        // Быстрый поиск без поиска на почтовом сервере (поиск по всем ящикам)
-        quick: Boolean = false,
+        // Продолжение поиска с этого номера письма
+        cursor: Int? = null,
     ): BrowseResult<MailListPage> = withAccount(ownerId, accountId) { account ->
         val folder = folderKey(role)
         if (starredOnly) {
@@ -66,7 +66,7 @@ class MailBrowserService(
             limit = limit.coerceIn(1, MAX_PAGE_SIZE),
             search = search?.trim()?.take(MAX_SEARCH_LENGTH)?.takeIf(String::isNotEmpty),
             unreadOnly = unreadOnly,
-            serverSearch = !quick,
+            cursor = cursor,
         )
         val marked = starred?.uids(accountId, folder, page.uidValidity)?.toSet().orEmpty()
         if (marked.isEmpty()) page else page.copy(items = page.items.map { item -> item.copy(starred = item.uid in marked) })

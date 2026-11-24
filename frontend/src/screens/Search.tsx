@@ -82,7 +82,7 @@ export function SearchScreen({ request, pro, mailboxes, hasForwardMailboxes, onU
     setGroups(mailboxes.map((account) => ({
       accountId: account.id, email: account.email, name: account.name, loading: true, total: 0, items: [],
     })));
-    const params = new URLSearchParams({ folder: 'inbox', offset: '0', limit: String(PER_MAILBOX), quick: 'true' });
+    const params = new URLSearchParams({ folder: 'inbox', offset: '0', limit: String(PER_MAILBOX) });
     if (query) params.set('q', query);
     if (unreadOnly) params.set('unread', 'true');
     mailboxes.forEach(async (account) => {
@@ -93,8 +93,9 @@ export function SearchScreen({ request, pro, mailboxes, hasForwardMailboxes, onU
           return;
         }
         const page: { uidValidity: number; total: number; items: MailItem[]; hasMore: boolean; partial?: boolean } = await response.json();
+        // Пачка писем может дать больше совпадений, чем показываем: остальные - в ящике
         patch(account.id, {
-          loading: false, uidValidity: page.uidValidity, total: page.total, items: page.items,
+          loading: false, uidValidity: page.uidValidity, total: page.total, items: page.items.slice(0, PER_MAILBOX),
           hasMore: page.hasMore, partial: page.partial === true,
         });
       } catch {

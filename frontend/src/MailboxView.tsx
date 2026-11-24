@@ -25,6 +25,10 @@ interface MailPage {
   hasMore: boolean;
   // Free: показаны только последние письма
   limited?: boolean;
+  // Поиск идет пачками: продолжить с курсора; сколько писем просмотрено из скольких
+  nextCursor?: number | null;
+  scanned?: number;
+  folderSize?: number;
 }
 
 interface MailMessage {
@@ -145,16 +149,23 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
   const [error, setError] = useState<string | null>(null);
   const [openUid, setOpenUid] = useState<number | null>(null);
   const [pageLimited, setPageLimited] = useState(false);
+  // Поиск: откуда продолжить и сколько писем просмотрено
+  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [scan, setScan] = useState<{ scanned: number; size: number } | null>(null);
 
   // Ответ на устаревший запрос (сменили папку или поиск) не должен затирать новый
   const requestId = useRef(0);
+  // Уже показанные письма: ответ дописывается к ним (setItems применяется не сразу)
+  const shown = useRef<MailItem[]>([]);
 
-  const load = async (offset: number) => {
+  // cursor - продолжение поиска. Пока найдено меньше страницы, поиск продолжается сам
+  const load = async (offset: number, cursor?: number) => {
     const id = ++requestId.current;
     setLoading(true);
     setError(null);
     const params = new URLSearchParams({ folder, offset: String(offset), limit: String(limited ? FREE_PAGE_SIZE : PAGE_SIZE) });
     if (query) params.set('q', query);
+    if (query && cursor) params.set('cursor', String(cursor));
     if (unreadOnly) params.set('unread', 'true');
     if (starredOnly) params.set('starred', 'true');
 
@@ -168,14 +179,26 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
       const page: MailPage = await response.json();
       if (id !== requestId.current) return;
       setUidValidity(page.uidValidity);
-      setTotal(page.total);
       setHasMore(page.hasMore);
       setPageLimited(page.limited === true);
-      setItems((current) => {
-        if (offset === 0) return page.items;
-        const known = new Set(current.map((item) => item.uid));
-        return [...current, ...page.items.filter((item) => !known.has(item.uid))];
-      });
+      setNextCursor(page.nextCursor ?? null);
+      setScan(query && page.folderSize ? { scanned: page.scanned ?? 0, size: page.folderSize } : null);
+      const current = offset === 0 && !cursor ? [] : shown.current;
+      const known = new Set(current.map((item) => item.uid));
+      const merged = [...current, ...page.items.filter((item) => !known.has(item.uid))];
+      shown.current = merged;
+      setItems(merged);
+      if (query) {
+        // В поиске сервер не знает общее число: считаем найденное
+        setTotal(merged.length);
+        // Найдено меньше страницы, а письма еще есть - ищем дальше сами
+        if (page.nextCursor && merged.length < offset + PAGE_SIZE) {
+          void load(offset, page.nextCursor);
+          return;
+        }
+      } else {
+        setTotal(page.total);
+      }
     } catch {
       if (id === requestId.current) setError(t.mailServerTimeout);
     } finally {
@@ -186,6 +209,9 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
   // Новая папка, поиск или фильтр "непрочитанные" - загружаем заново с начала
   useEffect(() => {
     setItems([]);
+    shown.current = [];
+    setScan(null);
+    setNextCursor(null);
     setOpenUid(null);
     load(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,8 +235,11 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
     return sorted;
   }, [items, withAttachments, sort]);
 
-  const updateLocally = (uid: number, patch: Partial<MailItem>) =>
-    setItems((current) => current.map((item) => (item.uid === uid ? { ...item, ...patch } : item)));
+  const updateLocally = (uid: number, patch: Partial<MailItem>) => {
+    const next = (list: MailItem[]) => list.map((item) => (item.uid === uid ? { ...item, ...patch } : item));
+    shown.current = next(shown.current);
+    setItems(next);
+  };
 
   // Звездочка из списка: сразу меняем на экране, при ошибке возвращаем
   const toggleStar = async (item: MailItem) => {
@@ -282,7 +311,10 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
       </div>
 
       {query && (
-        <p className="field-hint search-hint">{t.searchHint}</p>
+        <p className="field-hint search-hint">
+          {t.searchHint}
+          {scan && ` ${t.searchScanned(scan.scanned, scan.size)}`}
+        </p>
       )}
 
       {starredOnly && <p className="field-hint search-hint">{t.starredHint}</p>}
@@ -293,7 +325,7 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
       {!error && (
         <p className="mail-count">
           {loading && items.length === 0
-            ? t.loadingEmails
+            ? (query ? t.searching : t.loadingEmails)
             : starredOnly
               ? t.starredCount(total)
               : query || unreadOnly
@@ -340,9 +372,23 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
         </p>
       )}
 
-      {hasMore && !error && (
-        <button type="button" className="secondary more" disabled={loading} onClick={() => load(items.length)}>
-          {loading ? t.loading : t.showMore}
+      {query && loading && items.length > 0 && <p className="mail-count">{t.searching}</p>}
+
+      {query && loading && (
+        // Остановить автопродолжение поиска: ответы старых запросов игнорируются
+        <button type="button" className="link-button more" onClick={() => { requestId.current++; setLoading(false); }}>
+          {t.stopSearch}
+        </button>
+      )}
+
+      {hasMore && !error && !(query && loading) && (
+        <button
+          type="button"
+          className="secondary more"
+          disabled={loading}
+          onClick={() => (query && nextCursor ? load(items.length, nextCursor) : load(items.length))}
+        >
+          {loading ? t.loading : query ? t.searchFurther : t.showMore}
         </button>
       )}
     </div>

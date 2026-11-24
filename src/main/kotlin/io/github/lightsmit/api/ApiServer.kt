@@ -147,8 +147,12 @@ data class MailListPageDto(
     val hasMore: Boolean,
     // Бесплатный тариф: показаны только последние письма, остальные - в Pro
     val limited: Boolean = false,
-    // Быстрый поиск просмотрел не все свежие письма (почта отвечает медленно)
+    // Поиск остановился по времени (почта отвечает медленно)
     val partial: Boolean = false,
+    // Поиск: продолжить с этого курсора; сколько писем просмотрено и сколько всего в папке
+    val nextCursor: Int? = null,
+    val scanned: Int = 0,
+    val folderSize: Int = 0,
 )
 
 @Serializable
@@ -170,6 +174,9 @@ private fun MailListPage.toDto() = MailListPageDto(
     total = total,
     hasMore = hasMore,
     partial = partial,
+    nextCursor = nextCursor,
+    scanned = scanned,
+    folderSize = folderSize,
     items = items.map { item ->
         MailListItemDto(
             uid = item.uid,
@@ -769,8 +776,8 @@ class ApiServer(
                         val search = call.request.queryParameters["q"]
                         val unreadOnly = call.request.queryParameters["unread"] == "true"
                         val starredOnly = call.request.queryParameters["starred"] == "true"
-                        // quick=true - быстрый поиск по свежим письмам (поиск по всем ящикам)
-                        val quick = call.request.queryParameters["quick"] == "true"
+                        // Продолжение поиска: cursor из прошлого ответа (nextCursor)
+                        val cursor = call.request.queryParameters["cursor"]?.toIntOrNull()?.takeIf { value -> value >= 1 }
 
                         // Free: только последние FREE_BROWSE_LIMIT входящих, без поиска и фильтра "непрочитанные"
                         val limited = !planOf(ownerId).hasProFeatures
@@ -791,7 +798,7 @@ class ApiServer(
                             search = search,
                             unreadOnly = unreadOnly,
                             starredOnly = starredOnly,
-                            quick = quick,
+                            cursor = cursor,
                         )
                         if (result is BrowseResult.Ok) {
                             val page = result.value.toDto()
