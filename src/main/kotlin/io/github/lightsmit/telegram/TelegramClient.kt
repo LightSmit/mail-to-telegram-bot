@@ -118,6 +118,7 @@ class TelegramClient(
                 formParameters = Parameters.build {
                     append("chat_id", chatId.toString())
                     append("text", text)
+                    append("link_preview_options", NO_LINK_PREVIEW)
                 },
             )
         }
@@ -145,6 +146,7 @@ class TelegramClient(
                 formParameters = Parameters.build {
                     append("chat_id", chatId.toString())
                     append("text", text)
+                    append("link_preview_options", NO_LINK_PREVIEW)
                     append("reply_markup", replyMarkup.toString())
                     if (silent) append("disable_notification", "true")
                 },
@@ -170,6 +172,7 @@ class TelegramClient(
                 formParameters = Parameters.build {
                     append("chat_id", chatId.toString())
                     append("text", text)
+                    append("link_preview_options", NO_LINK_PREVIEW)
                     append("reply_markup", replyMarkup.toString())
                 },
             )
@@ -256,6 +259,7 @@ class TelegramClient(
                 formParameters = Parameters.build {
                     append("chat_id", chatId.toString())
                     append("text", text)
+                    append("link_preview_options", NO_LINK_PREVIEW)
                     append("reply_markup", replyMarkup.toString())
                 },
             )
@@ -286,6 +290,7 @@ class TelegramClient(
                     append("chat_id", chatId.toString())
                     append("message_id", messageId.toString())
                     append("text", text)
+                    append("link_preview_options", NO_LINK_PREVIEW)
                 },
             )
         }
@@ -314,6 +319,7 @@ class TelegramClient(
                     append("chat_id", chatId.toString())
                     append("message_id", messageId.toString())
                     append("text", text)
+                    append("link_preview_options", NO_LINK_PREVIEW)
                     append("reply_markup", replyMarkup.toString())
                 },
             )
@@ -1006,6 +1012,8 @@ class TelegramClient(
     }
 
     private companion object {
+        // Без превью ссылок: Telegram не ходит по трекинговым ссылкам из писем, текст не засоряется карточками
+        private const val NO_LINK_PREVIEW = """{"is_disabled":true}"""
         const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 15_000L
         const val DEFAULT_SOCKET_TIMEOUT_MILLIS = 90_000L
         const val DEFAULT_REQUEST_TIMEOUT_MILLIS = 90_000L

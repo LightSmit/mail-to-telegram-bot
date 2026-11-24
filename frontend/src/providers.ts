@@ -184,21 +184,23 @@ export const PROVIDERS: MailProvider[] = [
     passwordHintEn: '16 Latin letters, for example abcd efgh ijkl mnop. Your regular Google password will not work.',
     forwardSteps: [
       {
-        text: 'Откройте настройки Gmail, вкладку «Пересылка и POP/IMAP», и нажмите «Добавить адрес пересылки». На телефоне откройте полную версию Gmail в браузере: в приложении Gmail этой настройки нет.',
+        text: 'Откройте настройки Gmail, вкладку «Пересылка и POP/IMAP». На телефоне откройте полную версию Gmail в браузере: в приложении Gmail этой настройки нет.',
         url: gmailForwarding,
         button: 'Открыть настройки пересылки',
       },
-      'Вставьте адрес выше. Google пришлет на него письмо с кодом подтверждения: оно придет сюда, в чат с ботом, код будет в теме письма.',
-      'Введите код в Gmail, выберите «Пересылать копии входящих сообщений на адрес…» и нажмите «Сохранить изменения» внизу страницы.',
+      'Нажмите «Добавить адрес пересылки» и вставьте адрес выше. Если вместо кнопки там поле ввода, вставьте адрес в него и нажмите «Сохранить изменения»: Gmail покажет ошибку, это нормально.',
+      'Google пришлет на адрес письмо с подтверждением. Оно придет сюда, в чат с ботом: откройте его кнопкой «Текст» и перейдите по ссылке.',
+      'Обновите страницу настроек Gmail, выберите «Пересылать копии входящих сообщений на адрес…» и нажмите «Сохранить изменения» внизу страницы.',
     ],
     forwardStepsEn: [
       {
-        text: 'Open Gmail settings, the "Forwarding and POP/IMAP" tab, and click "Add a forwarding address". On a phone, open the full Gmail site in a browser: the Gmail app does not have this setting.',
+        text: 'Open Gmail settings, the "Forwarding and POP/IMAP" tab. On a phone, open the full Gmail site in a browser: the Gmail app does not have this setting.',
         url: gmailForwarding,
         button: 'Open forwarding settings',
       },
-      'Paste the address above. Google will send a confirmation code to it: the email arrives here, in the chat with the bot, with the code in its subject.',
-      'Enter the code in Gmail, choose "Forward a copy of incoming mail to…" and click "Save Changes" at the bottom of the page.',
+      'Click "Add a forwarding address" and paste the address above. If there is a text field instead of the button, paste the address there and click "Save Changes": Gmail shows an error, that is expected.',
+      'Google will send a confirmation email to the address. It arrives here, in the chat with the bot: open it with the "Text" button and follow the link.',
+      'Reload Gmail settings, choose "Forward a copy of incoming mail to…" and click "Save Changes" at the bottom of the page.',
     ],
   },
   {

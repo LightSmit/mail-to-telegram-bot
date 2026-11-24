@@ -5,6 +5,11 @@ import jakarta.mail.Part
 import jakarta.mail.internet.MimeUtility
 import io.github.lightsmit.i18n.SKIP_TOO_LARGE
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import org.jsoup.nodes.Node
+import org.jsoup.nodes.TextNode
+import org.jsoup.select.NodeTraversor
+import org.jsoup.select.NodeVisitor
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -64,7 +69,7 @@ object EmailContentExtractor {
 
         return EmailContent(
             body = body
-                ?.let(::normalize)
+                ?.let(::cleanText)
                 ?.takeIf { text ->
                     text.isNotBlank()
                 },
@@ -356,25 +361,37 @@ object EmailContentExtractor {
         }
     }
 
+    // Текст из HTML так, как его показал бы браузер: пробелы и переносы из исходника
+    // схлопываются, новая строка - только на <br> и границах блоков (абзацы, строки таблиц)
     private fun convertHtmlToText(
         html: String,
     ): String {
         val document = Jsoup.parse(html)
+        document.select("script, style, head, title").remove()
 
-        document
-            .select("br")
-            .after("\n")
+        val text = StringBuilder()
+        NodeTraversor.traverse(
+            object : NodeVisitor {
+                override fun head(node: Node, depth: Int) {
+                    when {
+                        node is TextNode -> text.append(node.text())
+                        node is Element && node.normalName() == "br" -> text.append('\n')
+                        node is Element && node.normalName() in BLOCK_TAGS -> text.append('\n')
+                    }
+                }
 
-        document
-            .select(
-                "p, div, li, tr, h1, h2, h3, " +
-                        "h4, h5, h6, blockquote",
-            )
-            .before("\n")
-
-        return document
-            .body()
-            .wholeText()
+                override fun tail(node: Node, depth: Int) {
+                    if (node !is Element) return
+                    when (node.normalName()) {
+                        in BLOCK_TAGS -> text.append('\n')
+                        // Ячейки одной строки таблицы - через пробел, а не слитно
+                        "td", "th" -> text.append(' ')
+                    }
+                }
+            },
+            document.body(),
+        )
+        return text.toString()
     }
 
     private fun normalize(
@@ -383,14 +400,17 @@ object EmailContentExtractor {
         return text
             .replace("\r\n", "\n")
             .replace('\r', '\n')
+            .replace('\t', ' ')
+            // Невидимые символы рассылок (zero-width, мягкий перенос): из них состоят «пустые» строки
+            .replace(INVISIBLE, "")
             .filter { character ->
                 character == '\n' ||
-                        character == '\t' ||
                         !character.isISOControl()
             }
             .lines()
             .joinToString("\n") { line ->
-                line.trimEnd()
+                // Отступы из верстки рассылок не нужны в Telegram: убираем их и двойные пробелы
+                line.replace(SPACES, " ").trim()
             }
             .replace(
                 regex = Regex("\n{3,}"),
@@ -398,6 +418,27 @@ object EmailContentExtractor {
             )
             .trim()
     }
+
+    // Некоторые почты (Mail.ru) кладут в текстовую версию письма ссылки с HTML-экранированием:
+    // ...?a=1&amp;b=2. По такой ссылке параметры теряются, поэтому возвращаем обычный &
+    internal fun unescapeLinks(
+        text: String,
+    ): String =
+        LINK_PATTERN.replace(text) { match ->
+            match.value
+                .replace("&amp;", "&")
+                .replace("%26amp%3B", "%26", ignoreCase = true)
+        }
+
+    internal fun cleanText(text: String): String = unescapeLinks(normalize(text))
+
+    private val LINK_PATTERN = Regex("https?://[^\\s<>\"]+")
+    private val INVISIBLE = Regex("[\u00AD\u034F\u180E\u200B\u200C\u200E\u200F\u2060-\u2064\uFEFF]")
+    private val SPACES = Regex("[ \t\u00A0\u2007\u202F]+")
+    private val BLOCK_TAGS = setOf(
+        "p", "div", "li", "tr", "table", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6",
+        "blockquote", "section", "article", "header", "footer", "hr", "center",
+    )
 
     private class AttachmentTooLargeException :
         RuntimeException()
