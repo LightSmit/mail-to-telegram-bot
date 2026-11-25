@@ -20,7 +20,19 @@ interface SearchGroup {
   // Дальше могут быть еще совпадения / почта медленная, просмотрены не все свежие письма
   hasMore?: boolean;
   partial?: boolean;
+  // Идет перебор писем: ищем совпадения по части слова
+  scanning?: boolean;
   error?: string | null;
+}
+
+interface SearchPage {
+  uidValidity: number;
+  total: number;
+  items: MailItem[];
+  hasMore: boolean;
+  partial?: boolean;
+  nextCursor?: number | null;
+  serverPhase?: boolean;
 }
 
 // Сколько писем каждого ящика показывать
@@ -85,19 +97,47 @@ export function SearchScreen({ request, pro, mailboxes, hasForwardMailboxes, onU
     const params = new URLSearchParams({ folder: 'inbox', offset: '0', limit: String(PER_MAILBOX) });
     if (query) params.set('q', query);
     if (unreadOnly) params.set('unread', 'true');
+    // Шаг 1 - поиск силами почты (мгновенно), шаг 2 - перебор свежих писем по части слова
     mailboxes.forEach(async (account) => {
+      const fetchPage = async (cursor?: number): Promise<SearchPage | string> => {
+        const stepParams = new URLSearchParams(params);
+        if (cursor) stepParams.set('cursor', String(cursor));
+        const response = await request(`/accounts/${account.id}/messages?${stepParams}`, 'GET', undefined, MAIL_TIMEOUT_MS);
+        if (!response.ok) return readError(response, t.loadEmailsFailed);
+        return response.json();
+      };
+      const combine = (first: MailItem[], second: MailItem[]) => {
+        const known = new Set(first.map((item) => item.uid));
+        return [...first, ...second.filter((item) => !known.has(item.uid))].sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
+      };
       try {
-        const response = await request(`/accounts/${account.id}/messages?${params}`, 'GET', undefined, MAIL_TIMEOUT_MS);
-        if (!response.ok) {
-          patch(account.id, { loading: false, error: await readError(response, t.loadEmailsFailed) });
+        const first = await fetchPage();
+        if (typeof first === 'string') {
+          patch(account.id, { loading: false, error: first });
           return;
         }
-        const page: { uidValidity: number; total: number; items: MailItem[]; hasMore: boolean; partial?: boolean } = await response.json();
-        // Пачка писем может дать больше совпадений, чем показываем: остальные - в ящике
+        const scanNext = Boolean(first.serverPhase && first.nextCursor);
         patch(account.id, {
-          loading: false, uidValidity: page.uidValidity, total: page.total, items: page.items.slice(0, PER_MAILBOX),
-          hasMore: page.hasMore, partial: page.partial === true,
+          loading: false, scanning: scanNext, uidValidity: first.uidValidity, total: first.items.length,
+          items: first.items.slice(0, PER_MAILBOX), hasMore: first.hasMore, partial: false,
         });
+        if (!scanNext) return;
+
+        try {
+          const second = await fetchPage(first.nextCursor ?? undefined);
+          if (typeof second === 'string') {
+            patch(account.id, { scanning: false });
+            return;
+          }
+          const all = combine(first.items, second.items);
+          // Пачка писем может дать больше совпадений, чем показываем: остальные - в ящике
+          patch(account.id, {
+            scanning: false, total: all.length, items: all.slice(0, PER_MAILBOX),
+            hasMore: second.hasMore || all.length > PER_MAILBOX, partial: second.partial === true,
+          });
+        } catch {
+          patch(account.id, { scanning: false, partial: true });
+        }
       } catch {
         patch(account.id, { loading: false, error: t.mailServerTimeout });
       }
@@ -136,8 +176,8 @@ export function SearchScreen({ request, pro, mailboxes, hasForwardMailboxes, onU
   }
 
   const found = groups?.reduce((sum, group) => sum + group.total, 0) ?? 0;
-  const loading = groups?.some((group) => group.loading) ?? false;
-  const visibleGroups = groups?.filter((group) => group.loading || group.items.length > 0 || group.error || group.partial) ?? [];
+  const loading = groups?.some((group) => group.loading || group.scanning) ?? false;
+  const visibleGroups = groups?.filter((group) => group.loading || group.scanning || group.items.length > 0 || group.error || group.partial) ?? [];
 
   return (
     <div className="screen">
@@ -208,7 +248,10 @@ export function SearchScreen({ request, pro, mailboxes, hasForwardMailboxes, onU
                       </button>
                     </li>
                   ))}
-                  {(group.hasMore || group.partial || group.total > group.items.length) && (
+                  {group.scanning && (
+                    <li className="search-scanning">{t.searchAllScanning}</li>
+                  )}
+                  {!group.scanning && (group.hasMore || group.partial || group.total > group.items.length) && (
                     <li>
                       <button type="button" className="row row-accent search-more" onClick={() => onOpenMailbox(group.accountId, query)}>
                         <span className="row-text">

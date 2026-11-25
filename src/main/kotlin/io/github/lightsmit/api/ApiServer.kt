@@ -158,6 +158,8 @@ data class MailListPageDto(
     val nextCursor: Int? = null,
     val scanned: Int = 0,
     val folderSize: Int = 0,
+    // Быстрый результат поиска силами почты; перебор (cursor) приложение запускает следом
+    val serverPhase: Boolean = false,
 )
 
 @Serializable
@@ -200,6 +202,7 @@ private fun MailListPage.toDto() = MailListPageDto(
     nextCursor = nextCursor,
     scanned = scanned,
     folderSize = folderSize,
+    serverPhase = serverPhase,
     items = items.map { item ->
         MailListItemDto(
             uid = item.uid,

@@ -2180,3 +2180,11 @@ button.message-file-name {
   border: 0;
   background: #fff;
 }
+
+.search-scanning {
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--hint);
+  border-top: 1px solid var(--separator);
+  animation: search-pulse 1.4s ease-in-out infinite;
+}

@@ -32,6 +32,8 @@ interface MailPage {
   nextCursor?: number | null;
   scanned?: number;
   folderSize?: number;
+  // Быстрый результат поиска силами почты: следом сразу идет перебор по части слова
+  serverPhase?: boolean;
 }
 
 interface MailMessage {
@@ -254,6 +256,8 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
       const current = offset === 0 && !cursor ? [] : shown.current;
       const known = new Set(current.map((item) => item.uid));
       const merged = [...current, ...page.items.filter((item) => !known.has(item.uid))];
+      // В поиске результаты двух способов перемешаны по датам: новые сверху
+      if (query) merged.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
       shown.current = merged;
       setItems(merged);
       if (query) {
@@ -261,7 +265,7 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
         setTotal(merged.length);
         // Пока этот шаг ничего нового не нашел, а письма еще есть - ищем дальше сами.
         // Что-то нашли - показываем и ждем «Искать дальше»: на медленной почте шаг идет ~20 секунд
-        if (page.nextCursor && merged.length === current.length) {
+        if (page.nextCursor && (page.serverPhase || merged.length === current.length)) {
           void load(offset, page.nextCursor);
           return;
         }

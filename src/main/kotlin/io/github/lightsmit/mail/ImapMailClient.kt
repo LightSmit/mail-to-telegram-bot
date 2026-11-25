@@ -18,7 +18,10 @@ import jakarta.mail.internet.InternetAddress
 import jakarta.mail.internet.MimeUtility
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.eclipse.angus.mail.iap.Argument
 import org.eclipse.angus.mail.imap.IMAPFolder
+import org.eclipse.angus.mail.imap.IMAPStore
+import org.eclipse.angus.mail.imap.protocol.IMAPResponse
 import java.nio.file.Path
 
 class ImapMailClient(
@@ -355,7 +358,13 @@ class ImapMailClient(
             val query = search?.trim()?.takeIf(String::isNotEmpty)
 
             if (query != null) {
-                val scan = scanSearch(folder, query, unreadOnly, from = cursor, want = limit)
+                // Первый запрос - только поиск силами почты (мгновенно); дальше по курсору - перебор писем
+                // для совпадений по части слова. Приложение запускает перебор само сразу после первого ответа
+                val scan = if (cursor == null) {
+                    serverPhase(folder, query, unreadOnly, want = limit)
+                } else {
+                    scanSearch(folder, query, unreadOnly, from = cursor, want = limit)
+                }
                 val page = scan.messages.toTypedArray()
                 if (page.isNotEmpty()) {
                     // Поиск читал только заголовки: для строк списка дочитываем найденные одним запросом
@@ -377,6 +386,7 @@ class ImapMailClient(
                     nextCursor = scan.nextCursor,
                     scanned = scan.scanned,
                     folderSize = scan.folderSize,
+                    serverPhase = scan.serverPhase,
                 )
             }
 
@@ -454,7 +464,22 @@ class ImapMailClient(
         // Сколько писем просмотрено от начала поиска и сколько всего в папке
         val scanned: Int,
         val folderSize: Int,
+        // Результат поиска силами почты; перебор писем еще не начинался
+        val serverPhase: Boolean = false,
     )
+
+    private fun serverPhase(folder: Folder, query: String, unreadOnly: Boolean, want: Int): SearchScan {
+        val count = folder.messageCount
+        val hits = if (count > 0) serverSearch(folder, query, unreadOnly, want) else emptyList()
+        return SearchScan(
+            messages = hits,
+            nextCursor = count.takeIf { value -> value >= 1 },
+            timedOut = false,
+            scanned = 0,
+            folderSize = count,
+            serverPhase = true,
+        )
+    }
 
     // Новые письма первыми. Возвращает все совпадения из просмотренных пачек
     private fun scanSearch(folder: Folder, query: String, unreadOnly: Boolean, from: Int?, want: Int): SearchScan {
@@ -468,13 +493,9 @@ class ImapMailClient(
         var chunkSize = SEARCH_CHUNK
         val startedAt = System.nanoTime()
 
-        // Первая страница: сначала поиск силами почтового сервера. Он ищет целые слова,
-        // но по всему ящику и быстро - Mail.ru отдает письма для перебора очень медленно
-        val serverHits = if (from == null && count > 0) serverSearch(folder, query, unreadOnly, want) else emptyList()
-        val seen = serverHits.mapTo(HashSet()) { message -> message.messageNumber }
         var lastChunkNanos = 0L
 
-        while (end >= 1 && found.size + serverHits.size < want) {
+        while (end >= 1 && found.size < want) {
             // Следующая пачка не успеет до конца отведенного времени - останавливаемся заранее
             if (System.nanoTime() + lastChunkNanos > deadline) {
                 timedOut = true
@@ -492,7 +513,6 @@ class ImapMailClient(
                 },
             )
             chunk.reversed()
-                .filter { message -> message.messageNumber !in seen }
                 .filter { message -> (!unreadOnly || !isSeen(message)) && matchesSearchHeaders(message, needle) }
                 .forEach { message -> found.add(message) }
             end = start - 1
@@ -500,18 +520,15 @@ class ImapMailClient(
             if (lastChunkNanos / 1_000_000 < FAST_CHUNK_MILLIS) chunkSize = minOf(chunkSize * 2, MAX_SEARCH_CHUNK)
         }
         logger.info(
-            "Search scanned {} of {} emails in {} ms (chunk {}, found {} + {} by server)",
+            "Search scanned {} of {} emails in {} ms (chunk {}, found {})",
             (from ?: count).coerceAtMost(count) - maxOf(end, 0),
             count,
             (System.nanoTime() - startedAt) / 1_000_000,
             chunkSize,
             found.size,
-            serverHits.size,
         )
-        // Новые сверху: совпадения сервера могут быть старше просмотренных писем
-        val messages = (found + serverHits).sortedByDescending { message -> message.messageNumber }
         return SearchScan(
-            messages = messages,
+            messages = found,
             nextCursor = end.takeIf { value -> value >= 1 },
             timedOut = timedOut,
             scanned = count - maxOf(end, 0),
@@ -519,9 +536,24 @@ class ImapMailClient(
         )
     }
 
-    // IMAP SEARCH по теме, отправителю и получателю: новые совпадения, не больше want
+    // Поиск силами почты: новые совпадения, не больше want
     private fun serverSearch(folder: Folder, query: String, unreadOnly: Boolean, want: Int): List<Message> {
         val startedAt = System.nanoTime()
+        // Gmail: его собственный поиск (как в веб-версии) - по всему письму, со склонениями.
+        // Обычный IMAP SEARCH у Gmail русские слова не находит
+        val imapFolder = folder as? IMAPFolder
+        val gmail = runCatching { (imapFolder?.store as? IMAPStore)?.hasCapability("X-GM-EXT-1") == true }.getOrDefault(false)
+        if (gmail && imapFolder != null) {
+            val raw = if (unreadOnly) "$query is:unread" else query
+            val hits = runCatching { gmailSearch(imapFolder, raw) }
+                .onFailure { failure -> logger.info("Gmail search failed: {}", failure.javaClass.simpleName) }
+                .getOrNull()
+            if (hits != null) {
+                logger.info("Gmail search found {} emails in {} ms", hits.size, (System.nanoTime() - startedAt) / 1_000_000)
+                return hits.sortedByDescending { message -> message.messageNumber }.take(want)
+            }
+        }
+
         val text: SearchTerm = OrTerm(
             arrayOf(
                 SubjectTerm(query),
@@ -535,6 +567,37 @@ class ImapMailClient(
             .getOrDefault(emptyArray())
         logger.info("Server search found {} emails in {} ms", hits.size, (System.nanoTime() - startedAt) / 1_000_000)
         return hits.sortedByDescending { message -> message.messageNumber }.take(want)
+    }
+
+    // UID SEARCH CHARSET UTF-8 X-GM-RAW "запрос" - расширение Gmail (поиск как в веб-версии)
+    private fun gmailSearch(folder: IMAPFolder, raw: String): List<Message> {
+        val uids = folder.doCommand { protocol ->
+            val args = Argument()
+            args.writeAtom("CHARSET")
+            args.writeAtom("UTF-8")
+            args.writeAtom("X-GM-RAW")
+            args.writeString(raw, "UTF-8")
+            val responses = protocol.command("UID SEARCH", args)
+            val result = mutableListOf<Long>()
+            responses.forEach { response ->
+                val imap = response as? IMAPResponse ?: return@forEach
+                if (imap.keyEquals("SEARCH")) {
+                    while (true) {
+                        val uid = imap.readLong()
+                        if (uid < 0) break
+                        result += uid
+                    }
+                }
+            }
+            protocol.notifyResponseHandlers(responses)
+            protocol.handleResult(responses.last())
+            result
+        } as List<*>
+        val values = uids.filterIsInstance<Long>()
+        // Самые новые: у Gmail UID растет со временем письма в папке
+        val newest = values.sortedDescending().take(MAX_GMAIL_HITS).toLongArray()
+        if (newest.isEmpty()) return emptyList()
+        return folder.getMessagesByUID(newest).filterNotNull()
     }
 
     // Совпадение по заголовкам, прочитанным при поиске (без дозагрузки ENVELOPE по одному письму)
@@ -701,6 +764,7 @@ class ImapMailClient(
         // Поиск: пачка писем за один запрос к почте и сколько ждем почту за один поиск
         private const val SEARCH_CHUNK = 100
         private const val MAX_SEARCH_CHUNK = 800
+        private const val MAX_GMAIL_HITS = 200
         private const val FAST_CHUNK_MILLIS = 2_000L
         private val SEARCH_HEADERS = listOf("Subject", "From", "To")
         private const val SEARCH_BUDGET_NANOS = 20_000_000_000L
