@@ -545,13 +545,24 @@ class ImapMailClient(
         val gmail = runCatching { (imapFolder?.store as? IMAPStore)?.hasCapability("X-GM-EXT-1") == true }.getOrDefault(false)
         if (gmail && imapFolder != null) {
             val raw = if (unreadOnly) "$query is:unread" else query
-            val hits = runCatching { gmailSearch(imapFolder, raw) }
-                .onFailure { failure -> logger.info("Gmail search failed: {}", failure.javaClass.simpleName) }
-                .getOrNull()
-            if (hits != null) {
+            // Два варианта записи команды: с CHARSET UTF-8 и без (Gmail и так ждет UTF-8)
+            for (withCharset in listOf(true, false)) {
+                val hits = runCatching { gmailSearch(imapFolder, raw, withCharset) }
+                    .onFailure { failure ->
+                        logger.info(
+                            "Gmail search failed (charset={}): {} / {}",
+                            withCharset,
+                            failure.message,
+                            failure.cause?.message,
+                        )
+                    }
+                    .getOrNull()
+                    ?: continue
                 logger.info("Gmail search found {} emails in {} ms", hits.size, (System.nanoTime() - startedAt) / 1_000_000)
                 return hits.sortedByDescending { message -> message.messageNumber }.take(want)
             }
+            // Обычный IMAP SEARCH у Gmail русские слова не находит и бывает очень долгим: не ждем его
+            return emptyList()
         }
 
         val text: SearchTerm = OrTerm(
@@ -570,11 +581,13 @@ class ImapMailClient(
     }
 
     // UID SEARCH CHARSET UTF-8 X-GM-RAW "запрос" - расширение Gmail (поиск как в веб-версии)
-    private fun gmailSearch(folder: IMAPFolder, raw: String): List<Message> {
+    private fun gmailSearch(folder: IMAPFolder, raw: String, withCharset: Boolean): List<Message> {
         val uids = folder.doCommand { protocol ->
             val args = Argument()
-            args.writeAtom("CHARSET")
-            args.writeAtom("UTF-8")
+            if (withCharset) {
+                args.writeAtom("CHARSET")
+                args.writeAtom("UTF-8")
+            }
             args.writeAtom("X-GM-RAW")
             args.writeString(raw, "UTF-8")
             val responses = protocol.command("UID SEARCH", args)
