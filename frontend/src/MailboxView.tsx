@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { t } from './i18n'
 import { absoluteServerUrl } from './api'
 import { MailHtml } from './MailHtml'
-import { downloadFile, openLink, showBackButton } from './telegram'
+import { downloadFile, pdfPreviewSupported, shareMessage, showBackButton } from './telegram'
 import { Icon } from './ui'
 
 type Folder = 'inbox' | 'sent';
@@ -56,6 +56,54 @@ interface MailFile {
   type: string;
   size: number;
   url: string;
+}
+
+function previewKind(file: MailFile): 'image' | 'pdf' | null {
+  const type = file.type.toLowerCase();
+  if (/^image\/(png|jpe?g|gif|webp|bmp|heic|heif)/.test(type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name)) return 'image';
+  if ((type.startsWith('application/pdf') || /\.pdf$/i.test(file.name)) && pdfPreviewSupported) return 'pdf';
+  return null;
+}
+
+function fileIcon(name: string): string {
+  if (/\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(name)) return '🖼';
+  if (/\.pdf$/i.test(name)) return '📄';
+  return '📎';
+}
+
+/** Просмотр картинки или PDF поверх письма, с кнопками скачать и поделиться. */
+function FileViewer({ file, kind, onClose, onDownload, onShare }: {
+  file: MailFile;
+  kind: 'image' | 'pdf';
+  onClose: () => void;
+  onDownload: () => void;
+  onShare: () => void;
+}) {
+  const src = `${absoluteServerUrl(file.url)}?inline=1`;
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="file-viewer" role="dialog" aria-modal="true" aria-label={file.name}>
+      <div className="file-viewer-bar">
+        <button type="button" className="icon-button" aria-label={t.close} onClick={onClose}><Icon name="close" size={22} /></button>
+        <span className="file-viewer-name">{file.name}</span>
+        <button type="button" className="icon-button" aria-label={t.download} onClick={onDownload}><Icon name="download" size={22} /></button>
+        <button type="button" className="icon-button" aria-label={t.share} onClick={onShare}><Icon name="share" size={22} /></button>
+      </div>
+      <div className="file-viewer-body">
+        {failed && <p className="empty">{t.previewFailed}</p>}
+        {!failed && kind === 'image' && <img src={src} alt={file.name} onError={() => setFailed(true)} />}
+        {!failed && kind === 'pdf' && <iframe src={src} title={file.name} />}
+      </div>
+    </div>
+  );
 }
 
 function formatSize(bytes: number): string {
@@ -524,12 +572,24 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
   };
 
   const download = (index: number, name: string) => withFile(index, name, async (file) => {
-    const url = absoluteServerUrl(file.url);
-    // Новые Telegram - штатное окно сохранения; старые - браузер скачает по ссылке
-    if (!downloadFile(url, file.name)) openLink(url);
+    // Штатное окно сохранения Telegram; клиент без него получает файл в чат с ботом
+    if (downloadFile(absoluteServerUrl(file.url), file.name)) return;
+    await sendAttachments();
+    setStatus(t.downloadFallback);
   });
 
+  // Сначала выбор чата Telegram; старый клиент - системное «Поделиться», затем чат с ботом
   const share = (index: number, name: string) => withFile(index, name, async (file) => {
+    try {
+      const response = await request(`${base}/files/${file.index}/share?v=${uidValidity}`, 'POST', undefined, MAIL_TIMEOUT_MS);
+      if (response.ok) {
+        const { id } = await response.json() as { id: string };
+        const result = await shareMessage(id);
+        if (result !== 'unsupported') return;
+      }
+    } catch {
+      // ниже запасные пути
+    }
     const navigatorShare = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
     try {
       const response = await fetch(absoluteServerUrl(file.url));
@@ -547,6 +607,17 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
     // Нет системного «Поделиться»: файл придет в чат, оттуда его можно переслать
     await sendAttachments();
     setStatus(t.shareFallback);
+  });
+
+  // Картинки и PDF смотрим прямо в приложении, остальное скачиваем
+  const [viewer, setViewer] = useState<{ file: MailFile; kind: 'image' | 'pdf' } | null>(null);
+  const preview = (index: number, name: string) => withFile(index, name, async (file) => {
+    const kind = previewKind(file);
+    if (kind) setViewer({ file, kind });
+    else if (!downloadFile(absoluteServerUrl(file.url), file.name)) {
+      await sendAttachments();
+      setStatus(t.downloadFallback);
+    }
   });
 
   const sendAttachments = async () => {
@@ -589,12 +660,17 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
             <ul className="message-files">
               {message.attachments.map((name, index) => (
                 <li key={`${index}-${name}`} className="message-file">
-                  <span className="message-file-name">
-                    📎 {name}
+                  <button
+                    type="button"
+                    className="message-file-name"
+                    disabled={fileBusy !== null}
+                    onClick={() => preview(index, name)}
+                  >
+                    {fileIcon(name)} {name}
                     {files?.find((file) => file.name === name) && (
                       <span className="message-file-size">{formatSize(files.find((file) => file.name === name)?.size ?? 0)}</span>
                     )}
-                  </span>
+                  </button>
                   <button
                     type="button"
                     className="icon-button"
@@ -640,6 +716,16 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
             )}
           </div>
           {status && <p className="field-hint">{status}</p>}
+
+          {viewer && (
+            <FileViewer
+              file={viewer.file}
+              kind={viewer.kind}
+              onClose={() => setViewer(null)}
+              onDownload={() => download(viewer.file.index, viewer.file.name)}
+              onShare={() => share(viewer.file.index, viewer.file.name)}
+            />
+          )}
 
           {message.html && (
             <div className="segmented message-view-mode" role="tablist">

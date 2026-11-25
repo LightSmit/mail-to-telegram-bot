@@ -10,6 +10,7 @@ import io.github.lightsmit.config.MailFilters
 import io.github.lightsmit.config.MailAccountConfig
 import io.github.lightsmit.service.AddMailAccountResult
 import io.github.lightsmit.service.AdminPanelService
+import io.github.lightsmit.service.AttachmentShareService
 import io.github.lightsmit.service.MailAccountService
 import io.github.lightsmit.mail.MailFolderRole
 import io.github.lightsmit.mail.MailListPage
@@ -362,15 +363,17 @@ class ApiServer(
     private val sendTest: (suspend (MailAccountConfig) -> Boolean)? = null,
     // Админ-панель в приложении (только для админов из .env)
     private val adminPanel: AdminPanelService? = null,
+    // «Поделиться» вложением через Telegram
+    private val attachmentShare: AttachmentShareService? = null,
 ) {
     // Подписанные ссылки на вложения писем
     private val fileTokens = FileTokens()
 
     // Имя файла в заголовке: ASCII-замена и точное имя в UTF-8 (RFC 6266)
-    private fun contentDisposition(name: String): String {
+    private fun contentDisposition(name: String, inline: Boolean = false): String {
         val ascii = name.map { char -> if (char.code in 32..126 && char != '"' && char != '\\') char else '_' }.joinToString("")
         val encoded = java.net.URLEncoder.encode(name, Charsets.UTF_8).replace("+", "%20")
-        return "attachment; filename=\"$ascii\"; filename*=UTF-8''$encoded"
+        return (if (inline) "inline" else "attachment") + "; filename=\"$ascii\"; filename*=UTF-8''$encoded"
     }
 
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
@@ -979,6 +982,38 @@ class ApiServer(
                         }
                     }
 
+                    // Подготовить вложение для «Поделиться» в Telegram: ответ - id для WebApp.shareMessage
+                    post("/accounts/{id}/messages/{uid}/files/{index}/share") {
+                        val browser = mailBrowser ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
+                        val share = attachmentShare ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val uid = call.parameters["uid"]?.toLongOrNull()
+                        val index = call.parameters["index"]?.toIntOrNull()
+                        val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
+                        if (accountId == null || uid == null || index == null || uidValidity == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            return@post
+                        }
+
+                        val ownerId = call.attributes[UserIdKey]
+                        val result = browser.files(ownerId, accountId, uidValidity, uid)
+                        if (result !is BrowseResult.Ok) {
+                            respondBrowseError(call, result)
+                            return@post
+                        }
+                        val file = result.value.attachments.getOrNull(index)
+                            ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.badRequest))
+                        try {
+                            val prepared = share.prepare(ownerId, "$accountId:$uidValidity:$uid:$index", file)
+                            call.respond(mapOf("id" to prepared))
+                        } catch (exception: kotlinx.coroutines.CancellationException) {
+                            throw exception
+                        } catch (exception: Exception) {
+                            call.application.environment.log.warn("Share preparation failed: {}", exception.javaClass.simpleName)
+                            call.respond(HttpStatusCode.BadGateway, mapOf("error" to call.texts.browseFailed))
+                        }
+                    }
+
                     // Сам файл вложения по подписанной ссылке (без данных Telegram: ее открывает Telegram)
                     get("$FILES_ROUTE/{token}") {
                         val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound)
@@ -998,10 +1033,15 @@ class ApiServer(
                         } else {
                             runCatching { ContentType.parse(declared) }.getOrDefault(ContentType.Application.OctetStream)
                         }
-                        call.response.header(HttpHeaders.ContentDisposition, contentDisposition(file.fileName))
+                        // ?inline=1 - просмотр в приложении: только картинки и PDF
+                        val pdf = declared == "application/pdf"
+                        val inline = call.request.queryParameters["inline"] == "1" &&
+                            !active && (declared.startsWith("image/") || pdf)
+                        call.response.header(HttpHeaders.ContentDisposition, contentDisposition(file.fileName, inline))
                         call.response.header(HttpHeaders.CacheControl, "private, no-store")
                         call.response.header("X-Content-Type-Options", "nosniff")
-                        call.response.header("Content-Security-Policy", "default-src 'none'; sandbox")
+                        // Встроенному просмотрщику PDF песочница мешает; остальное - без активного содержимого
+                        if (!(inline && pdf)) call.response.header("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox")
                         call.respond(io.ktor.server.http.content.LocalFileContent(file.tempFile.toFile(), type))
                     }
 

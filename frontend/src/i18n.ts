@@ -377,6 +377,8 @@ const ru = {
   filesFailed: 'Не удалось получить вложения',
   filesSkipped: (names: string) => `Бот не скачал слишком большие вложения: ${names}`,
   shareFallback: 'Здесь нельзя поделиться файлом напрямую: он придет в чат с ботом, оттуда его можно переслать.',
+  downloadFallback: 'Эта версия Telegram не умеет скачивать из приложения: файл пришел в чат с ботом, сохраните его оттуда.',
+  previewFailed: 'Не удалось показать файл. Скачайте его кнопкой сверху.',
   // Автопродление
   autoRenew: 'Автопродление',
   autoRenewOnHint: (date: string) => `Звезды спишутся ${date}, выключить можно в любой момент: оплаченный срок сохранится.`,
@@ -715,6 +717,8 @@ const en: Dictionary = {
   filesFailed: 'Could not get the attachments',
   filesSkipped: (names: string) => `The bot did not download attachments that are too large: ${names}`,
   shareFallback: 'Sharing a file directly is not available here: it will arrive in the chat with the bot, you can forward it from there.',
+  downloadFallback: 'This Telegram version cannot download from the app: the file was sent to the chat with the bot, save it from there.',
+  previewFailed: 'Could not show the file. Download it with the button above.',
   autoRenew: 'Auto-renewal',
   autoRenewOnHint: (date: string) => `Next Stars charge on ${date}. You can turn it off any time and keep the paid period.`,
   autoRenewOffHint: (date: string) => `Your plan is active until ${date} and will not renew. You can turn renewal back on until then.`,

@@ -149,3 +149,26 @@ export function launchParam(): string | null {
     return null;
   }
 }
+
+/**
+ * Поделиться подготовленным сообщением (savePreparedInlineMessage): Telegram сам
+ * показывает выбор чата. 'unsupported' - старый клиент, нужен запасной путь.
+ */
+export function shareMessage(id: string): Promise<'sent' | 'cancelled' | 'unsupported'> {
+  const app = WebApp as unknown as {
+    shareMessage?: (id: string, callback?: (sent: boolean) => void) => void;
+    isVersionAtLeast?: (version: string) => boolean;
+  };
+  if (!telegramScriptLoaded || typeof app.shareMessage !== 'function') return Promise.resolve('unsupported');
+  if (typeof app.isVersionAtLeast === 'function' && !app.isVersionAtLeast('8.0')) return Promise.resolve('unsupported');
+  return new Promise((resolve) => {
+    try {
+      app.shareMessage!.call(WebApp, id, (sent) => resolve(sent ? 'sent' : 'cancelled'));
+    } catch {
+      resolve('unsupported');
+    }
+  });
+}
+
+/** Android WebView не показывает PDF внутри страницы. */
+export const pdfPreviewSupported = platform !== 'android' && platform !== 'android_x';

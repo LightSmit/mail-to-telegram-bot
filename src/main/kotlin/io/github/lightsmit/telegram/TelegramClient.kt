@@ -66,6 +66,12 @@ class TelegramTransportException(
     val maybeDelivered: Boolean = false,
 ) : RuntimeException("Telegram $operation failed: $causeType" + if (maybeDelivered) " (delivery unknown)" else "")
 
+/** Файл, загруженный в Telegram: file_id и сообщение, в котором он пришел. */
+data class UploadedDocument(
+    val fileId: String,
+    val messageId: Long,
+)
+
 /** Кнопка под сообщением: ровно одно действие - callback, ссылка, копирование текста или Mini App. */
 data class TelegramInlineButton(
     val text: String,
@@ -703,6 +709,65 @@ class TelegramClient(
         )
     }
 
+    /**
+     * Загрузить файл в Telegram без звука, чтобы получить его file_id
+     * (для «Поделиться» из приложения). Сообщение потом удаляют.
+     */
+    suspend fun uploadDocument(
+        chatId: Long,
+        attachment: EmailAttachment,
+    ): UploadedDocument {
+        val root = sendMultipartAttachment(
+            operation = "sendDocument",
+            endpoint = "sendDocument",
+            fieldName = "document",
+            chatId = chatId,
+            attachment = attachment,
+            silent = true,
+        )
+        val result = root["result"]?.jsonObject
+            ?: throw TelegramTransportException(operation = "sendDocument", causeType = "NoResult")
+        val messageId = result["message_id"]?.jsonPrimitive?.longOrNull
+            ?: throw TelegramTransportException(operation = "sendDocument", causeType = "NoMessageId")
+        // Обычно document; у видео и GIF Telegram может вернуть и другие поля
+        val fileId = listOf("document", "animation", "video", "audio")
+            .firstNotNullOfOrNull { key -> result[key]?.jsonObject?.get("file_id")?.jsonPrimitive?.contentOrNull }
+            ?: throw TelegramTransportException(operation = "sendDocument", causeType = "NoFileId")
+        return UploadedDocument(fileId = fileId, messageId = messageId)
+    }
+
+    /**
+     * Подготовить сообщение с файлом для WebApp.shareMessage: Telegram сам покажет
+     * выбор чата. Возвращает id подготовленного сообщения.
+     */
+    suspend fun savePreparedDocument(
+        userId: Long,
+        fileId: String,
+        title: String,
+    ): String {
+        val result = buildJsonObject {
+            put("type", "document")
+            put("id", fileId.takeLast(60))
+            put("title", title.take(200))
+            put("document_file_id", fileId)
+        }
+        val root = executeOnce("savePreparedInlineMessage") {
+            httpClient.submitForm(
+                url = "$baseUrl/savePreparedInlineMessage",
+                formParameters = Parameters.build {
+                    append("user_id", userId.toString())
+                    append("result", result.toString())
+                    append("allow_user_chats", "true")
+                    append("allow_bot_chats", "true")
+                    append("allow_group_chats", "true")
+                    append("allow_channel_chats", "true")
+                },
+            )
+        }
+        return root["result"]?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull
+            ?: throw TelegramTransportException(operation = "savePreparedInlineMessage", causeType = "NoId")
+    }
+
     private fun createReplyMarkup(
         buttons: List<TelegramInlineButton>,
         perRow: Int = 2,
@@ -766,14 +831,15 @@ class TelegramClient(
         fieldName: String,
         chatId: Long,
         attachment: EmailAttachment,
-    ) {
+        silent: Boolean = false,
+    ): JsonObject {
         val safeFileName = attachment.fileName
             .replace('\\', '_')
             .replace('"', '_')
             .replace('\r', '_')
             .replace('\n', '_')
 
-        executeWithRetry(operation, idempotent = false) {
+        return executeWithRetry(operation, idempotent = false) {
             httpClient.post("$baseUrl/$endpoint") {
                 timeout {
                     connectTimeoutMillis = 15_000
@@ -785,6 +851,7 @@ class TelegramClient(
                     MultiPartFormDataContent(
                         formData {
                             append("chat_id", chatId.toString())
+                            if (silent) append("disable_notification", "true")
                             append(
                                 key = fieldName,
                                 value = InputProvider(

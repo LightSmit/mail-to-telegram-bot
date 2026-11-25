@@ -16,6 +16,7 @@ import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.mail.SmtpMailSender
 import io.github.lightsmit.service.AdminPanelService
 import io.github.lightsmit.service.AdminService
+import io.github.lightsmit.service.AttachmentShareService
 import io.github.lightsmit.service.BackupService
 import io.github.lightsmit.service.DeliveryNoticeReporter
 import io.github.lightsmit.service.DeliveryNoticeSender
@@ -442,6 +443,7 @@ fun main() = runBlocking {
         inbound = inboundService,
         inboundSecret = inboundSecret,
         sendTest = forwardingService::sendTestMessage,
+        attachmentShare = AttachmentShareService(uploadClient = telegramMediaClient, controlClient = telegramControlClient),
         adminPanel = AdminPanelService(
             adminIds = adminChatIds,
             botUsers = botUserRepository,

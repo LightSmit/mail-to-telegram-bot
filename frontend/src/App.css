@@ -2118,3 +2118,65 @@ button.tile:active {
   border-radius: var(--radius);
   background: #fff;
 }
+
+button.message-file-name {
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+/* Просмотр картинки или PDF на весь экран */
+.file-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: #05080f;
+  animation: sheet-fade 0.2s ease;
+}
+
+.file-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 8px calc(8px);
+  padding-top: calc(8px + env(safe-area-inset-top));
+  border-bottom: 1px solid var(--separator);
+}
+
+.file-viewer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #f5f7fa;
+  font-weight: 600;
+}
+
+.file-viewer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.file-viewer-body img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.file-viewer-body iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
