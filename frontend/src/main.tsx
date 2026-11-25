@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import WebApp from '@twa-dev/sdk'
+import WebApp from './twa'
 import App from './App.tsx'
 import { telegramScriptLoaded } from './telegram'
 import { lang } from './i18n'

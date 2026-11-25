@@ -574,9 +574,18 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
   const download = (index: number, name: string) => withFile(index, name, async (file) => {
     // Штатное окно сохранения Telegram; клиент без него получает файл в чат с ботом
     if (downloadFile(absoluteServerUrl(file.url), file.name)) return;
-    await sendAttachments();
-    setStatus(t.downloadFallback);
+    await toChatOnce(t.downloadFallback);
   });
+
+  // Запасной путь - файлы в чат с ботом, но один раз: повторные нажатия не дублируют их
+  const sentToChat = useRef(false);
+  const toChatOnce = async (text: string) => {
+    if (!sentToChat.current) {
+      await sendAttachments();
+      sentToChat.current = true;
+    }
+    setStatus(text);
+  };
 
   // Сначала выбор чата Telegram; старый клиент - системное «Поделиться», затем чат с ботом
   const share = (index: number, name: string) => withFile(index, name, async (file) => {
@@ -605,8 +614,7 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
       if (failure instanceof DOMException && failure.name === 'AbortError') return;
     }
     // Нет системного «Поделиться»: файл придет в чат, оттуда его можно переслать
-    await sendAttachments();
-    setStatus(t.shareFallback);
+    await toChatOnce(t.shareFallback);
   });
 
   // Картинки и PDF смотрим прямо в приложении, остальное скачиваем
@@ -615,13 +623,13 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
     const kind = previewKind(file);
     if (kind) setViewer({ file, kind });
     else if (!downloadFile(absoluteServerUrl(file.url), file.name)) {
-      await sendAttachments();
-      setStatus(t.downloadFallback);
+      await toChatOnce(t.downloadFallback);
     }
   });
 
   const sendAttachments = async () => {
     setBusy(true);
+    sentToChat.current = true;
     try {
       const response = await request(`${base}/attachments?${params}`, 'POST');
       setStatus(response.ok

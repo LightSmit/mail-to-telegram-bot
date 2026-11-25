@@ -1,4 +1,4 @@
-import WebApp from '@twa-dev/sdk'
+import WebApp from './twa'
 
 // Официальный скрипт Telegram (telegram-web-app.js) может не загрузиться,
 // например, если telegram.org недоступен у пользователя. Тогда объект WebApp

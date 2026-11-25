@@ -1,4 +1,4 @@
-import WebApp from '@twa-dev/sdk'
+import WebApp from './twa'
 import { initData } from './telegram'
 
 // Язык интерфейса берем из Telegram пользователя. Русский - для ru/uk/be/kk, остальным английский.
