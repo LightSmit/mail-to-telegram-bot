@@ -545,8 +545,8 @@ class ImapMailClient(
         val gmail = runCatching { (imapFolder?.store as? IMAPStore)?.hasCapability("X-GM-EXT-1") == true }.getOrDefault(false)
         if (gmail && imapFolder != null) {
             val raw = if (unreadOnly) "$query is:unread" else query
-            // Два варианта записи команды: с CHARSET UTF-8 и без (Gmail и так ждет UTF-8)
-            for (withCharset in listOf(true, false)) {
+            // Gmail принимает X-GM-RAW без CHARSET (с ним отвечает BAD); вариант с CHARSET - запасной
+            for (withCharset in listOf(false, true)) {
                 val hits = runCatching { gmailSearch(imapFolder, raw, withCharset) }
                     .onFailure { failure ->
                         logger.info(
