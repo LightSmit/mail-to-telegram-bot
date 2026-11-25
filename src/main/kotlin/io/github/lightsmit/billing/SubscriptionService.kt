@@ -358,6 +358,8 @@ class SubscriptionService(
     /** Все записи о подписках (и закончившихся): для списка в админ-панели. */
     suspend fun allSubscriptions(): Map<Long, Subscription> = store.findAll().associateBy(Subscription::userId)
 
+    suspend fun recentPayments(limit: Int): List<Payment> = store.recentPayments(limit)
+
     /** Последняя оплата без возврата: показать в карточке перед возвратом. */
     suspend fun lastPayment(userId: Long): Payment? = store.lastPayment(userId)
 

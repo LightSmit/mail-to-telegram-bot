@@ -1967,3 +1967,68 @@ button.tile:active {
   background: var(--bg);
   color: var(--text);
 }
+
+.admin-sections button {
+  font-size: 13px;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+.tiles-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.funnel-row {
+  align-items: center;
+}
+
+.funnel-bar {
+  display: block;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 3px;
+  background: var(--separator);
+  overflow: hidden;
+}
+
+.funnel-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--link);
+}
+
+.funnel-fill-error {
+  background: var(--err);
+}
+
+.admin-link {
+  min-width: 0;
+}
+
+.admin-link-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.admin-refunded {
+  text-decoration: line-through;
+}
+
+.admin-textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.admin-textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--link) 50%, transparent);
+}

@@ -20,7 +20,7 @@ import { FiltersScreen } from './screens/Filters'
 import { GroupScreen, PasswordScreen } from './screens/SubScreens'
 import { PlanScreen } from './screens/Plan'
 import { SearchScreen } from './screens/Search'
-import { AdminTab, AdminUserScreen, type AdminSection, type UserFilter } from './screens/Admin'
+import { AdminBroadcastScreen, AdminTab, AdminUserScreen, type AdminSection, type UserFilter } from './screens/Admin'
 import { SettingsScreen } from './screens/Settings'
 
 type Tab = 'home' | 'plan' | 'settings' | 'admin';
@@ -36,7 +36,8 @@ type Route =
   | { name: 'password'; id: number }
   | { name: 'mail'; id: number; q?: string }
   | { name: 'search' }
-  | { name: 'adminUser'; id: number };
+  | { name: 'adminUser'; id: number }
+  | { name: 'adminBroadcast' };
 
 // Пока приложение открыто, статусы ящиков обновляются сами
 const REFRESH_INTERVAL_MS = 15000;
@@ -333,6 +334,8 @@ function App() {
     switch (route.name) {
       case 'adminUser':
         return <AdminUserScreen key={route.id} userId={route.id} notify={notify} onBack={pop} />;
+      case 'adminBroadcast':
+        return <AdminBroadcastScreen notify={notify} onBack={pop} />;
       case 'search':
         return (
           <SearchScreen
@@ -469,6 +472,7 @@ function App() {
             filter={adminFilter}
             onFilter={setAdminFilter}
             onOpenUser={(id) => push({ name: 'adminUser', id })}
+            onBroadcast={() => push({ name: 'adminBroadcast' })}
             notify={notify}
           />
         );

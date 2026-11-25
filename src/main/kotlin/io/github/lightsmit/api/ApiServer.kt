@@ -247,6 +247,15 @@ data class AdminGrantDto(
 )
 
 @Serializable
+data class AdminBroadcastDto(
+    val text: String,
+    // all, mailbox, nobox, paid, trial, free
+    val audience: String = "all",
+    // true - только себе, посмотреть сообщение
+    val test: Boolean = false,
+)
+
+@Serializable
 data class AdminRevokeDto(
     val refund: Boolean = false,
 )
@@ -971,6 +980,48 @@ class ApiServer(
                             val panel = call.panel() ?: return@delete
                             val id = call.targetId() ?: return@delete
                             call.respond(panel.deleteData(id))
+                        }
+
+                        // ?days=30&source=habr
+                        get("/funnel") {
+                            val panel = call.panel() ?: return@get
+                            val days = call.request.queryParameters["days"]?.toIntOrNull() ?: 30
+                            call.respond(panel.funnel(days, call.request.queryParameters["source"]))
+                        }
+
+                        get("/system") {
+                            val panel = call.panel() ?: return@get
+                            call.respond(panel.system())
+                        }
+
+                        post("/backup") {
+                            val panel = call.panel() ?: return@post
+                            call.respond(panel.backup())
+                        }
+
+                        get("/money") {
+                            val panel = call.panel() ?: return@get
+                            call.respond(panel.money())
+                        }
+
+                        // {"plan": "PRO", "term": "1m"}
+                        post("/invite") {
+                            val panel = call.panel() ?: return@post
+                            val body = runCatching { call.receive<AdminGrantDto>() }.getOrNull()
+                                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            call.respond(panel.invite(call.attributes[UserIdKey], body.plan, body.term))
+                        }
+
+                        get("/broadcast") {
+                            val panel = call.panel() ?: return@get
+                            call.respond(panel.audiences())
+                        }
+
+                        post("/broadcast") {
+                            val panel = call.panel() ?: return@post
+                            val body = runCatching { call.receive<AdminBroadcastDto>() }.getOrNull()
+                                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            call.respond(panel.broadcast(call.attributes[UserIdKey], body.text, body.audience, body.test))
                         }
                     }
 

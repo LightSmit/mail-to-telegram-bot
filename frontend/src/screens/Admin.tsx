@@ -85,7 +85,7 @@ interface UserCard {
   funnel: AdminEvent[];
 }
 
-export type AdminSection = 'overview' | 'users';
+export type AdminSection = 'overview' | 'users' | 'funnel' | 'system' | 'money';
 export type UserFilter = 'all' | 'paid' | 'free' | 'nobox' | 'errors';
 
 const PLAN_NAMES: Record<string, string> = { FREE: 'Free', PRO: 'Pro', BUSINESS: 'Business' };
@@ -160,31 +160,56 @@ async function load<T>(path: string, notify: Notify, method: 'GET' | 'POST' | 'D
   }
 }
 
-/** Вкладка «Админ»: обзор и люди. */
-export function AdminTab({ section, onSection, filter, onFilter, onOpenUser, notify }: {
+const SECTIONS: { id: AdminSection; label: string }[] = [
+  { id: 'overview', label: 'Обзор' },
+  { id: 'users', label: 'Люди' },
+  { id: 'funnel', label: 'Воронка' },
+  { id: 'system', label: 'Система' },
+  { id: 'money', label: 'Деньги' },
+];
+
+/** Вкладка «Админ»: обзор, люди, воронка, система, деньги. */
+export function AdminTab({ section, onSection, filter, onFilter, onOpenUser, onBroadcast, notify }: {
   section: AdminSection;
   onSection: (section: AdminSection) => void;
   filter: UserFilter;
   onFilter: (filter: UserFilter) => void;
   onOpenUser: (id: number) => void;
+  onBroadcast: () => void;
   notify: Notify;
 }) {
-  return (
-    <div className="screen">
-      <ScreenHeader large title="Админ" />
-      <div className="segmented" role="tablist">
-        <button type="button" role="tab" aria-selected={section === 'overview'} onClick={() => onSection('overview')}>Обзор</button>
-        <button type="button" role="tab" aria-selected={section === 'users'} onClick={() => onSection('users')}>Люди</button>
-      </div>
-      {section === 'overview'
-        ? (
+  const content = (() => {
+    switch (section) {
+      case 'overview':
+        return (
           <AdminOverview
             notify={notify}
             onOpenUser={onOpenUser}
             onUsers={(value) => { onFilter(value); onSection('users'); }}
+            onBroadcast={onBroadcast}
           />
-        )
-        : <AdminUsers filter={filter} onFilter={onFilter} onOpenUser={onOpenUser} notify={notify} />}
+        );
+      case 'users':
+        return <AdminUsers filter={filter} onFilter={onFilter} onOpenUser={onOpenUser} notify={notify} />;
+      case 'funnel':
+        return <AdminFunnel notify={notify} onOpenUser={onOpenUser} />;
+      case 'system':
+        return <AdminSystem notify={notify} onOpenUser={onOpenUser} />;
+      case 'money':
+        return <AdminMoney notify={notify} onOpenUser={onOpenUser} />;
+    }
+  })();
+  return (
+    <div className="screen">
+      <ScreenHeader large title="Админ" />
+      <div className="segmented admin-sections" role="tablist">
+        {SECTIONS.map((item) => (
+          <button key={item.id} type="button" role="tab" aria-selected={section === item.id} onClick={() => onSection(item.id)}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {content}
     </div>
   );
 }
@@ -208,10 +233,11 @@ function Tile({ label, value, note, tone, onClick }: {
     : <div className="tile">{content}</div>;
 }
 
-function AdminOverview({ notify, onOpenUser, onUsers }: {
+function AdminOverview({ notify, onOpenUser, onUsers, onBroadcast }: {
   notify: Notify;
   onOpenUser: (id: number) => void;
   onUsers: (filter: UserFilter) => void;
+  onBroadcast: () => void;
 }) {
   const [data, setData] = useState<Overview | null>(null);
 
@@ -246,6 +272,10 @@ function AdminOverview({ notify, onOpenUser, onUsers }: {
           onClick={data.mailboxesError > 0 ? () => onUsers('errors') : undefined}
         />
       </div>
+
+      <Group>
+        <Row icon="send" iconBg="#2F6FB5" title="Рассылка" subtitle="Сообщение всем или части пользователей" chevron onClick={onBroadcast} />
+      </Group>
 
       {data.stuck > 0 && (
         <Group>
@@ -606,6 +636,429 @@ export function AdminUserScreen({ userId, notify, onBack }: { userId: number; no
           ))}
         </Group>
       )}
+    </div>
+  );
+}
+
+// --- Воронка ---
+
+interface FunnelData {
+  days: number;
+  source?: string | null;
+  users: number;
+  steps: { key: string; title: string; count: number }[];
+  sources: Record<string, number>;
+  providers: Record<string, number>;
+  errors: Record<string, number>;
+  stuck: { userId: number; name: string; startedAt: number; source?: string | null; lastStep: string; error?: string | null }[];
+}
+
+const ERROR_NAMES: Record<string, string> = {
+  auth: 'неверный пароль',
+  host: 'неверный сервер',
+  connect: 'нет соединения',
+  timeout: 'сервер не ответил',
+  limit: 'лимит ящиков',
+  input: 'не заполнены поля',
+  forward_input: 'пересылка: неверный адрес',
+  forward_limit: 'пересылка: лимит ящиков',
+};
+
+function CountsGroup({ title, counts, names }: { title: string; counts: Record<string, number>; names?: Record<string, string> }) {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return null;
+  return (
+    <Group title={title}>
+      {entries.map(([key, count]) => <Row key={key} title={names?.[key] ?? key} value={count} />)}
+    </Group>
+  );
+}
+
+function AdminFunnel({ notify, onOpenUser }: { notify: Notify; onOpenUser: (id: number) => void }) {
+  const [days, setDays] = useState(30);
+  const [source, setSource] = useState<string | null>(null);
+  const [data, setData] = useState<FunnelData | null>(null);
+  // Источники за период без фильтра: чтобы чипы не пропадали при выборе
+  const [sources, setSources] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let alive = true;
+    const params = new URLSearchParams({ days: String(days) });
+    if (source) params.set('source', source);
+    load<FunnelData>(`/funnel?${params}`, notify).then((value) => {
+      if (!alive || !value) return;
+      setData(value);
+      if (!source) setSources(value.sources);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [days, source, notify]);
+
+  const users = data?.users ?? 0;
+
+  return (
+    <>
+      <div className="chips">
+        {[7, 30, 90].map((value) => (
+          <Chip key={value} selected={days === value} onClick={() => setDays(value)}>{value} дней</Chip>
+        ))}
+      </div>
+      {Object.keys(sources).length > 1 && (
+        <div className="chips">
+          <Chip selected={source === null} onClick={() => setSource(null)}>Все источники</Chip>
+          {Object.entries(sources).map(([key, count]) => (
+            <Chip key={key} selected={source === key} onClick={() => setSource(key)}>{key} {count}</Chip>
+          ))}
+        </div>
+      )}
+
+      {!data && <p className="empty">Загружаю…</p>}
+      {data && users === 0 && <p className="empty">За этот период новых пользователей нет</p>}
+
+      {data && users > 0 && (
+        <>
+          <Group title={`Новые за ${data.days} дней: ${users}`} footer="Считаются только новые пользователи. Каждый шаг - сколько человек до него дошли.">
+            {data.steps.filter((step) => step.key !== 'connect_error' || step.count > 0).map((step) => {
+              const share = percent(step.count, users);
+              return (
+                <div key={step.key} className="row funnel-row">
+                  <span className="row-text">
+                    <span className="row-title">{step.title}</span>
+                    <span className="funnel-bar" aria-hidden="true">
+                      <span
+                        className={step.key === 'connect_error' ? 'funnel-fill funnel-fill-error' : 'funnel-fill'}
+                        style={{ width: `${Math.max(share, step.count > 0 ? 2 : 0)}%` }}
+                      />
+                    </span>
+                  </span>
+                  <span className="row-value">{step.count} · {share}%</span>
+                </div>
+              );
+            })}
+          </Group>
+          <CountsGroup title="Какую почту выбирали" counts={data.providers} />
+          <CountsGroup title="Ошибки подключения" counts={data.errors} names={ERROR_NAMES} />
+          {data.stuck.length > 0 && (
+            <Group title={`Не подключили ящик: ${data.stuck.length}`} footer="Запустили бота больше часа назад. Нажмите, чтобы открыть карточку.">
+              {data.stuck.map((user) => (
+                <Row
+                  key={user.userId}
+                  title={user.name}
+                  subtitle={[user.lastStep, user.error ? ERROR_NAMES[user.error] ?? user.error : null, user.source].filter(Boolean).join(' · ')}
+                  value={when(user.startedAt)}
+                  onClick={() => onOpenUser(user.userId)}
+                />
+              ))}
+            </Group>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+// --- Система ---
+
+interface SystemData {
+  mailboxes: number;
+  mailboxesOk: number;
+  mailboxesError: number;
+  mailboxesConnecting: number;
+  forwardMailboxes: number;
+  broken: { accountId: number; ownerId: number; ownerName: string; email: string; host: string; problem?: string | null }[];
+  hosts: Record<string, number>;
+  sentDay: number;
+  sentWeek: number;
+  deadWeek: number;
+  queued: number;
+  uptimeMillis: number;
+  lastBackupAt?: number | null;
+  lastBackupBytes?: number | null;
+  usersBlocked: number;
+}
+
+function AdminSystem({ notify, onOpenUser }: { notify: Notify; onOpenUser: (id: number) => void }) {
+  const [data, setData] = useState<SystemData | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(() => load<SystemData>('/system', notify).then((value) => value && setData(value)), [notify]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const backup = async () => {
+    setBusy(true);
+    notify('info', 'Делаю бэкап…');
+    const result = await load<{ message: string }>('/backup', notify, 'POST');
+    setBusy(false);
+    if (result) {
+      notify('ok', result.message);
+      reload();
+    }
+  };
+
+  if (!data) return <p className="empty">Загружаю…</p>;
+
+  const uptimeDays = Math.floor(data.uptimeMillis / 86_400_000);
+  const uptimeHours = Math.floor((data.uptimeMillis % 86_400_000) / 3_600_000);
+
+  return (
+    <>
+      <div className="tiles tiles-3">
+        <Tile label="Работают" value={data.mailboxesOk} tone="ok" />
+        <Tile label="С ошибкой" value={data.mailboxesError} tone={data.mailboxesError > 0 ? 'error' : undefined} />
+        <Tile label="Ожидают" value={data.mailboxesConnecting} tone={data.mailboxesConnecting > 0 ? 'warn' : undefined} />
+      </div>
+
+      {data.broken.length > 0 && (
+        <Group title="Ящики с ошибкой" footer="Владельцу бот уже написал. Нажмите, чтобы открыть его карточку.">
+          {data.broken.map((box) => (
+            <Row
+              key={box.accountId}
+              title={box.email}
+              subtitle={[box.ownerName, box.problem].filter(Boolean).join(' · ')}
+              chevron
+              onClick={() => onOpenUser(box.ownerId)}
+            />
+          ))}
+        </Group>
+      )}
+
+      <Group title="Доставка писем">
+        <Row title="За сутки" value={data.sentDay} />
+        <Row title="За неделю" value={data.sentWeek} />
+        <Row title="Не доставлено за неделю" value={<span className={data.deadWeek > 0 ? 'tone-text-error' : undefined}>{data.deadWeek}</span>} />
+        <Row title="В очереди" value={data.queued} />
+        <Row title="Заблокировали бота" value={data.usersBlocked} />
+      </Group>
+
+      <CountsGroup title={`Почтовые серверы: ${data.mailboxes} ящиков`} counts={data.hosts} />
+
+      <Group title="Сервер" footer="Бэкап базы приходит файлом в чат с ботом.">
+        <Row title="Без перезапуска" value={`${uptimeDays} д ${uptimeHours} ч`} />
+        <Row
+          title="Последний бэкап"
+          subtitle={data.lastBackupBytes ? `${Math.round(data.lastBackupBytes / 1024)} КБ` : undefined}
+          value={data.lastBackupAt ? when(data.lastBackupAt) : 'еще не было'}
+        />
+        <Row title={busy ? 'Делаю бэкап…' : 'Сделать бэкап сейчас'} accent onClick={busy ? undefined : backup} />
+      </Group>
+    </>
+  );
+}
+
+// --- Деньги ---
+
+interface MoneyData {
+  billingEnabled: boolean;
+  revenue30: number;
+  revenueTotal: number;
+  pro: number;
+  business: number;
+  trials: number;
+  lifetime: number;
+  subscriptions: { userId: number; name: string; plan: string; source: string; expiresAt?: number | null; recurring: boolean }[];
+  payments: { userId: number; name: string; amount: number; offer: string; at: number; refunded: boolean }[];
+}
+
+const OFFER_NAMES: Record<string, string> = {
+  PRO_MONTH: 'Pro, месяц',
+  PRO_YEAR: 'Pro, год',
+  BUSINESS_MONTH: 'Business, месяц',
+  BUSINESS_YEAR: 'Business, год',
+};
+
+const INVITE_TERMS = TERMS.filter((item) => item.id !== 'custom');
+
+function AdminMoney({ notify, onOpenUser }: { notify: Notify; onOpenUser: (id: number) => void }) {
+  const [data, setData] = useState<MoneyData | null>(null);
+  const [plan, setPlan] = useState<'PRO' | 'BUSINESS'>('PRO');
+  const [term, setTerm] = useState('1m');
+  const [link, setLink] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    load<MoneyData>('/money', notify).then((value) => value && setData(value));
+  }, [notify]);
+
+  const createInvite = async () => {
+    setBusy(true);
+    const result = await load<{ message: string; link?: string | null }>('/invite', notify, 'POST', { plan, term });
+    setBusy(false);
+    if (!result) return;
+    if (result.link) {
+      setLink(result.link);
+      notify('ok', result.message);
+    } else {
+      notify('error', result.message);
+    }
+  };
+
+  const copy = async () => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      notify('ok', 'Ссылка скопирована');
+    } catch {
+      notify('info', link);
+    }
+  };
+
+  if (!data) return <p className="empty">Загружаю…</p>;
+
+  return (
+    <>
+      {!data.billingEnabled && <p className="field-hint">Оплата выключена (BILLING_ENABLED=false): все пользуются Pro бесплатно.</p>}
+      <div className="tiles">
+        <Tile label="За 30 дней" value={`${data.revenue30} ⭐`} note={`всего ${data.revenueTotal} ⭐`} />
+        <Tile label="Платных" value={data.pro + data.business} note={`Pro ${data.pro} · Business ${data.business}`} />
+      </div>
+
+      <Group title="Ссылка-приглашение" footer="Одноразовая: кто первым откроет и нажмет «Начать», получит подписку. Если подписка уже есть, срок добавится.">
+        <div className="admin-grant">
+          <div className="chips">
+            {(['PRO', 'BUSINESS'] as const).map((value) => (
+              <Chip key={value} selected={plan === value} onClick={() => { setPlan(value); setLink(null); }}>{PLAN_NAMES[value]}</Chip>
+            ))}
+          </div>
+          <div className="chips">
+            {INVITE_TERMS.map((item) => (
+              <Chip key={item.id} selected={term === item.id} onClick={() => { setTerm(item.id); setLink(null); }}>{item.label}</Chip>
+            ))}
+          </div>
+          {link ? (
+            <button type="button" className="tinted big admin-link" onClick={copy}>
+              <Icon name="copy" size={18} /> <span className="admin-link-text">{link}</span>
+            </button>
+          ) : (
+            <button type="button" className="primary big" disabled={busy} onClick={createInvite}>
+              Создать ссылку: {PLAN_NAMES[plan]} {INVITE_TERMS.find((item) => item.id === term)?.words}
+            </button>
+          )}
+        </div>
+      </Group>
+
+      <Group title={`Подписки: ${data.subscriptions.length}`} footer={`На пробном Pro: ${data.trials}, навсегда: ${data.lifetime}. Админы не показаны.`}>
+        {data.subscriptions.length === 0 && <Row title="Действующих подписок нет" />}
+        {data.subscriptions.map((item) => (
+          <Row
+            key={item.userId}
+            title={<>{item.name} <PlanPill plan={item.plan} trial={item.source === 'TRIAL'} /></>}
+            subtitle={[SOURCE_NAMES[item.source] ?? item.source, item.recurring ? 'автопродление' : null].filter(Boolean).join(' · ')}
+            value={item.expiresAt ? `до ${shortDate(item.expiresAt)}` : 'навсегда'}
+            onClick={() => onOpenUser(item.userId)}
+          />
+        ))}
+      </Group>
+
+      {data.payments.length > 0 && (
+        <Group title="Последние оплаты">
+          {data.payments.map((item) => (
+            <Row
+              key={`${item.userId}-${item.at}`}
+              title={item.name}
+              subtitle={`${OFFER_NAMES[item.offer] ?? item.offer}${item.refunded ? ' · возвращено' : ''}`}
+              value={<span className={item.refunded ? 'admin-refunded' : undefined}>{item.amount} ⭐ · {shortDate(item.at)}</span>}
+              onClick={() => onOpenUser(item.userId)}
+            />
+          ))}
+        </Group>
+      )}
+    </>
+  );
+}
+
+// --- Рассылка ---
+
+const AUDIENCES: { id: string; label: string }[] = [
+  { id: 'all', label: 'Все' },
+  { id: 'mailbox', label: 'С ящиком' },
+  { id: 'nobox', label: 'Без ящика' },
+  { id: 'paid', label: 'Платные' },
+  { id: 'trial', label: 'Пробный Pro' },
+  { id: 'free', label: 'Free' },
+];
+
+/** Рассылка: текст, аудитория, проверка на себе и отправка с подтверждением. */
+export function AdminBroadcastScreen({ notify, onBack }: { notify: Notify; onBack: () => void }) {
+  const [text, setText] = useState('');
+  const [audience, setAudience] = useState('all');
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [running, setRunning] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    load<{ counts: Record<string, number>; running: boolean }>('/broadcast', notify).then((value) => {
+      if (!value) return;
+      setCounts(value.counts);
+      setRunning(value.running);
+    });
+  }, [notify]);
+
+  const send = async (test: boolean) => {
+    setBusy(true);
+    const result = await load<{ message: string }>('/broadcast', notify, 'POST', { text, audience, test });
+    setBusy(false);
+    setConfirming(false);
+    if (!result) return;
+    notify('ok', result.message);
+    if (!test && result.message.includes('запущена')) {
+      setRunning(true);
+      setText('');
+    }
+  };
+
+  const count = counts[audience] ?? 0;
+  const ready = text.trim().length > 0 && !busy;
+
+  return (
+    <div className="screen">
+      <ScreenHeader title="Рассылка" subtitle="Сообщение от бота в личный чат" onBack={onBack} />
+
+      <textarea
+        className="admin-textarea"
+        placeholder="Текст сообщения"
+        value={text}
+        maxLength={4000}
+        onChange={(event) => { setText(event.target.value); setConfirming(false); }}
+      />
+      <p className="field-hint">{text.length} / 4000. Отправляется как обычный текст, ссылки кликабельны.</p>
+
+      <Group title="Кому">
+        <div className="admin-grant">
+          <div className="chips">
+            {AUDIENCES.map((item) => (
+              <Chip key={item.id} selected={audience === item.id} onClick={() => { setAudience(item.id); setConfirming(false); }}>
+                {item.label}{counts[item.id] !== undefined ? ` ${counts[item.id]}` : ''}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      </Group>
+
+      {running && <p className="field-hint">Идет рассылка: новую можно запустить после ее итога.</p>}
+
+      <button type="button" className="tinted big" disabled={!ready} onClick={() => send(true)}>
+        Отправить себе для проверки
+      </button>
+
+      <Group footer={confirming ? `Сообщение уйдет ${count} чел. Отменить отправку будет нельзя.` : 'Заблокировавшие бота не получат сообщение. Итог рассылки бот пришлет вам.'}>
+        {confirming ? (
+          <>
+            <Row title={busy ? 'Запускаю…' : `Да, отправить ${count} чел.`} danger onClick={busy ? undefined : () => send(false)} />
+            <Row title="Отмена" accent onClick={() => setConfirming(false)} />
+          </>
+        ) : (
+          <Row
+            title={`Отправить ${count} чел.`}
+            accent
+            onClick={ready && !running && count > 0 ? () => setConfirming(true) : undefined}
+          />
+        )}
+      </Group>
     </div>
   );
 }

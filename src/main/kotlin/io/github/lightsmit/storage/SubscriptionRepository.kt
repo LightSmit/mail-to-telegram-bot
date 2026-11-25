@@ -22,6 +22,9 @@ interface SubscriptionStore {
     suspend fun recordPayment(payment: Payment): Boolean
     suspend fun lastPayment(userId: Long): Payment?
     suspend fun markRefunded(chargeId: String)
+
+    /** Последние оплаты всех пользователей, новые первыми (админ-панель). */
+    suspend fun recentPayments(limit: Int): List<Payment> = emptyList()
     suspend fun countPayments(userId: Long): Int
 
     /** Сумма звезд за оплаты с момента since (null - за все время), без возвратов. */
@@ -183,6 +186,15 @@ class SubscriptionRepository : SubscriptionStore {
             ).use { statement ->
                 statement.setLong(1, userId)
                 statement.executeQuery().use { rs -> if (rs.next()) rs.toPayment() else null }
+            }
+        }
+    }
+
+    override suspend fun recentPayments(limit: Int): List<Payment> = withContext(DatabaseManager.dispatcher) {
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT * FROM payments ORDER BY created_at DESC LIMIT ?").use { statement ->
+                statement.setInt(1, limit)
+                statement.executeQuery().use { rs -> buildList { while (rs.next()) rs.toPayment()?.let(::add) } }
             }
         }
     }

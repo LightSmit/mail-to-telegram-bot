@@ -450,6 +450,8 @@ fun main() = runBlocking {
             subscriptions = subscriptionService,
             funnel = funnelService,
             deleteUserData = userDataService::deleteAll,
+            botUsername = botUsername,
+            scope = appScope,
         ),
         mailBrowser = MailBrowserService(
             repository = mailAccountRepository,
