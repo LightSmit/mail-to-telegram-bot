@@ -7,7 +7,13 @@ import jakarta.mail.Folder
 import jakarta.mail.Message
 import jakarta.mail.Store
 import jakarta.mail.UIDFolder
+import jakarta.mail.search.AndTerm
 import jakarta.mail.search.FlagTerm
+import jakarta.mail.search.FromStringTerm
+import jakarta.mail.search.OrTerm
+import jakarta.mail.search.RecipientStringTerm
+import jakarta.mail.search.SearchTerm
+import jakarta.mail.search.SubjectTerm
 import jakarta.mail.internet.InternetAddress
 import jakarta.mail.internet.MimeUtility
 import kotlinx.coroutines.Dispatchers
@@ -462,8 +468,15 @@ class ImapMailClient(
         var chunkSize = SEARCH_CHUNK
         val startedAt = System.nanoTime()
 
-        while (end >= 1 && found.size < want) {
-            if (System.nanoTime() > deadline) {
+        // Первая страница: сначала поиск силами почтового сервера. Он ищет целые слова,
+        // но по всему ящику и быстро - Mail.ru отдает письма для перебора очень медленно
+        val serverHits = if (from == null && count > 0) serverSearch(folder, query, unreadOnly, want) else emptyList()
+        val seen = serverHits.mapTo(HashSet()) { message -> message.messageNumber }
+        var lastChunkNanos = 0L
+
+        while (end >= 1 && found.size + serverHits.size < want) {
+            // Следующая пачка не успеет до конца отведенного времени - останавливаемся заранее
+            if (System.nanoTime() + lastChunkNanos > deadline) {
                 timedOut = true
                 break
             }
@@ -479,27 +492,49 @@ class ImapMailClient(
                 },
             )
             chunk.reversed()
+                .filter { message -> message.messageNumber !in seen }
                 .filter { message -> (!unreadOnly || !isSeen(message)) && matchesSearchHeaders(message, needle) }
                 .forEach { message -> found.add(message) }
             end = start - 1
-            val chunkMillis = (System.nanoTime() - chunkStartedAt) / 1_000_000
-            if (chunkMillis < FAST_CHUNK_MILLIS) chunkSize = minOf(chunkSize * 2, MAX_SEARCH_CHUNK)
+            lastChunkNanos = System.nanoTime() - chunkStartedAt
+            if (lastChunkNanos / 1_000_000 < FAST_CHUNK_MILLIS) chunkSize = minOf(chunkSize * 2, MAX_SEARCH_CHUNK)
         }
         logger.info(
-            "Search scanned {} of {} emails in {} ms (chunk {}, found {})",
+            "Search scanned {} of {} emails in {} ms (chunk {}, found {} + {} by server)",
             (from ?: count).coerceAtMost(count) - maxOf(end, 0),
             count,
             (System.nanoTime() - startedAt) / 1_000_000,
             chunkSize,
             found.size,
+            serverHits.size,
         )
+        // Новые сверху: совпадения сервера могут быть старше просмотренных писем
+        val messages = (found + serverHits).sortedByDescending { message -> message.messageNumber }
         return SearchScan(
-            messages = found,
+            messages = messages,
             nextCursor = end.takeIf { value -> value >= 1 },
             timedOut = timedOut,
             scanned = count - maxOf(end, 0),
             folderSize = count,
         )
+    }
+
+    // IMAP SEARCH по теме, отправителю и получателю: новые совпадения, не больше want
+    private fun serverSearch(folder: Folder, query: String, unreadOnly: Boolean, want: Int): List<Message> {
+        val startedAt = System.nanoTime()
+        val text: SearchTerm = OrTerm(
+            arrayOf(
+                SubjectTerm(query),
+                FromStringTerm(query),
+                RecipientStringTerm(Message.RecipientType.TO, query),
+            ),
+        )
+        val term = if (unreadOnly) AndTerm(text, FlagTerm(Flags(Flags.Flag.SEEN), false)) else text
+        val hits = runCatching { folder.search(term) }
+            .onFailure { failure -> logger.info("Server search failed: {}", failure.javaClass.simpleName) }
+            .getOrDefault(emptyArray())
+        logger.info("Server search found {} emails in {} ms", hits.size, (System.nanoTime() - startedAt) / 1_000_000)
+        return hits.sortedByDescending { message -> message.messageNumber }.take(want)
     }
 
     // Совпадение по заголовкам, прочитанным при поиске (без дозагрузки ENVELOPE по одному письму)

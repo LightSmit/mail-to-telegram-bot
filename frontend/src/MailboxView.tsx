@@ -259,8 +259,9 @@ export function MailboxView({ account, request, limited = false, onUpgrade, onCl
       if (query) {
         // В поиске сервер не знает общее число: считаем найденное
         setTotal(merged.length);
-        // Найдено меньше страницы, а письма еще есть - ищем дальше сами
-        if (page.nextCursor && merged.length < offset + PAGE_SIZE) {
+        // Пока этот шаг ничего нового не нашел, а письма еще есть - ищем дальше сами.
+        // Что-то нашли - показываем и ждем «Искать дальше»: на медленной почте шаг идет ~20 секунд
+        if (page.nextCursor && merged.length === current.length) {
           void load(offset, page.nextCursor);
           return;
         }
