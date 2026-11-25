@@ -1,5 +1,7 @@
-# DOMAIN задается в .env (например, mail.example.com или 203-0-113-10.sslip.io)
-{$DOMAIN} {
+# DOMAIN задается в .env (например, mail.example.com или 203-0-113-10.sslip.io).
+# OLD_DOMAIN - прежний адрес после переезда: старые кнопки «Открыть» и мониторинг
+# продолжают работать. Не задан - вместо него localhost (никуда не смотрит).
+{$DOMAIN}, {$OLD_DOMAIN:localhost} {
 	encode gzip
 
 	handle /api/* {
