@@ -1,232 +1,380 @@
-# Mail to Telegram Bot
+# Mail to Telegram
 
 **English** · [Русский](README.ru.md)
 
-A Telegram bot that forwards new emails from your mailboxes to a Telegram chat within seconds. Users connect mailboxes themselves in a Telegram Mini App: no passwords in chat, no config files, several mailboxes per person.
+![Kotlin](https://img.shields.io/badge/Kotlin-2.3-7F52FF?logo=kotlin&logoColor=white)
+![JVM](https://img.shields.io/badge/JVM-21-007396?logo=openjdk&logoColor=white)
+![Ktor](https://img.shields.io/badge/Ktor-3.5-087CFA?logo=ktor&logoColor=white)
+![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-3-003B57?logo=sqlite&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker_Compose-2496ED?logo=docker&logoColor=white)
 
-Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iCloud and any other mailbox with IMAP access.
+A Telegram bot that delivers new emails from your mailboxes to Telegram within seconds. It comes with a Mini App inside Telegram to connect mailboxes, read and search mail, set up filters and manage the subscription.
+
+**Live bot:** [@FromMailBot](https://t.me/FromMailBot) · **Mini App:** opens with the "Open" button in the bot
+
+Works with Mail.ru (and list.ru, bk.ru, inbox.ru), Yandex, Gmail, Rambler, iCloud and any mailbox with IMAP access. There is also a **passwordless mode**: the user sets up forwarding to a personal bot address in their mail settings.
+
+---
+
+## Contents
+
+- [For recruiters, in brief](#for-recruiters-in-brief)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Engineering highlights](#engineering-highlights)
+- [Security](#security)
+- [Tech stack](#tech-stack)
+- [Project structure](#project-structure)
+- [Tests and quality](#tests-and-quality)
+- [Self-hosting](#self-hosting)
+- [Configuration](#configuration)
+- [Bot commands](#bot-commands)
+- [Limitations](#limitations)
+- [License](#license)
+
+---
+
+## For recruiters, in brief
+
+| | |
+|---|---|
+| **What it is** | A production service: a bot plus a web app inside Telegram, running on a VPS with real users and payments |
+| **Author's role** | Solo full-cycle developer: idea, UI design, backend, frontend, infrastructure, payments, analytics, support |
+| **Size** | ≈ 16,500 lines of Kotlin (backend), ≈ 6,400 lines of TypeScript/React (Mini App), ≈ 2,200 lines of tests (100+ tests) |
+| **Backend** | Kotlin, coroutines, Ktor (HTTP server and client), IMAP/SMTP (Jakarta Mail), SQLite |
+| **Frontend** | React 19, TypeScript, Vite, Telegram Mini Apps API |
+| **Infrastructure** | Docker Compose, Caddy (automatic HTTPS), Cloudflare Email Routing and Workers, health monitoring |
+| **Payments** | Telegram Stars subscriptions: monthly with auto-renewal, yearly, free trial, refunds, referral program |
+| **What it demonstrates** | Asynchronous event processing, reliable delivery (outbox), external protocols, cryptography, SSRF and XSS protection, product analytics (funnel), admin panel |
+
+---
 
 ## Features
 
-**Notifications**
-- A card for every new email: mailbox, sender, subject, date, attachments.
-- Buttons under the card: 📄 full text, 📎 attachments as files, ✅ mark as read in the mailbox.
-- New mail is detected through IMAP IDLE (push) with a safety check every 15 seconds. Typical delay is 5–15 seconds.
+### Email notifications
+- A card for every new email: mailbox, sender, subject, date, attachments. It usually arrives 3–15 seconds after the email.
+- Buttons under the card:
+  - 📱 **Open**: the full email in the Mini App;
+  - 📄 **Text**: the full text right in the chat;
+  - 📎 **Attachments**: files to the chat;
+  - ✅ **Read**: mark the email as read in the mailbox itself;
+  - 📋 **Copy code**: copy a verification code from the email in one tap (Pro);
+  - 🚫 **Unsubscribe**: leave a mailing list (Pro), see below.
 - Old emails are never forwarded, only mail that arrives after the mailbox is connected.
+- If a mailbox stops working (for example, the app password was revoked), the bot explains what happened and how to fix it, and reports when it works again.
 
-**Mini App (inside Telegram)**
-- Connect a mailbox: enter the address, the provider is detected automatically, step-by-step instructions for creating an app password are shown for each provider.
-- Mailbox status: working, connecting, or the exact problem (for example, the app password was revoked).
-- Update the app password without reconnecting the mailbox: filters and position are kept.
-- **Mail browser:** Inbox and Sent of every connected mailbox, server-side search by subject, sender and recipient, "unread" and "with attachments" filters, sorting, reading emails, marking as read, sending attachments to the chat. Emails are read from the mailbox on request and are not stored on the server.
-- Light and dark themes follow the Telegram theme.
-- Russian and English interface: the bot and the Mini App follow the user's Telegram language, or the language chosen with `/language` or the RU / EN switch in the app. Admin commands are in Russian.
+### Two ways to connect a mailbox
+1. **App password (IMAP).** The user enters the address, the app detects the provider and shows step-by-step instructions for creating an app password with that provider. The password is stored encrypted.
+2. **Passwordless forwarding.** The bot issues a personal address like `xxxx@from-mail.ru`, and the user turns on forwarding to it. Mail goes through Cloudflare Email Routing and an Email Worker to the bot server. The bot never needs the mailbox password.
 
-**Filters (per mailbox)**
-- Pause.
+### Mini App (inside Telegram)
+- Mailbox list with status: working, connecting, paused (with "until 18:30") or the exact error.
+- A custom dark theme with an animated starfield and a light theme in Telegram colors. Russian and English UI.
+- **Mail:** Inbox and Sent of every mailbox, "Unread", "With attachments" and "★ Starred" filters, sorting.
+- **Search across all mailboxes:** results appear as each mailbox answers, so a slow mailbox does not hold up the rest.
+  - First the mail server searches instantly. For Gmail this is Gmail's own search, the same as on the web.
+  - Then the bot scans recent emails for partial-word matches (for example, "discou").
+- **Full email:**
+  - a formatted view like in a mail client: sanitized HTML in an isolated frame, remote images load only on request;
+  - a plain-text view.
+- **Attachments:**
+  - images and PDFs open full screen;
+  - files download through Telegram's native dialog;
+  - "Share" opens Telegram's chat picker.
+- **Stars** on emails and "mark as unread" right in the mailbox.
+- **Mailbox settings:**
+  - pause for a chosen time, picked on an iPhone-style wheel;
+  - notification sound;
+  - a delivery test;
+  - app password change;
+  - disconnect.
+
+### Filters (per mailbox)
+- ⭐ **Important senders:** their emails always arrive: during a pause, past other filters, right away and with sound even in quiet hours.
 - Skip newsletters and auto-replies (detected by `List-Unsubscribe`, `List-Id`, `Precedence`, `Auto-Submitted`).
-- Only from: a list of addresses or domains.
-- Never from: a list of addresses or domains (subdomains included).
+- Only from selected addresses or domains.
+- Never from selected addresses or domains (subdomains included).
 - Skip emails whose subject contains given words.
 
-**Notification modes (per user)**
-- Quiet hours: emails arrive silently at night, in the user's time zone.
-- Digest: emails are collected and delivered together every 1, 3, 6, 12 or 24 hours.
+### One-tap unsubscribe
+- If the mailing list supports one-click unsubscribe (RFC 8058), the bot unsubscribes by itself.
+- Otherwise it sends a button with the unsubscribe page.
+- The bot only calls public https addresses: a link from someone else's email cannot make it reach the server's internal network.
 
-**For the owner**
-- `/health` endpoint for external monitoring (UptimeRobot etc.): 200 when the bot works and receives Telegram updates, 503 otherwise.
-- The bot sets its own description and commands in Telegram in Russian and English.
-- `/admin` — users, mailboxes, notifications sent, queue health.
-- `/broadcast` — message to all users with a preview and confirmation.
-- `/backup` and an automatic daily SQLite backup sent to the admins.
-- Alerts to the user when a mailbox stops working, and a message when it recovers.
+### Notification modes (per user)
+- **Quiet hours:** emails arrive silently at night, in the user's time zone.
+- **Digest:** emails are collected and delivered every 1, 3, 6, 12 or 24 hours.
+- **Silent mailbox:** one mailbox always arrives without sound.
 
-**Reliability and security**
-- Notifications go through a persistent outbox in SQLite: nothing is lost on restart or Telegram errors, with retries and backoff.
-- Mailbox passwords are encrypted with AES-256-GCM. The key lives only in `.env`.
-- Mini App requests are authenticated by Telegram `initData` signature verification; each user sees only their own mailboxes.
-- IMAP servers in private networks are rejected (no SSRF into the server).
-- Users can delete all their data at any time: `/delete_my_data` in the bot or "My data" in the Mini App.
+### Group chats (Business)
+A mailbox can deliver to a team group chat. Buttons under emails work for every member. Reply and unsubscribe stay with the mailbox owner.
 
-**Plans and Telegram Stars payments** (turned on with `BILLING_ENABLED=true`)
-- Free: 1 mailbox, notifications, the latest 20 emails in the app, pause, newsletter filter, quiet hours and digest.
-- Pro (100⭐ a month or 1000⭐ a year): up to 5 mailboxes, all filters, all emails with search and Sent folder, verification codes from emails with a Copy button.
-- Business (300⭐ a month or 3000⭐ a year): up to 15 mailboxes and forwarding mailbox emails to a team group chat. The owner gets a group picker link in the mailbox settings; buttons under emails in the group work for every member. If the bot is removed from the group, emails go to the owner's private chat again.
-- New users get 7 days of Pro for free. The monthly plan renews automatically, the yearly plan is a one-time payment.
-- When a subscription ends, 1 mailbox keeps working (pause the others), sender filters are kept but not applied.
-- `/premium` in the bot and the Plan section in the app; `/paysupport` for payment questions.
-- Admins from `.env` always have Business.
-- Invite friends: everyone has a referral link (`/referral` in the bot or "Invite friends" in the app). Every 5 friends who open the bot with the link for the first time and connect a mailbox give a month of Pro (an active paid plan is extended by a month).
+### Plans and Telegram Stars payments
+| | Free | Pro | Business |
+|---|---|---|---|
+| Mailboxes | 1 | 5 | 15 |
+| Notifications, pause, quiet hours, digest | ✓ | ✓ | ✓ |
+| Recent emails in the app | 20 | all | all |
+| Search, Sent folder, filters, important senders | | ✓ | ✓ |
+| Verification codes, one-tap unsubscribe | | ✓ | ✓ |
+| Delivery to a group chat | | | ✓ |
 
-**Prepared but disabled by default**
-- Reply to an email from Telegram via SMTP (`REPLY_ENABLED=true`). Many hosting providers block outgoing SMTP ports 465 and 587; enable it only on a server where they are open.
+- The monthly plan renews automatically. Auto-renewal can be turned off right in the app and back on until the period ends. The yearly plan is a one-time payment.
+- Pro trial for new users. Two days before it ends, the bot sends a summary: how many emails it delivered, what changes on Free, and a payment button.
+- Referral program: a month of Pro for every N friends who connect a mailbox.
+- Invite links with a subscription, granting and revoking plans, Stars refunds.
+
+### Admin panel (the "Admin" tab in the app, admins only)
+- **Overview:** users, share who connected a mailbox, paying users, system health, event feed.
+- **People:** search by ID, @username and name, filters (paid, Free, no mailbox, with errors).
+- **User card:**
+  - subscription, mailboxes and funnel path;
+  - grant Pro or Business for any term;
+  - reset the trial;
+  - revoke with or without a refund;
+  - delete the user's data.
+- **Funnel:** from bot start to payment, by traffic source (`t.me/bot?start=src_habr`), popular mail providers, connection errors, who got stuck.
+- **System:** broken mailboxes, delivery stats, mail servers, one-tap backup.
+- **Money:** revenue, subscriptions, recent payments, invite links for any term.
+- **Broadcast:** text, audience (all, with mailbox, without mailbox, paid, trial, Free), test send to yourself, confirmation, result report in the chat.
+
+### For the service owner
+- `/health` endpoint for external monitoring (UptimeRobot and similar).
+- Daily database backup, sent to the admins as a file.
+- The bot sets its own description and commands in Telegram in two languages.
+- Users can delete all their data with one command.
+
+---
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    subgraph Mailboxes
-        M1[Mail.ru]
-        M2[Gmail]
-        M3[Yandex ...]
+    subgraph Mail[Users' mailboxes]
+        M1[Mail.ru · Yandex · Gmail · ...]
+        M2[Any mailbox with forwarding]
     end
-    subgraph Server [VPS · Docker Compose]
-        B[mail-bot<br/>Kotlin/JVM]
+    subgraph CF[Cloudflare]
+        ER[Email Routing<br/>*@from-mail.ru]
+        EW[Email Worker]
+    end
+    subgraph VPS[VPS · Docker Compose]
+        W[web<br/>Caddy: HTTPS, Mini App]
+        B[mail-bot<br/>Kotlin / JVM]
         DB[(SQLite)]
-        W[web<br/>Caddy + Mini App]
     end
-    M1 & M2 & M3 -- IMAP IDLE --> B
+    M1 -- IMAP IDLE --> B
+    M2 -- forwarding --> ER --> EW -- POST /api/inbound<br/>shared secret --> W
+    W -- /api --> B
     B <--> DB
     B -- Bot API --> T[Telegram]
     U[User] --> T
-    T -- Mini App --> W
-    W -- /api --> B
+    T -- Mini App<br/>initData --> W
 ```
 
-- **mail-bot** watches mailboxes, delivers notifications, handles buttons and commands, and serves the API for the Mini App.
-- **web** is Caddy with an automatic HTTPS certificate: it serves the Mini App and proxies `/api` to the bot.
+**An email over IMAP**
+1. `ImapIdleWatcher` keeps an IMAP IDLE connection to every mailbox, so the server pushes new mail. For providers that report mail late over IDLE (Gmail), there is a safety check over the same connection.
+2. New UIDs go through the mailbox filters. Important senders always pass.
+3. The notification is written to an **outbox** table in SQLite and only then sent. If Telegram is unavailable or the server restarts, nothing is lost: workers retry with growing delays.
+4. A fast card built from headers goes out first. Then the bot fetches the full email and enriches the card with the verification code, attachment and unsubscribe buttons.
 
-## Requirements
+**An email via forwarding**
+The Cloudflare Email Worker receives mail for `token@from-mail.ru` and posts it to `/api/inbound` with a shared secret. The bot finds the mailbox by token and keeps the email for 7 days so the Text and Attachments buttons work. From there the path is the same: filters, outbox, card.
 
-- A VPS with Ubuntu 22.04/24.04, **1 GB RAM** or more (2 GB of swap recommended), ports 80 and 443 open.
-- A domain, or the free `sslip.io` name based on the server IP (for example `203-0-113-10.sslip.io`).
-- A bot token from [@BotFather](https://t.me/BotFather).
+**Mini App**
+Caddy serves the React app. Requests to `/api` reach the bot with Telegram's signed user data (`initData`). The server verifies the HMAC-SHA256 signature with the bot token and knows who is calling, with no logins or passwords.
 
-## Quick start (about 15 minutes)
+---
 
-**1. Create the bot.** In @BotFather: `/newbot`, copy the token.
+## Engineering highlights
 
-**2. Prepare the server.**
+- **Reliable delivery (transactional outbox).** Every notification is persisted before it is sent. Several workers retry with exponential backoff, and dead notifications show up in the admin panel. No email is lost on Telegram outages, network errors or restarts.
+- **IMAP IDLE push plus a safety net.** One persistent connection per mailbox instead of constant polling. Reconnects use exponential backoff.
+- **Kotlin coroutines.** Hundreds of mailboxes are served concurrently, and a slow mail server never blocks the others. Blocking IMAP runs on `Dispatchers.IO`, and every operation has a timeout.
+- **Two-phase search.**
+  - First the mail server's own search runs: instant and across the whole mailbox. For Gmail it uses the `X-GM-RAW` extension, the same search as on the web.
+  - Then the bot scans recent emails for partial-word matches. It reads only the needed headers, in growing batches, within a time budget, and returns a cursor to continue.
+  - A slow mailbox (Mail.ru serves messages dozens of times slower than Gmail) does not delay the others.
+- **Safe HTML email rendering.**
+  - The server sanitizes HTML with a jsoup Safelist: scripts, forms and handlers are removed, and inline `cid:` images become `data:` URIs.
+  - The app renders the email in a script-less `iframe sandbox` with its own CSP, so remote images (tracking pixels) load only on request.
+  - Links are intercepted and opened outside the app.
+- **Attachment downloads via signed links.** Telegram downloads the file itself, without user data. So access is encoded in a short-lived HMAC-SHA256 token: owner, mailbox, email, attachment index, 15-minute expiry. Active types (HTML, SVG, scripts) are only served as downloads, with `nosniff` and CSP `sandbox`.
+- **Share through Telegram.** The file is uploaded to Telegram once, the service message is deleted right away, and the `file_id` is reused. `savePreparedInlineMessage` plus `WebApp.shareMessage` give the native chat picker.
+- **Telegram Stars subscriptions.** Handles `pre_checkout_query` and `successful_payment`, monthly renewals, turning auto-renewal off and back on (`editUserStarSubscription`), refunds (`refundStarPayment`), and a grace hour for late renewals.
+- **Product analytics.** A step funnel (start, app opened, provider chosen, connected, first email, trial, payment) broken down by traffic source shows where users drop off.
+- **Localization.** All bot and app texts in Russian and English. The language follows Telegram or is chosen manually.
+
+---
+
+## Security
+
+| Threat | Protection |
+|---|---|
+| Mailbox passwords leaking from the database | AES-256-GCM encryption; the key lives only in `.env`, never in the database or backups |
+| Forged API requests on behalf of another user | Every request is signed by Telegram (`initData`, HMAC-SHA256 with the bot token) and checked for age; users only see their own mailboxes |
+| Forged forwarded emails | `/api/inbound` only accepts requests with the Cloudflare Worker's shared secret; mailbox addresses are random tokens |
+| SSRF: making the server call internal networks | Mail servers and unsubscribe links in private, loopback and reserved ranges are rejected (IPv4 and IPv6); redirects are not followed |
+| XSS via email HTML | Server-side sanitizing (jsoup), script-less `iframe sandbox`, CSP, links open outside the app |
+| Access to other users' attachments | Signed 15-minute links bound to the owner and the email; the key is generated at startup |
+| Malicious files served from the domain | Active content is only served as a download: `Content-Disposition: attachment`, `nosniff`, CSP `sandbox` |
+| Admin functions | Only for IDs from `.env`; the server checks every request |
+| Data loss | Daily backups, an outbox that survives restarts, full user data deletion on request |
+
+Secrets (`TELEGRAM_BOT_TOKEN`, `ENCRYPTION_KEY`, `INBOUND_SECRET`) live only in `.env` on the server and never reach the repository.
+
+---
+
+## Tech stack
+
+**Backend**
+- Kotlin 2.3, JVM 21, kotlinx.coroutines, kotlinx.serialization
+- Ktor 3: HTTP server (Netty) for the Mini App API, HTTP client (OkHttp) for the Telegram Bot API
+- Jakarta Mail (Eclipse Angus): IMAP IDLE, search, SMTP; jsoup for HTML
+- SQLite + HikariCP, no ORM: hand-written SQL, column migrations at startup
+- Logback
+
+**Frontend (Telegram Mini App)**
+- React 19, TypeScript, Vite
+- Telegram Mini Apps API: BackButton, themes, `downloadFile`, `shareMessage`, haptic feedback
+- No UI library: custom Telegram-style components
+
+**Infrastructure**
+- Docker Compose: `mail-bot` (JVM) and `web` (Caddy with automatic Let's Encrypt certificates)
+- Cloudflare: DNS, Email Routing and an Email Worker for the forwarding mode
+- Monitoring: `/health` + UptimeRobot
+
+---
+
+## Project structure
+
+```text
+src/main/kotlin/io/github/lightsmit/
+├── Main.kt          wiring and background jobs
+├── api/             Mini App HTTP API, initData verification, signed file links
+├── billing/         plans, Telegram Stars subscriptions, referrals, invoice links
+├── config/          settings from .env, mailbox and filter model
+├── i18n/            bot texts in Russian and English
+├── mail/            IMAP (IDLE, listing, search, reading), SMTP, email parsing, HTML, unsubscribe, codes
+├── security/        AES-256-GCM encryption
+├── service/         forwarding, filters, outbox worker, schedules, admin panel, funnel,
+│                    search, attachments, backups, mailbox health, data deletion
+├── storage/         SQLite repositories
+└── telegram/        Bot API client, button codec, network error handling
+src/test/            unit tests
+frontend/src/        Mini App: screens, components, API, i18n
+deploy/              Caddyfile, Cloudflare Email Worker
+```
+
+---
+
+## Tests and quality
+
+- 100+ unit tests (`kotlin.test`, JUnit), covering:
+  - subscriptions: renewals, auto-renewal, refunds, trial;
+  - filters and important senders;
+  - the funnel;
+  - signed file links;
+  - unsubscribe link parsing and internal address protection;
+  - the button codec;
+  - Telegram network error classification;
+  - verification code extraction.
+- Strict TypeScript type checking and ESLint for the frontend.
+- The Docker build reproduces production exactly.
+
+```bash
+./gradlew test                                  # backend tests (Windows: .\gradlew test)
+cd frontend && npm ci && npm run build          # type check and build the Mini App
+```
+
+---
+
+## Self-hosting
+
+**Requirements:** a VPS with Ubuntu 22.04/24.04, 1 GB RAM or more (2 GB swap recommended), ports 80 and 443 open, a domain (or the free `IP-with-dashes.sslip.io`), and a bot token from [@BotFather](https://t.me/BotFather).
+
 ```bash
 curl -fsSL https://get.docker.com | sh
 git clone https://github.com/LightSmit/mail-to-telegram-bot.git
 cd mail-to-telegram-bot
 cp .env.example .env
-```
-
-**3. Fill in `.env`.** The minimum is:
-```dotenv
-TELEGRAM_BOT_TOKEN=123456:ABC...
-ENCRYPTION_KEY=        # openssl rand -base64 48
-DOMAIN=203-0-113-10.sslip.io
-TELEGRAM_CHAT_ID=      # your Telegram user ID: you become the admin
-```
-Keep a copy of `ENCRYPTION_KEY` in a password manager. Without it, stored mailbox passwords cannot be decrypted.
-
-**4. Start.**
-```bash
+nano .env        # minimum: TELEGRAM_BOT_TOKEN, ENCRYPTION_KEY, DOMAIN, TELEGRAM_CHAT_ID
 docker compose up -d --build
 docker compose logs -f mail-bot
 ```
-The first build takes 2–4 minutes.
 
-**5. Connect the Mini App.** In @BotFather: `/mybots` → your bot → `Bot Settings` → `Menu Button` → `https://<DOMAIN>`.
+- Generate `ENCRYPTION_KEY` with `openssl rand -base64 48` and keep it in a password manager: without it, stored mailbox passwords cannot be decrypted.
+- In @BotFather: `/mybots` → your bot → Bot Settings → Configure Mini App → `https://<DOMAIN>`.
+- Forwarding mode:
+  1. A domain on Cloudflare with Email Routing.
+  2. A catch-all rule to the Worker from `deploy/cloudflare-email-worker.js`.
+  3. The `INBOUND_DOMAIN` and `INBOUND_SECRET` variables.
 
-**6. Check.** Send `/start` to the bot, open the app, connect a mailbox and send yourself an email.
+**Update:** `git pull && docker compose up -d --build`.
+
+---
 
 ## Configuration
 
-All settings live in `.env` (see [.env.example](.env.example)).
+All settings live in `.env` (commented in [.env.example](.env.example)).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | — | Bot token, required |
-| `ENCRYPTION_KEY` | — | Key for mailbox passwords (32+ characters), required |
-| `DOMAIN` | — | Mini App domain for Caddy and the "Open app" button |
-| `MINI_APP_URL` | `https://<DOMAIN>` | Explicit Mini App URL, if it differs |
-| `TELEGRAM_CHAT_ID` | — | Owner's Telegram ID, always an admin |
+| `TELEGRAM_BOT_TOKEN` | — | Bot token (required) |
+| `ENCRYPTION_KEY` | — | Key for mailbox passwords, 32+ characters (required) |
+| `DOMAIN` | — | Mini App domain (HTTPS via Caddy) |
+| `OLD_DOMAIN` | — | Previous domain after a move: old buttons keep working |
+| `MINI_APP_URL` | `https://<DOMAIN>` | Mini App URL, if different |
+| `TELEGRAM_CHAT_ID` | — | Owner's ID, always an admin |
 | `ADMIN_IDS` | — | More admins, comma separated |
-| `IMAP_SAFETY_POLL_SECONDS` | `15` | Safety check: the Inbox is reopened over a persistent connection, one login per mailbox for hours |
-| `IMAP_SAFETY_REUSE_CONNECTION` | `true` | `false` - old behaviour, every safety check is a new login |
-| `IMAP_NOOP_SECONDS` | `5` | NOOP over the open IDLE connection |
-| `IDLE_RECONNECT_DELAY_SECONDS` | `5` | Base reconnect delay (exponential backoff on errors) |
-| `MAX_ATTACHMENT_SIZE_MB` | `45` | Larger attachments are not sent to Telegram |
-| `BACKUP_HOUR` / `BACKUP_KEEP` | `4` / `7` | Hour of the daily backup and number of copies kept |
-| `BACKUP_SEND_TO_ADMINS` | `true` | Send the daily backup file to admins |
-| `REPLY_ENABLED` | `false` | "Reply" button (needs open outgoing SMTP 465/587) |
-| `BILLING_ENABLED` | `false` | Plans and Stars payments. While `false`, everyone has Pro limits |
-| `TRIAL_DAYS` | `7` | Pro trial for new users, days (0 - no trial) |
-| `TRIAL_MODE` | `button` | `button` - the user starts the trial with a button, `auto` - it starts by itself on the first start |
+| `BILLING_ENABLED` | `false` | Plans and Stars payments (while `false`, everyone has Pro limits) |
+| `TRIAL_DAYS` / `TRIAL_MODE` | `7` / `button` | Pro trial: length, started by a button or automatically |
 | `PRICE_PRO_MONTH` / `PRICE_PRO_YEAR` | `100` / `1000` | Pro prices in Stars |
 | `PRICE_BUSINESS_MONTH` / `PRICE_BUSINESS_YEAR` | `300` / `3000` | Business prices in Stars |
-| `REFERRAL_GOAL` | `5` | How many friends give a month of Pro (0 - invitations off) |
-| `INBOUND_DOMAIN` / `INBOUND_SECRET` | — | Forwarding without a password: mail domain on Cloudflare Email Routing and the shared secret of [the Email Worker](deploy/cloudflare-email-worker.js). Off while empty |
-| `SUPPORT_CONTACT` | — | Contact for payment questions (`/paysupport`), for example `@username` |
-| `TELEGRAM_PROXY_URL` | — | HTTP proxy for Telegram Bot API only, if Telegram is blocked |
-| `ENCRYPTION_KEY_LEGACY` | — | Previous key, only for migrating old records |
+| `REFERRAL_GOAL` | `5` | Friends needed for a month of Pro (0 - off) |
+| `INBOUND_DOMAIN` / `INBOUND_SECRET` | — | Passwordless forwarding mode |
+| `IMAP_SAFETY_POLL_SECONDS` | `15` | Mailbox safety check interval |
+| `MAX_ATTACHMENT_SIZE_MB` | `45` | Larger attachments are not sent to Telegram |
+| `BACKUP_HOUR` / `BACKUP_KEEP` | `4` / `7` | Daily backup hour and copies kept |
+| `REPLY_ENABLED` | `false` | Reply from Telegram (needs open SMTP 465/587) |
+| `SUPPORT_CONTACT` | — | Contact for payment questions |
+| `TELEGRAM_PROXY_URL` | — | HTTP proxy for the Telegram Bot API only |
+
+---
 
 ## Bot commands
 
 | Command | Who | What it does |
 |---|---|---|
 | `/start` | everyone | Welcome and the "Open app" button |
-| `/help` | everyone | How it works and how to connect a mailbox |
+| `/help` | everyone | How to connect a mailbox |
 | `/mailboxes` | everyone | Your mailboxes and their status |
-| `/language` | everyone | Choose the bot language (Russian or English) |
-| `/premium` | everyone | Plan, subscription term and payment buttons |
-| `/paysupport` | everyone | Where to ask about payments |
-| `/referral` | everyone | Your invite link and friends counter |
-| `/delete_my_data` | everyone | Delete all your data from the bot (with confirmation) |
-| `/admin`, `/stats` | admins | Statistics |
-| `/broadcast text` | admins | Prepare a broadcast; `/broadcast_send` sends it, `/broadcast_cancel` cancels |
-| `/backup` | admins | Make a database backup now |
-| `/grant ID plan term` | admins | Grant a subscription: `pro` or `business`, term `7d`, `1m`, `3m`, `6m`, `1y` or `forever`. `@username` works instead of ID |
-| `/revoke ID` | admins | Revoke any subscription (and cancel Stars auto-renewal) |
-| `/invite plan term` | admins | One-time link with a subscription, for example `/invite business forever` |
-| `/refs` | admins | Who invited how many friends |
-| `/subs`, `/users` | admins | Active subscriptions; latest users with ID and plan |
-| `/refund ID` | admins | Refund Stars for the latest payment and revoke the subscription |
-| `/funnel [days] [source]` | admins | New user funnel: start, app, mail provider, connection, first email, Pro trial, payment. The source comes from a link like `t.me/bot?start=src_habr` |
-| `/stuck` | admins | New users who started the bot but did not connect a mailbox |
-| `/reset_trials` | admins | Reset the Pro trial: everyone who had it goes back to Free and can start the trial with a button again (`/reset_trials confirm`) |
+| `/language` | everyone | Bot language |
+| `/premium` | everyone | Plan and payment |
+| `/referral` | everyone | Invite link and friends counter |
+| `/paysupport` | everyone | Payment questions |
+| `/delete_my_data` | everyone | Delete all your data |
+| `/admin`, `/stats`, `/users`, `/subs` | admins | Statistics, users, subscriptions |
+| `/funnel`, `/stuck` | admins | New user funnel, who did not connect a mailbox |
+| `/grant`, `/revoke`, `/refund`, `/invite` | admins | Subscription management |
+| `/broadcast`, `/backup` | admins | Broadcast, backup |
 
-## Updating and backups
+The admin panel in the Mini App covers all of this and more.
 
-```bash
-git pull
-docker compose up -d --build
-```
-
-A database backup is made every day automatically. A manual copy of the data volume:
-```bash
-docker run --rm -v mail-to-telegram-bot_mail-bot-data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/mail-bot-data-$(date +%F).tar.gz /data
-```
-
-## Development
-
-- Backend: Kotlin 2, JVM 21, Ktor (server and client), Jakarta Mail (Angus), SQLite + HikariCP, kotlinx.coroutines, jsoup.
-- Frontend: React 19, TypeScript, Vite, `@twa-dev/sdk`.
-- Infrastructure: Docker Compose, Caddy.
-
-```bash
-./gradlew test        # tests (Windows: .\gradlew test)
-./gradlew run         # run the bot locally with .env from the project folder
-cd frontend && npm ci --legacy-peer-deps && npm run dev
-```
-
-```text
-src/main/kotlin/io/github/lightsmit/
-├── api/        Mini App HTTP API, Telegram initData verification
-├── config/     configuration, mailbox model
-├── mail/       IMAP (IDLE, fetching, search), SMTP, email parsing
-├── security/   AES-256-GCM password encryption
-├── service/    forwarding, filters, schedule, admin, backups, health
-├── storage/    SQLite repositories, outbox
-└── telegram/   Bot API client, button codec
-frontend/       Mini App (React)
-deploy/         Caddyfile
-```
+---
 
 ## Limitations
 
-- Gmail sometimes reports new mail late over IMAP; with `IMAP_SAFETY_POLL_SECONDS=15` the delay is about 10–15 seconds. Instant delivery would require the Gmail API with OAuth.
-- Outlook / Hotmail are not supported: Microsoft allows IMAP only with OAuth.
-- Mail search works on subject, sender and recipient (the mail server's IMAP SEARCH), not on the email text.
-- Replying from Telegram needs outgoing SMTP; see `REPLY_ENABLED`.
+- Outlook and Hotmail: Microsoft allows IMAP only with OAuth, so they cannot be connected with an app password. The forwarding mode works with them.
+- Search covers subject, sender and recipient. The mail server's own search finds whole words, and the bot finds partial words itself. With Mail.ru this is slower because the provider serves messages for scanning slowly.
+- Replying from Telegram needs open outgoing SMTP ports. Many hosting providers block them, so the feature is off by default.
+
+---
 
 ## License
 
-Proprietary, all rights reserved. Use, copying or distribution requires written permission of the author, see [LICENSE](LICENSE).
+Proprietary, all rights reserved. Use, copying or distribution requires the author's written permission, see [LICENSE](LICENSE).
 
 © 2026 Matvey ([LightSmit](https://github.com/LightSmit))
