@@ -4,7 +4,32 @@
 {$DOMAIN}, {$OLD_DOMAIN:localhost} {
 	encode gzip
 
+	# Заголовки безопасности для всех ответов
+	header {
+		# Только HTTPS: браузер не откроет сайт по http даже по старой ссылке
+		Strict-Transport-Security "max-age=31536000"
+		# Браузер не угадывает тип файла (вложение не станет скриптом)
+		X-Content-Type-Options "nosniff"
+		# Адрес приложения не уходит на сайты, куда ведут ссылки из писем
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		# Не показываем версию сервера
+		-Server
+	}
+
+	# Письма из Cloudflare: до 30 МБ (как лимит в боте), с запасом
+	handle /api/inbound {
+		request_body {
+			max_size 32MB
+		}
+		reverse_proxy mail-bot:8080
+	}
+
+	# Остальное API принимает только короткие JSON: большие тела отсекаем сразу
 	handle /api/* {
+		request_body {
+			max_size 1MB
+		}
 		reverse_proxy mail-bot:8080
 	}
 

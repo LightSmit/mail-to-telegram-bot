@@ -445,6 +445,11 @@ fun main() = runBlocking {
         inboundSecret = inboundSecret,
         sendTest = forwardingService::sendTestMessage,
         attachmentShare = AttachmentShareService(uploadClient = telegramMediaClient, controlClient = telegramControlClient),
+        // Обычно пусто: приложение и API на одном домене. Через запятую, например https://dev.example.com
+        corsOrigins = Environment.get("CORS_ORIGINS").orEmpty()
+            .split(',')
+            .map(String::trim)
+            .filter(String::isNotEmpty),
         adminPanel = AdminPanelService(
             adminIds = adminChatIds,
             botUsers = botUserRepository,

@@ -221,9 +221,12 @@ Caddy serves the React app. Requests to `/api` reach the bot with Telegram's sig
 | Access to other users' attachments | Signed 15-minute links bound to the owner and the email; the key is generated at startup |
 | Malicious files served from the domain | Active content is only served as a download: `Content-Disposition: attachment`, `nosniff`, CSP `sandbox` |
 | Admin functions | Only for IDs from `.env`; the server checks every request |
+| Password guessing and flooding | Per-user rate limits: 300 API requests per minute, 10 mailbox logins and 10 test messages per 10 minutes (HTTP 429 with `Retry-After`) |
+| Oversized requests | Caddy cuts request bodies: 1 MB for the API, 32 MB for forwarded emails |
+| Browser-level attacks | HSTS, `nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`; CORS is off (the app and the API share one origin) |
 | Data loss | Daily backups, an outbox that survives restarts, full user data deletion on request |
 
-Secrets (`TELEGRAM_BOT_TOKEN`, `ENCRYPTION_KEY`, `INBOUND_SECRET`) live only in `.env` on the server and never reach the repository.
+Secrets (`TELEGRAM_BOT_TOKEN`, `ENCRYPTION_KEY`, `INBOUND_SECRET`) live only in `.env` on the server and never reach the repository. The web container (Caddy) only receives `DOMAIN` and `OLD_DOMAIN`, not the whole `.env`.
 
 ---
 
@@ -326,6 +329,7 @@ All settings live in `.env` (commented in [.env.example](.env.example)).
 | `ENCRYPTION_KEY` | — | Key for mailbox passwords, 32+ characters (required) |
 | `DOMAIN` | — | Mini App domain (HTTPS via Caddy) |
 | `OLD_DOMAIN` | — | Previous domain after a move: old buttons keep working |
+| `CORS_ORIGINS` | — | Other sites allowed to call the API from a browser, comma separated (usually empty) |
 | `MINI_APP_URL` | `https://<DOMAIN>` | Mini App URL, if different |
 | `TELEGRAM_CHAT_ID` | — | Owner's ID, always an admin |
 | `ADMIN_IDS` | — | More admins, comma separated |

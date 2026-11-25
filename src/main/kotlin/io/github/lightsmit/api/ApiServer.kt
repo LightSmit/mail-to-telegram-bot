@@ -371,9 +371,25 @@ class ApiServer(
     private val adminPanel: AdminPanelService? = null,
     // «Поделиться» вложением через Telegram
     private val attachmentShare: AttachmentShareService? = null,
+    // Чужие сайты, которым можно звать API из браузера (CORS). Пусто - только свой домен:
+    // Mini App открывается с того же адреса, что и /api, CORS ему не нужен
+    private val corsOrigins: List<String> = emptyList(),
 ) {
     // Подписанные ссылки на вложения писем
     private val fileTokens = FileTokens()
+
+    // Защита от флуда: общий лимит на пользователя и строже - на вход в почту (перебор паролей)
+    private val generalLimiter = RateLimiter(limit = GENERAL_LIMIT, windowSeconds = 60)
+    private val loginLimiter = RateLimiter(limit = LOGIN_LIMIT, windowSeconds = LOGIN_WINDOW_SECONDS)
+    private val testLimiter = RateLimiter(limit = TEST_LIMIT, windowSeconds = LOGIN_WINDOW_SECONDS)
+
+    /** Какой лимит у запроса сверх общего: вход в почту и тестовые сообщения. */
+    private fun strictLimiter(method: HttpMethod, path: String): RateLimiter? = when {
+        method == HttpMethod.Post && (path == "/api/accounts" || path == "/api/accounts/forward") -> loginLimiter
+        method == HttpMethod.Put && LOGIN_PASSWORD_PATH.matches(path) -> loginLimiter
+        method == HttpMethod.Post && TEST_PATH.matches(path) -> testLimiter
+        else -> null
+    }
 
     // Имя файла в заголовке: ASCII-замена и точное имя в UTF-8 (RFC 6266)
     private fun contentDisposition(name: String, inline: Boolean = false): String {
@@ -427,8 +443,11 @@ class ApiServer(
 
     fun start() {
         embeddedServer(Netty, port = port) {
-            install(CORS) {
-                anyHost() // В проде заменишь на домен своего фронтенда
+            if (corsOrigins.isNotEmpty()) install(CORS) {
+                corsOrigins.forEach { origin ->
+                    val scheme = origin.substringBefore("://", missingDelimiterValue = "https")
+                    allowHost(origin.substringAfter("://").trimEnd('/'), schemes = listOf(scheme))
+                }
                 allowHeader(HttpHeaders.ContentType)
                 allowHeader("X-Telegram-Init-Data")
                 allowMethod(HttpMethod.Options)
@@ -480,7 +499,7 @@ class ApiServer(
                         // Письма из Cloudflare: своя проверка по секрету, без данных Telegram
                         if (call.request.path() == INBOUND_PATH) return@intercept
                         // Скачивание вложения: право на файл - в подписанной ссылке (ее открывает сам Telegram)
-                        if (call.request.path().startsWith(FILES_PATH)) return@intercept
+                        if (call.request.path().startsWith("$FILES_PATH/")) return@intercept
 
                         val initData = call.request.headers["X-Telegram-Init-Data"].orEmpty()
                         val auth = TelegramAuthValidator.inspect(initData, botToken)
@@ -517,6 +536,32 @@ class ApiServer(
                             LangKey,
                             runCatching { resolveLanguage(userId, user.second) }.getOrElse { Lang.fromCode(user.second) },
                         )
+
+                        // Слишком частые запросы: 429 и через сколько секунд повторить
+                        val strict = strictLimiter(call.request.local.method, call.request.path())
+                        val limiter = when {
+                            !generalLimiter.tryAcquire(userId) -> generalLimiter
+                            strict != null && !strict.tryAcquire(userId) -> strict
+                            else -> null
+                        }
+                        if (limiter != null) {
+                            val wait = limiter.retryAfterSeconds(userId)
+                            call.application.environment.log.warn(
+                                "Rate limit for user {} on {} {}",
+                                userId,
+                                call.request.local.method.value,
+                                call.request.path(),
+                            )
+                            call.response.header(HttpHeaders.RetryAfter, wait.toString())
+                            val message = if (call.attributes[LangKey] == Lang.RU) {
+                                "Слишком много запросов. Попробуй снова через $wait с."
+                            } else {
+                                "Too many requests. Try again in $wait s."
+                            }
+                            call.respond(HttpStatusCode.TooManyRequests, mapOf("error" to message))
+                            finish()
+                            return@intercept
+                        }
                     }
 
                     // Пересланное письмо от Cloudflare Email Worker: тело - письмо целиком (MIME)
@@ -1326,6 +1371,15 @@ class ApiServer(
         const val INBOUND_PATH = "/api/inbound"
         const val FILES_ROUTE = "/files"
         const val FILES_PATH = "/api$FILES_ROUTE"
+
+        // Лимиты запросов на пользователя
+        const val GENERAL_LIMIT = 300 // в минуту: поиск и списки писем делают много запросов
+        const val LOGIN_LIMIT = 10 // попыток входа в почту за окно
+        const val TEST_LIMIT = 10 // тестовых сообщений за окно
+        const val LOGIN_WINDOW_SECONDS = 10 * 60L
+        val LOGIN_PASSWORD_PATH = Regex("^/api/accounts/\\d+/password$")
+        val TEST_PATH = Regex("^/api/accounts/\\d+/test$")
+
         // Сколько последних писем видно в приложении на бесплатном тарифе
         const val FREE_BROWSE_LIMIT = 20
     }

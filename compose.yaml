@@ -22,8 +22,11 @@ services:
       dockerfile: Dockerfile.web
     container_name: mail-to-telegram-web
     restart: unless-stopped
-    env_file:
-      - .env
+    # Caddy получает только адреса сайта, а не весь .env: токен бота и ключ шифрования
+    # остаются только в контейнере бота
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is not set in .env}
+      OLD_DOMAIN: ${OLD_DOMAIN:-localhost}
     ports:
       - "80:80"
       - "443:443"
