@@ -57,6 +57,8 @@ data class MailMessageView(
     val attachments: List<String>,
     val seen: Boolean,
     val starred: Boolean = false,
+    // Очищенный HTML письма для просмотра с оформлением (null - только текст)
+    val html: String? = null,
 )
 
 /** Нужной папки в ящике нет (например, сервис не отмечает папку "Отправленные"). */

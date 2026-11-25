@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { t } from './i18n'
-import { showBackButton } from './telegram'
+import { absoluteServerUrl } from './api'
+import { MailHtml } from './MailHtml'
+import { downloadFile, openLink, showBackButton } from './telegram'
+import { Icon } from './ui'
 
 type Folder = 'inbox' | 'sent';
 type Sort = 'new' | 'old' | 'sender';
@@ -42,6 +45,23 @@ interface MailMessage {
   attachments: string[];
   seen: boolean;
   starred?: boolean;
+  // Очищенный HTML письма (вид с оформлением)
+  html?: string | null;
+}
+
+// Вложение, готовое к скачиванию: ссылка живет 15 минут
+interface MailFile {
+  index: number;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export type Request = (
@@ -404,13 +424,20 @@ interface MessageProps {
   onBack: () => void;
   // Письмо прочитано или снова непрочитано, звездочка поставлена или снята
   onChanged: (patch: Partial<MailItem>) => void;
+  // Ящик-пересылка: входа в почту нет, «прочитано» недоступно
+  forward?: boolean;
 }
 
-export function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onChanged }: MessageProps) {
+export function MessageView({ accountId, folder, uid, uidValidity, request, onBack, onChanged, forward = false }: MessageProps) {
   const [message, setMessage] = useState<MailMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Вид письма: с оформлением (если есть HTML) или простым текстом
+  const [plain, setPlain] = useState(false);
+  // Вложения со ссылками: загружаются при первом скачивании (бот достает их из почты)
+  const [files, setFiles] = useState<MailFile[] | null>(null);
+  const [fileBusy, setFileBusy] = useState<number | null>(null);
 
   const base = `/accounts/${accountId}/messages/${uid}`;
   const params = `folder=${folder}&v=${uidValidity}`;
@@ -464,6 +491,64 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
     }
   };
 
+  // Ссылки на вложения: каждый раз свежие, старые живут 15 минут
+  const loadFiles = async (): Promise<MailFile[] | null> => {
+    try {
+      const response = await request(`${base}/files?v=${uidValidity}`, 'GET', undefined, MAIL_TIMEOUT_MS);
+      if (!response.ok) {
+        setStatus(await readError(response, t.filesFailed));
+        return null;
+      }
+      const result: { items: MailFile[]; skipped: string[] } = await response.json();
+      setFiles(result.items);
+      if (result.skipped.length > 0) setStatus(t.filesSkipped(result.skipped.join(', ')));
+      return result.items;
+    } catch {
+      setStatus(t.mailServerTimeout);
+      return null;
+    }
+  };
+
+  // Номер в списке имен и номер у сервера расходятся, если бот пропустил большое вложение: ищем по имени
+  const withFile = async (index: number, name: string, action: (file: MailFile) => Promise<void>) => {
+    setFileBusy(index);
+    setStatus(null);
+    try {
+      const list = await loadFiles();
+      const file = list?.find((item) => item.name === name) ?? list?.find((item) => item.index === index);
+      if (file) await action(file);
+      else if (list) setStatus(t.filesFailed);
+    } finally {
+      setFileBusy(null);
+    }
+  };
+
+  const download = (index: number, name: string) => withFile(index, name, async (file) => {
+    const url = absoluteServerUrl(file.url);
+    // Новые Telegram - штатное окно сохранения; старые - браузер скачает по ссылке
+    if (!downloadFile(url, file.name)) openLink(url);
+  });
+
+  const share = (index: number, name: string) => withFile(index, name, async (file) => {
+    const navigatorShare = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
+    try {
+      const response = await fetch(absoluteServerUrl(file.url));
+      if (!response.ok) throw new Error(String(response.status));
+      const blob = await response.blob();
+      const shared = new File([blob], file.name, { type: file.type || blob.type });
+      if (typeof navigator.share === 'function' && navigatorShare.canShare?.({ files: [shared] })) {
+        await navigator.share({ files: [shared], title: file.name });
+        return;
+      }
+    } catch (failure) {
+      // Пользователь закрыл окно «Поделиться» - это не ошибка
+      if (failure instanceof DOMException && failure.name === 'AbortError') return;
+    }
+    // Нет системного «Поделиться»: файл придет в чат, оттуда его можно переслать
+    await sendAttachments();
+    setStatus(t.shareFallback);
+  });
+
   const sendAttachments = async () => {
     setBusy(true);
     try {
@@ -500,7 +585,41 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
             <dt>{t.metaDate}</dt><dd>{formatFullDate(message.date)}</dd>
           </dl>
 
-          {message.attachments.length > 0 && (
+          {message.attachments.length > 0 && folder === 'inbox' && (
+            <ul className="message-files">
+              {message.attachments.map((name, index) => (
+                <li key={`${index}-${name}`} className="message-file">
+                  <span className="message-file-name">
+                    📎 {name}
+                    {files?.find((file) => file.name === name) && (
+                      <span className="message-file-size">{formatSize(files.find((file) => file.name === name)?.size ?? 0)}</span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    disabled={fileBusy !== null}
+                    aria-label={t.download}
+                    title={t.download}
+                    onClick={() => download(index, name)}
+                  >
+                    {fileBusy === index ? '…' : <Icon name="download" size={20} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    disabled={fileBusy !== null}
+                    aria-label={t.share}
+                    title={t.share}
+                    onClick={() => share(index, name)}
+                  >
+                    <Icon name="share" size={20} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {message.attachments.length > 0 && folder !== 'inbox' && (
             <ul className="message-attachments">
               {message.attachments.map((name, index) => (
                 <li key={`${index}-${name}`}>📎 {name}</li>
@@ -509,7 +628,7 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
           )}
 
           <div className="message-actions">
-            {folder === 'inbox' && (
+            {folder === 'inbox' && !forward && (
               <button type="button" className="secondary" disabled={busy} onClick={() => markRead(!message.seen)}>
                 {message.seen ? t.markUnread : t.markRead}
               </button>
@@ -522,7 +641,15 @@ export function MessageView({ accountId, folder, uid, uidValidity, request, onBa
           </div>
           {status && <p className="field-hint">{status}</p>}
 
-          <div className="message-body">{message.body ?? t.noText}</div>
+          {message.html && (
+            <div className="segmented message-view-mode" role="tablist">
+              <button type="button" role="tab" aria-selected={!plain} onClick={() => setPlain(false)}>{t.viewDesigned}</button>
+              <button type="button" role="tab" aria-selected={plain} onClick={() => setPlain(true)}>{t.viewPlain}</button>
+            </div>
+          )}
+          {message.html && !plain
+            ? <MailHtml html={message.html} />
+            : <div className="message-body">{message.body ?? t.noText}</div>}
         </article>
       )}
     </div>

@@ -119,3 +119,33 @@ export function openLink(link: string): void {
   }
   window.open(link, '_blank', 'noopener');
 }
+
+/**
+ * Скачать файл штатным окном Telegram (Bot API 8.0+). false - клиент не умеет,
+ * нужен запасной путь.
+ */
+export function downloadFile(url: string, fileName: string): boolean {
+  const app = WebApp as unknown as {
+    downloadFile?: (params: { url: string; file_name: string }, callback?: (accepted: boolean) => void) => void;
+    isVersionAtLeast?: (version: string) => boolean;
+  };
+  if (!telegramScriptLoaded || typeof app.downloadFile !== 'function') return false;
+  if (typeof app.isVersionAtLeast === 'function' && !app.isVersionAtLeast('8.0')) return false;
+  try {
+    app.downloadFile.call(WebApp, { url, file_name: fileName });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Параметр запуска: из ссылки t.me/бот?startapp=... или из кнопки бота (?open=...). */
+export function launchParam(): string | null {
+  const fromLink = (WebApp as unknown as { initDataUnsafe?: { start_param?: string } }).initDataUnsafe?.start_param;
+  if (fromLink) return fromLink;
+  try {
+    return new URLSearchParams(window.location.search).get('open');
+  } catch {
+    return null;
+  }
+}

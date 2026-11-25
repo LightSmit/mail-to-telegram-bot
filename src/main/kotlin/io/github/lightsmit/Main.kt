@@ -8,6 +8,7 @@ import io.github.lightsmit.billing.ReferralService
 import io.github.lightsmit.billing.SubscriptionNotice
 import io.github.lightsmit.billing.SubscriptionService
 import io.github.lightsmit.config.Environment
+import io.github.lightsmit.config.MailAccountKeys
 import io.github.lightsmit.i18n.Lang
 import io.github.lightsmit.i18n.botCommands
 import io.github.lightsmit.mail.ImapIdleWatcher
@@ -320,6 +321,8 @@ fun main() = runBlocking {
         plan = subscriptionService::plan,
         isOverLimit = mailboxQuota::isOverLimit,
         onGroupMigrated = { oldChatId, newChatId -> groupLinkService.onMigrated(oldChatId, newChatId) },
+        miniAppUrl = miniAppUrl,
+        botUsername = botUsername,
     )
 
     // Режим «Пересылка без пароля»: включен, только если заданы домен и секрет для Cloudflare Worker
@@ -463,6 +466,8 @@ fun main() = runBlocking {
                 }
             },
             starred = starredRepository,
+            loadForwarded = { account, uid -> inboundRepository.find(MailAccountKeys.accountKey(account), uid) },
+            loadEmail = { account, uidValidity, uid -> contentLoader.get(account, uidValidity, uid) },
         ),
     )
     apiServer.start()

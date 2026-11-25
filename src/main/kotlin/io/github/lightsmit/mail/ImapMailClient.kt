@@ -508,25 +508,38 @@ class ImapMailClient(
             val message = uidFolder.getMessageByUID(uid)
                 ?: return@withFolder null
 
-            val content = EmailContentExtractor.extract(
-                part = message,
-                tempDirectory = attachmentTempDirectory,
-                maxAttachmentSizeBytes = maxAttachmentSizeBytes,
-                includeAttachments = false,
-            )
-
-            MailMessageView(
-                uid = uid,
-                from = formatSender(message),
-                to = formatRecipients(message, Message.RecipientType.TO),
-                cc = formatRecipients(message, Message.RecipientType.CC),
-                subject = formatSubject(message),
-                date = (message.receivedDate ?: message.sentDate)?.toInstant(),
-                body = content.body?.take(MAX_VIEW_BODY_CHARS),
-                attachments = EmailContentExtractor.attachmentNames(message),
-                seen = runCatching { message.isSet(Flags.Flag.SEEN) }.getOrDefault(true),
-            )
+            messageView(message, uid, seen = runCatching { message.isSet(Flags.Flag.SEEN) }.getOrDefault(true))
         }
+    }
+
+    /** Письмо ящика-пересылки (из базы) для просмотра в приложении. */
+    fun readRaw(raw: ByteArray, uid: Long): MailMessageView {
+        val message = jakarta.mail.internet.MimeMessage(
+            jakarta.mail.Session.getInstance(java.util.Properties()),
+            java.io.ByteArrayInputStream(raw),
+        )
+        return messageView(message, uid, seen = true)
+    }
+
+    private fun messageView(message: Message, uid: Long, seen: Boolean): MailMessageView {
+        val content = EmailContentExtractor.extract(
+            part = message,
+            tempDirectory = attachmentTempDirectory,
+            maxAttachmentSizeBytes = maxAttachmentSizeBytes,
+            includeAttachments = false,
+        )
+        return MailMessageView(
+            uid = uid,
+            from = formatSender(message),
+            to = formatRecipients(message, Message.RecipientType.TO),
+            cc = formatRecipients(message, Message.RecipientType.CC),
+            subject = formatSubject(message),
+            date = (message.receivedDate ?: message.sentDate)?.toInstant(),
+            body = content.body?.take(MAX_VIEW_BODY_CHARS),
+            attachments = EmailContentExtractor.attachmentNames(message),
+            seen = seen,
+            html = EmailHtml.view(message),
+        )
     }
 
     private fun listItem(message: Message, uid: Long): MailListItem {

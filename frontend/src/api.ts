@@ -10,6 +10,16 @@ const API_URL = import.meta.env.VITE_API_URL ?? '/api';
 
 export type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
+/** Полный адрес пути сервера («/api/files/...»): его открывает сам Telegram при скачивании. */
+export function absoluteServerUrl(path: string): string {
+  try {
+    const origin = /^https?:/i.test(API_URL) ? new URL(API_URL).origin : window.location.origin;
+    return new URL(path, origin).toString();
+  } catch {
+    return path;
+  }
+}
+
 export type Request = (path: string, method?: Method, body?: unknown, timeoutMs?: number) => Promise<Response>;
 
 /** Запрос к API бота с данными входа Telegram и таймаутом. */

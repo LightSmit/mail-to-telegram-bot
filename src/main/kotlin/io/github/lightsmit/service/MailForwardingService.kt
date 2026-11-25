@@ -65,6 +65,10 @@ class MailForwardingService(
     private val onGroupMigrated: suspend (oldChatId: Long, newChatId: Long) -> Unit = { _, _ -> },
     // Ящик сверх лимита тарифа: письма из него не присылаются
     private val isOverLimit: suspend (MailAccountConfig) -> Boolean = { false },
+    // Кнопка «Открыть»: письмо целиком в приложении (null - без кнопки)
+    private val miniAppUrl: String? = null,
+    // Имя бота: в группах приложение открывается ссылкой t.me/бот?startapp=...
+    private val botUsername: suspend () -> String? = { null },
     private val clock: () -> Instant = Instant::now,
 ) : AutoCloseable {
 
@@ -174,6 +178,8 @@ class MailForwardingService(
             ),
             chatId = chatId,
             account = account,
+            uidValidity = item.uidValidity,
+            uid = item.uid,
         )
         // Тихий ящик - всегда без звука; shouldSendSilently вызываем всегда: он запоминает время карточки
         val silent = shouldSendSilently(account.ownerChatId) || currentFilters(account).silent
@@ -222,16 +228,38 @@ class MailForwardingService(
     }
 
     // В группе нет кнопки "Ответить": ответ пишется в личном чате с ботом
-    private fun forChat(
+    private suspend fun forChat(
         buttons: List<TelegramInlineButton>,
         chatId: Long,
         account: MailAccountConfig,
+        uidValidity: Long,
+        uid: Long,
     ): List<TelegramInlineButton> {
-        if (chatId == account.ownerChatId) return buttons
-        return buttons.filterNot { button ->
+        val open = openButton(account, uidValidity, uid, chatId)
+        if (chatId == account.ownerChatId) return listOfNotNull(open) + buttons
+        return listOfNotNull(open) + buttons.filterNot { button ->
             button.callbackData?.let(MailViewCallbackCodec::decode)?.action == MailViewAction.REPLY
         }
     }
+
+    /**
+     * «Открыть»: письмо целиком в приложении. В личном чате - кнопка Mini App,
+     * в группе такие кнопки запрещены: там ссылка t.me/бот?startapp=... (нужно основное
+     * мини-приложение бота в BotFather). Параметр: m<ящик>_<uidValidity>_<uid>.
+     */
+    private suspend fun openButton(account: MailAccountConfig, uidValidity: Long, uid: Long, chatId: Long): TelegramInlineButton? {
+        val base = miniAppUrl?.trimEnd('/') ?: return null
+        val param = "m${account.id}_${uidValidity}_$uid"
+        val text = texts(account).buttonOpen
+        if (chatId > 0) return TelegramInlineButton(text = text, webAppUrl = "$base/?open=$param")
+        val username = cachedBotUsername
+            ?: runCatching { botUsername() }.getOrNull()?.also { name -> cachedBotUsername = name }
+            ?: return null
+        return TelegramInlineButton(text = text, url = "https://t.me/$username?startapp=$param")
+    }
+
+    @Volatile
+    private var cachedBotUsername: String? = null
 
     // Без звука: в тихие часы, а в режиме сводки - все карточки пачки, кроме первой
     private suspend fun shouldSendSilently(ownerChatId: Long): Boolean {
@@ -309,6 +337,8 @@ class MailForwardingService(
                         ),
                         chatId = chatId,
                         account = account,
+                        uidValidity = item.uidValidity,
+                        uid = item.uid,
                     ),
                 )
             } catch (exception: TelegramApiException) {
@@ -450,6 +480,8 @@ class MailForwardingService(
             ),
             chatId = chatId,
             account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
         )
 
         val accountKey = buildAccountKey(account)
@@ -548,6 +580,8 @@ class MailForwardingService(
             ),
             chatId = chatId,
             account = account,
+            uidValidity = expectedUidValidity,
+            uid = uid,
         )
 
         val emailKey = interactiveEmailKey(

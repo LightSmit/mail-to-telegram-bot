@@ -435,14 +435,65 @@ const UNITS: { id: 'd' | 'm' | 'y'; label: string }[] = [
 
 type Confirm = 'revoke' | 'refund' | 'delete' | null;
 
+/** Выбор срока: готовые варианты или свой (число дней, месяцев или лет). */
+function useTerm(onChange?: () => void) {
+  const [term, setTerm] = useState('1m');
+  const [amount, setAmount] = useState('45');
+  const [unit, setUnit] = useState<'d' | 'm' | 'y'>('d');
+
+  const amountNumber = Number.parseInt(amount, 10);
+  const valid = term !== 'custom' || (Number.isFinite(amountNumber) && amountNumber > 0 && amountNumber <= 999);
+  const spec = term === 'custom' ? `${amountNumber}${unit}` : term;
+  const unitWords = unit === 'd'
+    ? plural(amountNumber, 'день', 'дня', 'дней')
+    : unit === 'm' ? plural(amountNumber, 'месяц', 'месяца', 'месяцев') : plural(amountNumber, 'год', 'года', 'лет');
+  const words = term === 'custom'
+    ? `на ${valid ? amountNumber : '…'} ${unitWords}`
+    : TERMS.find((item) => item.id === term)?.words ?? '';
+
+  const change = (update: () => void) => {
+    update();
+    onChange?.();
+  };
+
+  const picker = (
+    <>
+      <div className="chips">
+        {TERMS.map((item) => (
+          <Chip key={item.id} selected={term === item.id} onClick={() => change(() => setTerm(item.id))}>{item.label}</Chip>
+        ))}
+      </div>
+      {term === 'custom' && (
+        <div className="admin-custom">
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={999}
+            className="admin-amount"
+            value={amount}
+            onChange={(event) => change(() => setAmount(event.target.value))}
+            aria-label="Срок"
+          />
+          <div className="chips">
+            {UNITS.map((item) => (
+              <Chip key={item.id} selected={unit === item.id} onClick={() => change(() => setUnit(item.id))}>{item.label}</Chip>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  return { spec, words, valid, picker };
+}
+
 /** Карточка пользователя: подписка, ящики, путь по воронке и действия. */
 export function AdminUserScreen({ userId, notify, onBack }: { userId: number; notify: Notify; onBack: () => void }) {
   const [card, setCard] = useState<UserCard | null>(null);
   const [missing, setMissing] = useState(false);
   const [plan, setPlan] = useState<'PRO' | 'BUSINESS'>('PRO');
-  const [term, setTerm] = useState('1m');
-  const [amount, setAmount] = useState('45');
-  const [unit, setUnit] = useState<'d' | 'm' | 'y'>('d');
+  const grantTerm = useTerm();
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>(null);
 
@@ -480,13 +531,6 @@ export function AdminUserScreen({ userId, notify, onBack }: { userId: number; no
     );
   }
 
-  const amountNumber = Number.parseInt(amount, 10);
-  const customValid = Number.isFinite(amountNumber) && amountNumber > 0 && amountNumber <= 999;
-  const termSpec = term === 'custom' ? `${amountNumber}${unit}` : term;
-  const unitWords = unit === 'd'
-    ? plural(amountNumber, 'день', 'дня', 'дней')
-    : unit === 'm' ? plural(amountNumber, 'месяц', 'месяца', 'месяцев') : plural(amountNumber, 'год', 'года', 'лет');
-  const termWords = term === 'custom' ? `на ${customValid ? amountNumber : '…'} ${unitWords}` : TERMS.find((item) => item.id === term)?.words;
   const paidActive = card.plan !== 'FREE' && !card.admin && card.source !== 'TRIAL';
 
   const subscriptionText = card.admin
@@ -556,37 +600,14 @@ export function AdminUserScreen({ userId, notify, onBack }: { userId: number; no
                 <Chip key={value} selected={plan === value} onClick={() => setPlan(value)}>{PLAN_NAMES[value]}</Chip>
               ))}
             </div>
-            <div className="chips">
-              {TERMS.map((item) => (
-                <Chip key={item.id} selected={term === item.id} onClick={() => setTerm(item.id)}>{item.label}</Chip>
-              ))}
-            </div>
-            {term === 'custom' && (
-              <div className="admin-custom">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={999}
-                  className="admin-amount"
-                  value={amount}
-                  onChange={(event) => setAmount(event.target.value)}
-                  aria-label="Срок"
-                />
-                <div className="chips">
-                  {UNITS.map((item) => (
-                    <Chip key={item.id} selected={unit === item.id} onClick={() => setUnit(item.id)}>{item.label}</Chip>
-                  ))}
-                </div>
-              </div>
-            )}
+            {grantTerm.picker}
             <button
               type="button"
               className="primary big"
-              disabled={busy || (term === 'custom' && !customValid)}
-              onClick={() => act(`/users/${card.id}/grant`, 'POST', { plan, term: termSpec })}
+              disabled={busy || !grantTerm.valid}
+              onClick={() => act(`/users/${card.id}/grant`, 'POST', { plan, term: grantTerm.spec })}
             >
-              Выдать {PLAN_NAMES[plan]} {termWords}
+              Выдать {PLAN_NAMES[plan]} {grantTerm.words}
             </button>
           </div>
         </Group>
@@ -870,13 +891,12 @@ const OFFER_NAMES: Record<string, string> = {
   BUSINESS_YEAR: 'Business, год',
 };
 
-const INVITE_TERMS = TERMS.filter((item) => item.id !== 'custom');
-
 function AdminMoney({ notify, onOpenUser }: { notify: Notify; onOpenUser: (id: number) => void }) {
   const [data, setData] = useState<MoneyData | null>(null);
   const [plan, setPlan] = useState<'PRO' | 'BUSINESS'>('PRO');
-  const [term, setTerm] = useState('1m');
   const [link, setLink] = useState<string | null>(null);
+  // Сменили срок - старая ссылка уже не про него
+  const inviteTerm = useTerm(() => setLink(null));
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -885,7 +905,7 @@ function AdminMoney({ notify, onOpenUser }: { notify: Notify; onOpenUser: (id: n
 
   const createInvite = async () => {
     setBusy(true);
-    const result = await load<{ message: string; link?: string | null }>('/invite', notify, 'POST', { plan, term });
+    const result = await load<{ message: string; link?: string | null }>('/invite', notify, 'POST', { plan, term: inviteTerm.spec });
     setBusy(false);
     if (!result) return;
     if (result.link) {
@@ -923,18 +943,14 @@ function AdminMoney({ notify, onOpenUser }: { notify: Notify; onOpenUser: (id: n
               <Chip key={value} selected={plan === value} onClick={() => { setPlan(value); setLink(null); }}>{PLAN_NAMES[value]}</Chip>
             ))}
           </div>
-          <div className="chips">
-            {INVITE_TERMS.map((item) => (
-              <Chip key={item.id} selected={term === item.id} onClick={() => { setTerm(item.id); setLink(null); }}>{item.label}</Chip>
-            ))}
-          </div>
+          {inviteTerm.picker}
           {link ? (
             <button type="button" className="tinted big admin-link" onClick={copy}>
               <Icon name="copy" size={18} /> <span className="admin-link-text">{link}</span>
             </button>
           ) : (
-            <button type="button" className="primary big" disabled={busy} onClick={createInvite}>
-              Создать ссылку: {PLAN_NAMES[plan]} {INVITE_TERMS.find((item) => item.id === term)?.words}
+            <button type="button" className="primary big" disabled={busy || !inviteTerm.valid} onClick={createInvite}>
+              Создать ссылку: {PLAN_NAMES[plan]} {inviteTerm.words}
             </button>
           )}
         </div>

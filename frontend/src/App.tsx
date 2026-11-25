@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
-import { initData, showBackButton } from './telegram'
+import { initData, launchParam, showBackButton } from './telegram'
 import { lang, rememberLang, t, type Lang } from './i18n'
 import { LOGIN_TIMEOUT_MS, describeError, errorText, request, sleep } from './api'
 import { withDefaults, type MailFilters } from './FiltersPanel'
 import type { NotificationSettings } from './NotificationsSection'
-import { MailboxView } from './MailboxView'
+import { MailboxView, MessageView } from './MailboxView'
 import { hasPro, type PlanInfo } from './PlanSection'
 import type { ReferralInfo } from './ReferralSection'
 import { Sky, loadSkyEnabled, saveSkyEnabled } from './Sky'
@@ -37,7 +37,8 @@ type Route =
   | { name: 'mail'; id: number; q?: string }
   | { name: 'search' }
   | { name: 'adminUser'; id: number }
-  | { name: 'adminBroadcast' };
+  | { name: 'adminBroadcast' }
+  | { name: 'message'; accountId: number; v: number; uid: number };
 
 // Пока приложение открыто, статусы ящиков обновляются сами
 const REFRESH_INTERVAL_MS = 15000;
@@ -59,7 +60,11 @@ function App() {
     initData ? null : { kind: 'error', text: t.openFromTelegram },
   );
   const [tab, setTab] = useState<Tab>('home');
-  const [stack, setStack] = useState<Route[]>([]);
+  // Открыли из кнопки «Открыть» под письмом: сразу показываем это письмо
+  const [stack, setStack] = useState<Route[]>(() => {
+    const match = /^m(\d+)_(\d+)_(\d+)$/.exec(launchParam() ?? '');
+    return match ? [{ name: 'message', accountId: Number(match[1]), v: Number(match[2]), uid: Number(match[3]) }] : [];
+  });
   const [busy, setBusy] = useState(false);
   const [sky, setSky] = useState(loadSkyEnabled);
   // Админ-панель: раздел и фильтр людей сохраняются при переходах
@@ -336,6 +341,21 @@ function App() {
         return <AdminUserScreen key={route.id} userId={route.id} notify={notify} onBack={pop} />;
       case 'adminBroadcast':
         return <AdminBroadcastScreen notify={notify} onBack={pop} />;
+      case 'message':
+        return (
+          <div className="screen">
+            <MessageView
+              accountId={route.accountId}
+              folder="inbox"
+              uid={route.uid}
+              uidValidity={route.v}
+              request={request}
+              forward={accounts.some((account) => account.id === route.accountId && Boolean(account.forwardAddress))}
+              onBack={pop}
+              onChanged={() => undefined}
+            />
+          </div>
+        );
       case 'search':
         return (
           <SearchScreen

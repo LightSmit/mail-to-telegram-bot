@@ -169,7 +169,7 @@ export function Notice({ kind, text, onClose }: { kind: 'info' | 'ok' | 'error';
 export type IconName =
   | 'mail' | 'star' | 'settings' | 'shield' | 'chevron-left' | 'chevron-right' | 'plus' | 'close' | 'copy'
   | 'pause' | 'list' | 'filter' | 'group' | 'lock' | 'send' | 'check' | 'key' | 'sparkle' | 'globe' | 'trash' | 'external'
-  | 'bell' | 'pulse' | 'search';
+  | 'bell' | 'pulse' | 'search' | 'download' | 'share';
 
 const PATHS: Record<IconName, ReactNode> = {
   'mail': <><rect x="3" y="5" width="18" height="14" rx="3" /><path d="M4 7l8 6 8-6" /></>,
@@ -196,6 +196,8 @@ const PATHS: Record<IconName, ReactNode> = {
   'bell': <><path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15L6 16z" /><path d="M10 20.5a2 2 0 004 0" /></>,
   'pulse': <path d="M3 12h4l2.5-6 5 12L17 12h4" />,
   'search': <><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></>,
+  'download': <path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" />,
+  'share': <path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M6 12v7a1 1 0 001 1h10a1 1 0 001-1v-7" />,
 };
 
 export function Icon({ name, size = 20, className }: { name: IconName; size?: number; className?: string }) {

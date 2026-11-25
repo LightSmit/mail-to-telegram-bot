@@ -61,6 +61,8 @@ interface Texts {
 
     // Кнопки под письмом и ответы на нажатия
     val buttonText: String
+    // Открыть письмо целиком в приложении
+    val buttonOpen: String
     val buttonAttachments: String
     fun buttonAttachmentsCount(count: Int): String
     val buttonReply: String
@@ -246,6 +248,7 @@ object RuTexts : Texts {
     override fun problemConnect(host: String) = "Не удается подключиться к серверу $host"
 
     override val buttonText = "📄 Текст"
+    override val buttonOpen = "📱 Открыть"
     override val buttonAttachments = "📎 Вложения"
     override fun buttonAttachmentsCount(count: Int) = "📎 Вложения · $count"
     override val buttonReply = "↩️ Ответить"
@@ -458,6 +461,7 @@ object EnTexts : Texts {
     override fun problemConnect(host: String) = "Cannot connect to server $host"
 
     override val buttonText = "📄 Text"
+    override val buttonOpen = "📱 Open"
     override val buttonAttachments = "📎 Attachments"
     override fun buttonAttachmentsCount(count: Int) = "📎 Attachments · $count"
     override val buttonReply = "↩️ Reply"

@@ -1,6 +1,7 @@
 package io.github.lightsmit.service
 
 import io.github.lightsmit.config.MailAccountConfig
+import io.github.lightsmit.mail.EmailSummary
 import io.github.lightsmit.mail.ImapMailClient
 import io.github.lightsmit.mail.MailFolderNotFoundException
 import io.github.lightsmit.mail.MailFolderRole
@@ -36,6 +37,10 @@ class MailBrowserService(
     private val sendAttachmentsToChat: suspend (MailAccountConfig, Long, Long) -> Unit,
     // Звездочки писем (null - отметки не хранятся)
     private val starred: StarredRepository? = null,
+    // Письмо ящика-пересылки целиком (MIME) из базы
+    private val loadForwarded: suspend (MailAccountConfig, Long) -> ByteArray? = { _, _ -> null },
+    // Письмо с вложениями во временных файлах (тот же кэш, что у кнопок бота)
+    private val loadEmail: suspend (MailAccountConfig, Long, Long) -> EmailSummary? = { _, _, _ -> null },
 ) {
 
     private val logger = LoggerFactory.getLogger(MailBrowserService::class.java)
@@ -78,8 +83,14 @@ class MailBrowserService(
         role: MailFolderRole,
         uidValidity: Long,
         uid: Long,
-    ): BrowseResult<MailMessageView> = withAccount(ownerId, accountId) { account ->
-        val message = imapClient.readMessage(account, role, uidValidity, uid) ?: return@withAccount null
+    ): BrowseResult<MailMessageView> = withAccount(ownerId, accountId, allowForward = true) { account ->
+        val message = if (account.isForward) {
+            if (role != MailFolderRole.INBOX) return@withAccount null
+            val raw = loadForwarded(account, uid) ?: return@withAccount null
+            imapClient.readRaw(raw, uid)
+        } else {
+            imapClient.readMessage(account, role, uidValidity, uid) ?: return@withAccount null
+        }
         val marked = starred?.uids(accountId, folderKey(role), uidValidity)?.contains(uid) == true
         message.copy(starred = marked)
     }
@@ -99,6 +110,10 @@ class MailBrowserService(
     }
 
     private fun folderKey(role: MailFolderRole) = role.name.lowercase()
+
+    /** Вложения входящего письма во временных файлах: для скачивания из приложения. */
+    suspend fun files(ownerId: Long, accountId: Long, uidValidity: Long, uid: Long): BrowseResult<EmailSummary> =
+        withAccount(ownerId, accountId, allowForward = true) { account -> loadEmail(account, uidValidity, uid) }
 
     suspend fun sendAttachments(ownerId: Long, accountId: Long, uidValidity: Long, uid: Long): BrowseResult<Unit> =
         withAccount(ownerId, accountId, allowForward = true) { account ->

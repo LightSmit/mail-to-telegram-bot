@@ -2032,3 +2032,89 @@ button.tile:active {
 .admin-textarea:focus {
   outline: 2px solid color-mix(in srgb, var(--link) 50%, transparent);
 }
+
+/* Вложения письма: скачать и поделиться */
+.message-files {
+  list-style: none;
+  padding: 0;
+  border-radius: var(--radius);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.message-file {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 48px;
+  padding: 4px 6px 4px 14px;
+}
+
+.message-file + .message-file {
+  border-top: 1px solid var(--separator);
+}
+
+.message-file-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.message-file-size {
+  margin-left: 8px;
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.icon-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--link);
+  cursor: pointer;
+}
+
+.icon-button:active:not(:disabled) {
+  background: var(--tint);
+}
+
+.icon-button:disabled {
+  opacity: 0.5;
+}
+
+/* Письмо с оформлением: белый лист, как в почте */
+.message-view-mode {
+  align-self: flex-start;
+}
+
+.message-view-mode button {
+  white-space: nowrap;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+.mail-html {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mail-html-images {
+  align-self: flex-start;
+}
+
+.mail-html-frame {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  border: 0;
+  border-radius: var(--radius);
+  background: #fff;
+}

@@ -168,6 +168,24 @@ data class MailMessageDto(
     val attachments: List<String>,
     val seen: Boolean,
     val starred: Boolean = false,
+    val html: String? = null,
+)
+
+@Serializable
+data class MailFileDto(
+    val index: Int,
+    val name: String,
+    val type: String,
+    val size: Long,
+    // Ссылка на скачивание без авторизации, живет 15 минут
+    val url: String,
+)
+
+@Serializable
+data class MailFilesDto(
+    val items: List<MailFileDto>,
+    // Вложения, которые бот не скачал (слишком большие и т.п.)
+    val skipped: List<String> = emptyList(),
 )
 
 private fun MailListPage.toDto() = MailListPageDto(
@@ -204,6 +222,7 @@ private fun MailMessageView.toDto() = MailMessageDto(
     attachments = attachments,
     seen = seen,
     starred = starred,
+    html = html,
 )
 
 @Serializable
@@ -344,6 +363,16 @@ class ApiServer(
     // Админ-панель в приложении (только для админов из .env)
     private val adminPanel: AdminPanelService? = null,
 ) {
+    // Подписанные ссылки на вложения писем
+    private val fileTokens = FileTokens()
+
+    // Имя файла в заголовке: ASCII-замена и точное имя в UTF-8 (RFC 6266)
+    private fun contentDisposition(name: String): String {
+        val ascii = name.map { char -> if (char.code in 32..126 && char != '"' && char != '\\') char else '_' }.joinToString("")
+        val encoded = java.net.URLEncoder.encode(name, Charsets.UTF_8).replace("+", "%20")
+        return "attachment; filename=\"$ascii\"; filename*=UTF-8''$encoded"
+    }
+
     // Ключ для проброса Telegram User ID между перехватчиком и роутом
     private val UserIdKey = AttributeKey<Long>("UserId")
     // Язык интерфейса пользователя (из Telegram): на нем отвечаем ошибками
@@ -441,6 +470,8 @@ class ApiServer(
                     intercept(ApplicationCallPipeline.Call) {
                         // Письма из Cloudflare: своя проверка по секрету, без данных Telegram
                         if (call.request.path() == INBOUND_PATH) return@intercept
+                        // Скачивание вложения: право на файл - в подписанной ссылке (ее открывает сам Telegram)
+                        if (call.request.path().startsWith(FILES_PATH)) return@intercept
 
                         val initData = call.request.headers["X-Telegram-Init-Data"].orEmpty()
                         val auth = TelegramAuthValidator.inspect(initData, botToken)
@@ -917,6 +948,63 @@ class ApiServer(
                         if (result is BrowseResult.Ok) call.respond(mapOf("status" to "sending")) else respondBrowseError(call, result)
                     }
 
+                    // Вложения входящего письма для скачивания: список со ссылками на 15 минут
+                    get("/accounts/{id}/messages/{uid}/files") {
+                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to call.texts.unavailable))
+                        val accountId = call.parameters["id"]?.toLongOrNull()
+                        val uid = call.parameters["uid"]?.toLongOrNull()
+                        val uidValidity = call.request.queryParameters["v"]?.toLongOrNull()
+                        if (accountId == null || uid == null || uidValidity == null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to call.texts.badRequest))
+                            return@get
+                        }
+
+                        val ownerId = call.attributes[UserIdKey]
+                        when (val result = browser.files(ownerId, accountId, uidValidity, uid)) {
+                            is BrowseResult.Ok -> call.respond(
+                                MailFilesDto(
+                                    items = result.value.attachments.mapIndexed { index, file ->
+                                        MailFileDto(
+                                            index = index,
+                                            name = file.fileName,
+                                            type = file.contentType,
+                                            size = file.sizeBytes,
+                                            url = "$FILES_PATH/" + fileTokens.issue(ownerId, accountId, uidValidity, uid, index),
+                                        )
+                                    },
+                                    skipped = result.value.skippedAttachments.map { file -> file.fileName },
+                                ),
+                            )
+                            else -> respondBrowseError(call, result)
+                        }
+                    }
+
+                    // Сам файл вложения по подписанной ссылке (без данных Telegram: ее открывает Telegram)
+                    get("$FILES_ROUTE/{token}") {
+                        val browser = mailBrowser ?: return@get call.respond(HttpStatusCode.NotFound)
+                        val ticket = call.parameters["token"]?.let(fileTokens::verify)
+                            ?: return@get call.respond(HttpStatusCode.Forbidden, "Link expired")
+                        val result = browser.files(ticket.ownerId, ticket.accountId, ticket.uidValidity, ticket.uid)
+                        val file = (result as? BrowseResult.Ok)?.value?.attachments?.getOrNull(ticket.index)
+                        if (file == null || !java.nio.file.Files.isRegularFile(file.tempFile)) {
+                            call.respond(HttpStatusCode.NotFound, "File not found")
+                            return@get
+                        }
+                        // Активное содержимое (HTML, SVG, скрипты) с нашего домена не открываем: только как файл
+                        val declared = file.contentType.substringBefore(';').trim().lowercase()
+                        val active = listOf("html", "xml", "svg", "javascript", "ecmascript").any(declared::contains)
+                        val type = if (active) {
+                            ContentType.Application.OctetStream
+                        } else {
+                            runCatching { ContentType.parse(declared) }.getOrDefault(ContentType.Application.OctetStream)
+                        }
+                        call.response.header(HttpHeaders.ContentDisposition, contentDisposition(file.fileName))
+                        call.response.header(HttpHeaders.CacheControl, "private, no-store")
+                        call.response.header("X-Content-Type-Options", "nosniff")
+                        call.response.header("Content-Security-Policy", "default-src 'none'; sandbox")
+                        call.respond(io.ktor.server.http.content.LocalFileContent(file.tempFile.toFile(), type))
+                    }
+
                     // Админ-панель: только админы из .env, остальным 403
                     route("/admin") {
                         suspend fun ApplicationCall.panel(): AdminPanelService? {
@@ -1189,6 +1277,8 @@ class ApiServer(
 
     private companion object {
         const val INBOUND_PATH = "/api/inbound"
+        const val FILES_ROUTE = "/files"
+        const val FILES_PATH = "/api$FILES_ROUTE"
         // Сколько последних писем видно в приложении на бесплатном тарифе
         const val FREE_BROWSE_LIMIT = 20
     }
