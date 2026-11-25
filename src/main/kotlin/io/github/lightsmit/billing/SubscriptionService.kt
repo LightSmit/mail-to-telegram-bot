@@ -568,7 +568,8 @@ class SubscriptionService(
 
         private val NONE = Any()
         private val REMIND_BEFORE: Duration = Duration.ofDays(3)
-        private val TRIAL_REMIND_BEFORE: Duration = Duration.ofDays(1)
+        // За 2 дня до конца пробного Pro: сводка с цифрами пользователя и кнопкой оплаты
+        private val TRIAL_REMIND_BEFORE: Duration = Duration.ofDays(2)
         private val RENEWAL_WINDOW: Duration = Duration.ofDays(1)
         private const val SCHEDULE_INTERVAL_MILLIS = 30 * 60 * 1000L
         private const val INVITE_CODE_LENGTH = 12

@@ -62,7 +62,8 @@ export function statusTone(account: Account): Tone {
 /** Сколько правил фильтрации задано (для строки «Фильтры»). */
 export function rulesCount(filters?: MailFilters): number {
   if (!filters) return 0;
-  return filters.allowedSenders.length + filters.blockedSenders.length + filters.blockedSubjectWords.length;
+  return filters.allowedSenders.length + filters.blockedSenders.length + filters.blockedSubjectWords.length +
+    (filters.vipSenders?.length ?? 0);
 }
 
 /** Конец паузы: сегодня - только время, иначе день, месяц и время. */

@@ -15,4 +15,6 @@ data class EmailSummary(
     val senderAddress: String? = null,
     // Массовая рассылка или автоответ: есть List-Unsubscribe/List-Id, Precedence: bulk и т.п.
     val isBulk: Boolean = false,
+    // Ссылка отписки из заголовков рассылки (только https)
+    val unsubscribe: UnsubscribeLink? = null,
 )

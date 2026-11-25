@@ -55,6 +55,7 @@ import io.github.lightsmit.storage.TelegramUpdateStateRepository
 import io.github.lightsmit.storage.UserSettingsRepository
 import io.github.lightsmit.telegram.MailViewCallbackCodec
 import io.github.lightsmit.telegram.TelegramClient
+import io.github.lightsmit.telegram.TelegramInlineButton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
@@ -589,6 +590,25 @@ fun main() = runBlocking {
             val subscriptionJob = launch {
                 subscriptionService.runSchedule { notice ->
                     val billingTexts = botUserRepository.language(notice.userId).texts.billing
+                    // Конец пробного Pro: сводка с цифрами пользователя и кнопкой оплаты в приложении
+                    if (notice is SubscriptionNotice.Expiring && notice.trial && !miniAppUrl.isNullOrBlank()) {
+                        val since = notice.expiresAt.minus(java.time.Duration.ofDays(billingConfig.trialDays.toLong()))
+                        val delivered = runCatching { mailOutboxRepository.countSentForOwner(notice.userId, since) }.getOrDefault(0)
+                        if (delivered > 0) {
+                            val mailboxes = runCatching { mailAccountRepository.findAllByOwnerId(notice.userId).size }.getOrDefault(1)
+                            telegramControlClient.sendMessageWithButtons(
+                                chatId = notice.userId,
+                                text = billingTexts.trialSummary(notice.expiresAt, delivered, mailboxes),
+                                buttons = listOf(
+                                    TelegramInlineButton(
+                                        text = billingTexts.buttonSubscribe,
+                                        webAppUrl = miniAppUrl.trimEnd('/') + "/?open=plan",
+                                    ),
+                                ),
+                            )
+                            return@runSchedule
+                        }
+                    }
                     val text = when (notice) {
                         is SubscriptionNotice.Expiring -> billingTexts.expiring(notice.plan, notice.expiresAt, notice.trial)
                         is SubscriptionNotice.Ended -> billingTexts.ended(notice.plan, notice.trial)

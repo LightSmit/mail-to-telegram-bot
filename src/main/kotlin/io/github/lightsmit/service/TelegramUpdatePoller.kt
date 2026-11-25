@@ -190,6 +190,11 @@ class TelegramUpdatePoller(
             answerSafely(update.callbackQueryId, t.replyDisabled, showAlert = true)
             return
         }
+        // Отписку от рассылок ящика делает только его владелец, не участники группы
+        if (inGroup && request.action == MailViewAction.UNSUBSCRIBE) {
+            answerSafely(update.callbackQueryId, t.unsubscribeNotAvailable, showAlert = true)
+            return
+        }
 
         if (
             request.action in setOf(
@@ -273,6 +278,28 @@ class TelegramUpdatePoller(
 
                 MailViewAction.REPLY -> {
                     startReply(update.callbackQueryId, account, request.uidValidity, request.uid, t)
+                }
+
+                MailViewAction.UNSUBSCRIBE -> {
+                    val outcome = forwardingService.unsubscribe(
+                        account = account,
+                        expectedUidValidity = request.uidValidity,
+                        uid = request.uid,
+                        chatId = chatId,
+                    )
+                    val text = when (outcome) {
+                        MailForwardingService.UnsubscribeOutcome.DONE -> t.unsubscribeDone
+                        MailForwardingService.UnsubscribeOutcome.PAGE_SENT -> null
+                        MailForwardingService.UnsubscribeOutcome.FAILED -> t.unsubscribeFailed
+                        MailForwardingService.UnsubscribeOutcome.NOT_AVAILABLE -> t.unsubscribeNotAvailable
+                        MailForwardingService.UnsubscribeOutcome.PRO_REQUIRED -> t.unsubscribePro
+                        MailForwardingService.UnsubscribeOutcome.GONE -> t.messageGone
+                    }
+                    answerSafely(
+                        callbackQueryId = update.callbackQueryId,
+                        text = text,
+                        showAlert = text != null,
+                    )
                 }
 
                 MailViewAction.BACK -> {

@@ -69,6 +69,8 @@ class MailForwardingService(
     private val miniAppUrl: String? = null,
     // Имя бота: в группах приложение открывается ссылкой t.me/бот?startapp=...
     private val botUsername: suspend () -> String? = { null },
+    // Отписка в один клик от рассылок
+    private val unsubscribeService: UnsubscribeService = UnsubscribeService(),
     private val clock: () -> Instant = Instant::now,
 ) : AutoCloseable {
 
@@ -162,11 +164,13 @@ class MailForwardingService(
         // Код из темы письма показываем сразу, не дожидаясь загрузки текста
         val code = verificationCode(account, metadata.subject, body = null)
         val chatId = cardChatId(account)
+        val vip = isVipSender(account, metadata.from)
         val text = formatPendingNotification(
             account = account,
             metadata = metadata,
             t = t,
             code = code,
+            vip = vip,
         )
         val buttons = forChat(
             pendingSummaryButtons(
@@ -181,8 +185,10 @@ class MailForwardingService(
             uidValidity = item.uidValidity,
             uid = item.uid,
         )
-        // Тихий ящик - всегда без звука; shouldSendSilently вызываем всегда: он запоминает время карточки
-        val silent = shouldSendSilently(account.ownerChatId) || currentFilters(account).silent
+        // Тихий ящик - всегда без звука; shouldSendSilently вызываем всегда: он запоминает время карточки.
+        // Важный отправитель - со звуком даже в тихие часы и в тихом ящике
+        val quiet = shouldSendSilently(account.ownerChatId)
+        val silent = !vip && (quiet || currentFilters(account).silent)
 
         return try {
             telegramControlClient.sendMessageWithButtons(chatId = chatId, text = text, buttons = buttons, silent = silent)
@@ -197,6 +203,13 @@ class MailForwardingService(
     // Фильтры из реестра: там последние настройки, сохраненные в приложении
     private fun currentFilters(account: MailAccountConfig) =
         (registry.findByKey(buildAccountKey(account)) ?: account).filters
+
+    // Важный отправитель (только на платном тарифе): «Имя <адрес>» или сам адрес
+    private suspend fun isVipSender(account: MailAccountConfig, from: String?): Boolean {
+        val address = MailFilterEngine.addressOf(from) ?: return false
+        if (!MailFilterEngine.isVip(currentFilters(account), address)) return false
+        return runCatching { plan(account.ownerChatId) }.getOrDefault(Plan.FREE).hasProFeatures
+    }
 
     /**
      * Проверка доставки из приложения: короткое сообщение туда же, куда приходят письма ящика.
@@ -237,8 +250,9 @@ class MailForwardingService(
     ): List<TelegramInlineButton> {
         val open = openButton(account, uidValidity, uid, chatId)
         if (chatId == account.ownerChatId) return listOfNotNull(open) + buttons
+        // В группе нет ответа и отписки: это действия владельца ящика
         return listOfNotNull(open) + buttons.filterNot { button ->
-            button.callbackData?.let(MailViewCallbackCodec::decode)?.action == MailViewAction.REPLY
+            button.callbackData?.let(MailViewCallbackCodec::decode)?.action in setOf(MailViewAction.REPLY, MailViewAction.UNSUBSCRIBE)
         }
     }
 
@@ -325,6 +339,7 @@ class MailForwardingService(
                         message = message,
                         t = t,
                         code = code,
+                        vip = isVipSender(account, message.senderAddress ?: message.from),
                     ),
                     buttons = forChat(
                         summaryButtons(
@@ -389,7 +404,12 @@ class MailForwardingService(
         val filters = if (ownerPlan.hasProFeatures) {
             currentAccount.filters
         } else {
-            currentAccount.filters.copy(blockedSenders = emptyList(), blockedSubjectWords = emptyList(), allowedSenders = emptyList())
+            currentAccount.filters.copy(
+                blockedSenders = emptyList(),
+                blockedSubjectWords = emptyList(),
+                allowedSenders = emptyList(),
+                vipSenders = emptyList(),
+            )
         }
         val overLimit = runCatching { isOverLimit(currentAccount) }.getOrDefault(false)
 
@@ -408,9 +428,14 @@ class MailForwardingService(
             return@withAccountProcessingLock false
         }
 
-        val deliverAt = runCatching { notificationSettings(account.ownerChatId) }
-            .getOrNull()
-            ?.let { settings -> NotificationSchedule.nextDigestAt(settings, clock()) }
+        // Важный отправитель - сразу, без ожидания сводки
+        val deliverAt = if (MailFilterEngine.isVip(filters, message.senderAddress)) {
+            null
+        } else {
+            runCatching { notificationSettings(account.ownerChatId) }
+                .getOrNull()
+                ?.let { settings -> NotificationSchedule.nextDigestAt(settings, clock()) }
+        }
 
         outboxRepository.enqueue(
             deliverAt = deliverAt ?: clock(),
@@ -567,6 +592,7 @@ class MailForwardingService(
             message = message,
             t = t,
             code = code,
+            vip = isVipSender(account, message.senderAddress ?: message.from),
         )
 
         val buttons = forChat(
@@ -901,7 +927,12 @@ class MailForwardingService(
         val filters = if (ownerPlan.hasProFeatures) {
             currentAccount.filters
         } else {
-            currentAccount.filters.copy(blockedSenders = emptyList(), blockedSubjectWords = emptyList(), allowedSenders = emptyList())
+            currentAccount.filters.copy(
+                blockedSenders = emptyList(),
+                blockedSubjectWords = emptyList(),
+                allowedSenders = emptyList(),
+                vipSenders = emptyList(),
+            )
         }
         val overLimit = runCatching { isOverLimit(currentAccount) }.getOrDefault(false)
 
@@ -943,9 +974,14 @@ class MailForwardingService(
                 continue
             }
 
-            val deliverAt = runCatching { notificationSettings(account.ownerChatId) }
-                .getOrNull()
-                ?.let { settings -> NotificationSchedule.nextDigestAt(settings, clock()) }
+            // Важный отправитель - сразу, без ожидания сводки
+            val deliverAt = if (MailFilterEngine.isVip(filters, message.senderAddress)) {
+                null
+            } else {
+                runCatching { notificationSettings(account.ownerChatId) }
+                    .getOrNull()
+                    ?.let { settings -> NotificationSchedule.nextDigestAt(settings, clock()) }
+            }
 
             val inserted = outboxRepository.enqueue(
                 deliverAt = deliverAt ?: clock(),
@@ -1119,7 +1155,45 @@ class MailForwardingService(
             },
             replyButton(account, uidValidity, uid, t),
             readButton(account, uidValidity, uid, t),
+            message.unsubscribe?.let { button(t.buttonUnsubscribe, MailViewAction.UNSUBSCRIBE, account, uidValidity, uid) },
         )
+    }
+
+    enum class UnsubscribeOutcome { DONE, PAGE_SENT, FAILED, NOT_AVAILABLE, PRO_REQUIRED, GONE }
+
+    /**
+     * Отписка от рассылки: в один клик (POST по RFC 8058), если рассылка это умеет;
+     * иначе бот присылает кнопку со страницей отписки. Только на платном тарифе.
+     */
+    suspend fun unsubscribe(
+        account: MailAccountConfig,
+        expectedUidValidity: Long,
+        uid: Long,
+        chatId: Long = account.ownerChatId,
+    ): UnsubscribeOutcome {
+        if (!runCatching { plan(account.ownerChatId) }.getOrDefault(Plan.FREE).hasProFeatures) {
+            return UnsubscribeOutcome.PRO_REQUIRED
+        }
+        val message = contentLoader.get(account, expectedUidValidity, uid) ?: return UnsubscribeOutcome.GONE
+        val link = message.unsubscribe ?: return UnsubscribeOutcome.NOT_AVAILABLE
+        val t = texts(account)
+        if (link.oneClick && unsubscribeService.oneClick(link.url)) {
+            logger.info("Unsubscribed from {} for mailbox {}", message.senderAddress, account.username)
+            return UnsubscribeOutcome.DONE
+        }
+        // Рассылка отписывает только на своей странице (или не приняла запрос): даем ссылку
+        return try {
+            telegramControlClient.sendMessageWithButtons(
+                chatId = chatId,
+                text = t.unsubscribePage(message.from),
+                buttons = listOf(TelegramInlineButton(text = t.buttonUnsubscribePage, url = link.url)),
+            )
+            UnsubscribeOutcome.PAGE_SENT
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            UnsubscribeOutcome.FAILED
+        }
     }
 
     private fun textViewButtons(
@@ -1165,9 +1239,10 @@ class MailForwardingService(
         metadata: MailOutboxEmailMetadata,
         t: Texts,
         code: String? = null,
+        vip: Boolean = false,
     ): String = buildString {
         appendHeader(
-            title = t.newEmail,
+            title = if (vip) t.newEmailVip else t.newEmail,
             account = account,
             from = metadata.from,
             subject = metadata.subject,
@@ -1183,9 +1258,10 @@ class MailForwardingService(
         message: EmailSummary,
         t: Texts,
         code: String? = null,
+        vip: Boolean = false,
     ): String = buildString {
         appendHeader(
-            title = t.newEmail,
+            title = if (vip) t.newEmailVip else t.newEmail,
             account = account,
             from = message.from,
             subject = message.subject,

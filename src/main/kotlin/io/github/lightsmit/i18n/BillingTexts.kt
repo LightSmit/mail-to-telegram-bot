@@ -55,6 +55,9 @@ interface BillingTexts {
     val inviteAlreadyYours: String
 
     fun expiring(plan: Plan, expiresAt: Instant, trial: Boolean): String
+    // Сводка за пробный период: сколько писем и ящиков; mailboxes > 1 - часть ящиков остановится на Free
+    fun trialSummary(expiresAt: Instant, delivered: Long, mailboxes: Int): String
+    val buttonSubscribe: String
     fun ended(plan: Plan, trial: Boolean): String
 
     fun limitReached(plan: Plan, limit: Int, billingEnabled: Boolean): String
@@ -189,6 +192,29 @@ object RuBillingTexts : BillingTexts {
         } else {
             "⏳ Тариф ${plan.title} закончится ${formatDate(expiresAt)}. Продлить: /premium"
         }
+
+    override fun trialSummary(expiresAt: Instant, delivered: Long, mailboxes: Int) = buildString {
+        append("⏳ Пробный Pro закончится ${formatDate(expiresAt)}.\n\n")
+        append("За это время бот доставил вам ${count(delivered, "письмо", "письма", "писем")}")
+        if (mailboxes > 1) append(" из ${count(mailboxes.toLong(), "ящика", "ящиков", "ящиков")}")
+        append(".\n\nНа Free ")
+        if (mailboxes > 1) append("будет работать только 1 ящик, ")
+        append("перестанут действовать фильтры и важные отправители, а коды подтверждения пропадут из карточек. ")
+        append("Чтобы все осталось как сейчас, оформите Pro:")
+    }
+
+    override val buttonSubscribe = "⭐ Оформить Pro"
+
+    private fun count(value: Long, one: String, few: String, many: String): String {
+        val mod10 = value % 10
+        val mod100 = value % 100
+        val word = when {
+            mod10 == 1L && mod100 != 11L -> one
+            mod10 in 2..4 && mod100 !in 12..14 -> few
+            else -> many
+        }
+        return "$value $word"
+    }
 
     override fun ended(plan: Plan, trial: Boolean) = buildString {
         append(if (trial) "Пробный период закончился" else "Тариф ${plan.title} закончился")
@@ -356,6 +382,18 @@ object EnBillingTexts : BillingTexts {
         } else {
             "⏳ ${plan.title} ends on ${formatDate(expiresAt)}. Renew: /premium"
         }
+
+    override fun trialSummary(expiresAt: Instant, delivered: Long, mailboxes: Int) = buildString {
+        append("⏳ Your Pro trial ends on ${formatDate(expiresAt)}.\n\n")
+        append("During the trial the bot delivered $delivered ${if (delivered == 1L) "email" else "emails"}")
+        if (mailboxes > 1) append(" from $mailboxes mailboxes")
+        append(".\n\nOn Free ")
+        if (mailboxes > 1) append("only 1 mailbox will work, ")
+        append("filters and important senders stop working, and verification codes disappear from the cards. ")
+        append("To keep everything as it is, subscribe to Pro:")
+    }
+
+    override val buttonSubscribe = "⭐ Subscribe to Pro"
 
     override fun ended(plan: Plan, trial: Boolean) = buildString {
         append(if (trial) "Your trial has ended" else "${plan.title} has ended")

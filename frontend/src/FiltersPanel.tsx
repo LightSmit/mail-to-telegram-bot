@@ -11,6 +11,8 @@ export interface MailFilters {
   pausedUntil?: number | null;
   // Письма ящика приходят без звука
   silent?: boolean;
+  // Важные отправители: приходят всегда, сразу и со звуком
+  vipSenders?: string[];
 }
 
 /** Пауза действует сейчас (временная пауза могла уже закончиться). */
@@ -28,6 +30,7 @@ export function withDefaults(filters?: Partial<MailFilters> | null): MailFilters
     allowedSenders: filters?.allowedSenders ?? [],
     pausedUntil: filters?.pausedUntil ?? null,
     silent: filters?.silent ?? false,
+    vipSenders: filters?.vipSenders ?? [],
   };
 }
 

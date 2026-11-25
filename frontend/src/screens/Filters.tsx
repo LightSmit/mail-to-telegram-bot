@@ -13,7 +13,7 @@ interface Props {
   onSave: (filters: MailFilters) => Promise<boolean>;
 }
 
-type ListKey = 'allowedSenders' | 'blockedSenders' | 'blockedSubjectWords';
+type ListKey = 'vipSenders' | 'allowedSenders' | 'blockedSenders' | 'blockedSubjectWords';
 
 // Значения из поля: по одному, запятые, точки с запятой и переносы тоже разделяют
 const split = (text: string) => text.split(/[\n,;]+/).map((value) => value.trim()).filter(Boolean);
@@ -22,11 +22,14 @@ const split = (text: string) => text.split(/[\n,;]+/).map((value) => value.trim(
 export function FiltersScreen({ account, pro, onUpgrade, onBack, onSave }: Props) {
   const initial = withDefaults(account.filters);
   const [lists, setLists] = useState<Record<ListKey, string[]>>({
+    vipSenders: initial.vipSenders ?? [],
     allowedSenders: initial.allowedSenders,
     blockedSenders: initial.blockedSenders,
     blockedSubjectWords: initial.blockedSubjectWords,
   });
-  const [drafts, setDrafts] = useState<Record<ListKey, string>>({ allowedSenders: '', blockedSenders: '', blockedSubjectWords: '' });
+  const [drafts, setDrafts] = useState<Record<ListKey, string>>({
+    vipSenders: '', allowedSenders: '', blockedSenders: '', blockedSubjectWords: '',
+  });
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -60,6 +63,7 @@ export function FiltersScreen({ account, pro, onUpgrade, onBack, onSave }: Props
   };
 
   const sections: { key: ListKey; title: string; hint: string; placeholder: string; empty?: string }[] = [
+    { key: 'vipSenders', title: t.vipSenders, hint: t.vipSendersHint, placeholder: t.addSenderPlaceholder },
     { key: 'allowedSenders', title: t.onlyFrom, hint: t.onlyFromHint, placeholder: t.addSenderPlaceholder, empty: t.allSenders },
     { key: 'blockedSenders', title: t.notFrom, hint: t.notFromHint, placeholder: t.addSenderPlaceholder },
     { key: 'blockedSubjectWords', title: t.notSubject, hint: t.notSubjectHint, placeholder: t.addWordPlaceholder },

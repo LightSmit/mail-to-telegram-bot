@@ -38,6 +38,7 @@ class MailAccountRepository {
             ensureColumn(connection, "blocked_senders", "TEXT NOT NULL DEFAULT ''")
             ensureColumn(connection, "blocked_subject_words", "TEXT NOT NULL DEFAULT ''")
             ensureColumn(connection, "allowed_senders", "TEXT NOT NULL DEFAULT ''")
+            ensureColumn(connection, "vip_senders", "TEXT NOT NULL DEFAULT ''")
             // Групповой чат для писем ящика (тариф Business)
             ensureColumn(connection, "group_chat_id", "INTEGER")
             ensureColumn(connection, "group_title", "TEXT")
@@ -72,7 +73,7 @@ class MailAccountRepository {
                     """
                     UPDATE mail_accounts
                     SET paused = ?, skip_bulk = ?, blocked_senders = ?, blocked_subject_words = ?, allowed_senders = ?,
-                        paused_until = ?, silent = ?
+                        paused_until = ?, silent = ?, vip_senders = ?
                     WHERE id = ? AND owner_id = ?
                     """.trimIndent(),
                 ).use { statement ->
@@ -84,8 +85,9 @@ class MailAccountRepository {
                     val until = filters.pausedUntil
                     if (until == null) statement.setNull(6, java.sql.Types.INTEGER) else statement.setLong(6, until)
                     statement.setInt(7, if (filters.silent) 1 else 0)
-                    statement.setLong(8, id)
-                    statement.setLong(9, ownerId)
+                    statement.setString(8, filters.vipSenders.joinToString("\n"))
+                    statement.setLong(9, id)
+                    statement.setLong(10, ownerId)
                     statement.executeUpdate()
                 }
                 if (updated == 0) return@withContext null
@@ -308,6 +310,7 @@ class MailAccountRepository {
                     allowedSenders = getString("allowed_senders").splitLines(),
                     pausedUntil = getLong("paused_until").takeUnless { wasNull() },
                     silent = getInt("silent") == 1,
+                    vipSenders = getString("vip_senders").orEmpty().splitLines(),
                 ),
             )
         } catch (exception: Exception) {

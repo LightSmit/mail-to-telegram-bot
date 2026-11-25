@@ -12,7 +12,9 @@ enum class MailViewAction(
     ATTACHMENTS("a"),
     BACK("b"),
     READ("r"),
-    REPLY("p");
+    REPLY("p"),
+    // Отписаться от рассылки (List-Unsubscribe)
+    UNSUBSCRIBE("u");
 
     companion object {
         fun fromCode(code: String): MailViewAction? {

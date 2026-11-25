@@ -367,6 +367,9 @@ const ru = {
   markUnread: 'Непрочитанным',
   markedUnread: 'Письмо снова непрочитанное в ящике.',
   markUnreadFailed: 'Не удалось отметить непрочитанным',
+  // Важные отправители
+  vipSenders: '⭐ Важные отправители',
+  vipSendersHint: 'Письма от них приходят всегда: на паузе, мимо остальных фильтров, сразу (без сводки) и со звуком даже в тихие часы. Адрес или домен, например bank.ru.',
   // Письмо целиком и вложения
   showImages: 'Показать картинки',
   emailContent: 'Содержимое письма',
@@ -708,6 +711,8 @@ const en: Dictionary = {
   markUnread: 'Mark unread',
   markedUnread: 'The email is unread again in the mailbox.',
   markUnreadFailed: 'Could not mark as unread',
+  vipSenders: '⭐ Important senders',
+  vipSendersHint: 'Their emails always arrive: during a pause, past other filters, right away (no digest) and with sound even in quiet hours. An address or a domain, e.g. bank.com.',
   showImages: 'Show images',
   emailContent: 'Email content',
   viewDesigned: 'Formatted',

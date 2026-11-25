@@ -100,15 +100,18 @@ data class FiltersDto(
     val pausedUntil: Long? = null,
     // Письма ящика без звука
     val silent: Boolean = false,
+    // Важные отправители: приходят всегда, сразу и со звуком
+    val vipSenders: List<String> = emptyList(),
 )
 
 // Закончившаяся пауза на время показывается как выключенная
 private fun MailFilters.toDto(): FiltersDto {
     val active = isPausedAt()
-    return FiltersDto(active, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders, pausedUntil.takeIf { active }, silent)
+    return FiltersDto(active, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders, pausedUntil.takeIf { active }, silent, vipSenders)
 }
 
-private fun FiltersDto.toModel() = MailFilters(paused, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders, pausedUntil, silent)
+private fun FiltersDto.toModel() =
+    MailFilters(paused, skipBulk, blockedSenders, blockedSubjectWords, allowedSenders, pausedUntil, silent, vipSenders)
 
 @Serializable
 data class NotificationSettingsDto(
@@ -701,7 +704,8 @@ class ApiServer(
                             }
                             val listsChanged = request.allowedSenders != current.allowedSenders ||
                                 request.blockedSenders != current.blockedSenders ||
-                                request.blockedSubjectWords != current.blockedSubjectWords
+                                request.blockedSubjectWords != current.blockedSubjectWords ||
+                                request.vipSenders != current.vipSenders
                             if (listsChanged) {
                                 call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to call.texts.billing.proFilters))
                                 return@put

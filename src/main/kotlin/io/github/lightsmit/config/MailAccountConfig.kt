@@ -48,6 +48,11 @@ data class MailFilters(
     val pausedUntil: Long? = null,
     /** Письма этого ящика приходят без звука. */
     val silent: Boolean = false,
+    /**
+     * Важные отправители (адреса и домены): их письма приходят всегда - на паузе,
+     * мимо остальных фильтров, сразу (без сводки) и со звуком даже в тихие часы.
+     */
+    val vipSenders: List<String> = emptyList(),
 ) {
     /** Действует ли пауза сейчас: пауза на время сама заканчивается в pausedUntil. */
     fun isPausedAt(nowMillis: Long = System.currentTimeMillis()): Boolean =

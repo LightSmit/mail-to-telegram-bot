@@ -70,4 +70,24 @@ class MailFilterEngineTest {
         assertEquals(listOf("Скидка"), MailFilterEngine.normalizeWords(listOf("Скидка", "скидка", "  ")))
         assertEquals(MailFilterEngine.MAX_ENTRIES, MailFilterEngine.normalizeWords((1..80).map { "w$it" }).size)
     }
+
+    @Test
+    fun `important senders pass pause and other filters`() {
+        val vip = MailFilters(
+            paused = true,
+            skipBulk = true,
+            allowedSenders = listOf("boss@work.ru"),
+            blockedSenders = listOf("bank.ru"),
+            vipSenders = listOf("bank.ru"),
+        )
+        assertNull(MailFilterEngine.check(vip, "alerts@online.bank.ru", "Списание", isBulk = true))
+        assertEquals(MailFilterReason.PAUSED, MailFilterEngine.check(vip, "boss@work.ru", "Отчет", isBulk = false))
+    }
+
+    @Test
+    fun `address is taken from the card sender line`() {
+        assertEquals("alerts@bank.ru", MailFilterEngine.addressOf("\"Банк\" <Alerts@Bank.ru>"))
+        assertEquals("a@b.ru", MailFilterEngine.addressOf("a@b.ru"))
+        assertNull(MailFilterEngine.addressOf("Неизвестный отправитель"))
+    }
 }

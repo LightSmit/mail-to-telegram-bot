@@ -104,6 +104,7 @@ class MailAccountService(
             blockedSenders = MailFilterEngine.normalizeSenders(filters.blockedSenders),
             blockedSubjectWords = MailFilterEngine.normalizeWords(filters.blockedSubjectWords),
             allowedSenders = MailFilterEngine.normalizeSenders(filters.allowedSenders),
+            vipSenders = MailFilterEngine.normalizeSenders(filters.vipSenders),
         )
         val updated = repository.updateFilters(accountId, ownerChatId, normalized) ?: return null
         supervisor.refresh(updated)

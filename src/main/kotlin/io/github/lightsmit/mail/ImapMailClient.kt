@@ -9,6 +9,7 @@ import jakarta.mail.Store
 import jakarta.mail.UIDFolder
 import jakarta.mail.search.FlagTerm
 import jakarta.mail.internet.InternetAddress
+import jakarta.mail.internet.MimeUtility
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.eclipse.angus.mail.imap.IMAPFolder
@@ -18,6 +19,8 @@ class ImapMailClient(
     private val attachmentTempDirectory: Path,
     private val maxAttachmentSizeBytes: Long,
 ) {
+
+    private val logger = org.slf4j.LoggerFactory.getLogger(ImapMailClient::class.java)
 
     suspend fun fetchCursor(
         account: MailAccountConfig,
@@ -230,6 +233,13 @@ class ImapMailClient(
             body = content.body,
             attachments = content.attachments,
             skippedAttachments = content.skippedAttachments,
+            senderAddress = senderAddress(message),
+            unsubscribe = runCatching {
+                Unsubscribe.parse(
+                    message.getHeader("List-Unsubscribe")?.joinToString(", "),
+                    message.getHeader("List-Unsubscribe-Post")?.firstOrNull(),
+                )
+            }.getOrNull(),
         )
     }
 
@@ -342,9 +352,11 @@ class ImapMailClient(
                 val scan = scanSearch(folder, query, unreadOnly, from = cursor, want = limit)
                 val page = scan.messages.toTypedArray()
                 if (page.isNotEmpty()) {
+                    // Поиск читал только заголовки: для строк списка дочитываем найденные одним запросом
                     folder.fetch(
                         page,
                         FetchProfile().apply {
+                            add(FetchProfile.Item.ENVELOPE)
                             add(FetchProfile.Item.CONTENT_INFO)
                             add(UIDFolder.FetchProfileItem.UID)
                         },
@@ -446,26 +458,41 @@ class ImapMailClient(
         val found = mutableListOf<Message>()
         var end = (from ?: count).coerceAtMost(count)
         var timedOut = false
+        // Пачка растет, пока почта отвечает быстро: меньше запросов на тот же объем
+        var chunkSize = SEARCH_CHUNK
+        val startedAt = System.nanoTime()
 
         while (end >= 1 && found.size < want) {
             if (System.nanoTime() > deadline) {
                 timedOut = true
                 break
             }
-            val start = maxOf(1, end - SEARCH_CHUNK + 1)
+            val start = maxOf(1, end - chunkSize + 1)
             val chunk = folder.getMessages(start, end)
+            val chunkStartedAt = System.nanoTime()
+            // Только тема, отправитель и получатель: легче, чем ENVELOPE со всеми адресами и датами
             folder.fetch(
                 chunk,
                 FetchProfile().apply {
-                    add(FetchProfile.Item.ENVELOPE)
+                    SEARCH_HEADERS.forEach { header -> add(header) }
                     add(FetchProfile.Item.FLAGS)
                 },
             )
             chunk.reversed()
-                .filter { message -> (!unreadOnly || !isSeen(message)) && matchesSearch(message, needle) }
+                .filter { message -> (!unreadOnly || !isSeen(message)) && matchesSearchHeaders(message, needle) }
                 .forEach { message -> found.add(message) }
             end = start - 1
+            val chunkMillis = (System.nanoTime() - chunkStartedAt) / 1_000_000
+            if (chunkMillis < FAST_CHUNK_MILLIS) chunkSize = minOf(chunkSize * 2, MAX_SEARCH_CHUNK)
         }
+        logger.info(
+            "Search scanned {} of {} emails in {} ms (chunk {}, found {})",
+            (from ?: count).coerceAtMost(count) - maxOf(end, 0),
+            count,
+            (System.nanoTime() - startedAt) / 1_000_000,
+            chunkSize,
+            found.size,
+        )
         return SearchScan(
             messages = found,
             nextCursor = end.takeIf { value -> value >= 1 },
@@ -475,17 +502,22 @@ class ImapMailClient(
         )
     }
 
-    private fun matchesSearch(message: Message, needle: String): Boolean {
-        fun addresses(values: Array<out jakarta.mail.Address>?): List<String> =
-            values.orEmpty().flatMap { address ->
-                val internet = address as? InternetAddress
-                listOfNotNull(internet?.personal, internet?.address ?: address.toString())
-            }
+    // Совпадение по заголовкам, прочитанным при поиске (без дозагрузки ENVELOPE по одному письму)
+    private fun matchesSearchHeaders(message: Message, needle: String): Boolean {
+        fun header(name: String): String? = runCatching { message.getHeader(name)?.joinToString(", ") }.getOrNull()
+            ?.replace(Regex("\\r?\\n[ \\t]+"), " ")
+            ?.let { value -> runCatching { MimeUtility.decodeText(value) }.getOrDefault(value) }
 
         val haystack = buildList {
-            runCatching { message.subject }.getOrNull()?.let(::add)
-            runCatching { addresses(message.from) }.getOrNull()?.let(::addAll)
-            runCatching { addresses(message.getRecipients(Message.RecipientType.TO)) }.getOrNull()?.let(::addAll)
+            header("Subject")?.let(::add)
+            listOf("From", "To").forEach { name ->
+                val raw = header(name) ?: return@forEach
+                add(raw)
+                runCatching { InternetAddress.parseHeader(raw, false) }.getOrNull()?.forEach { address ->
+                    address.personal?.let(::add)
+                    address.address?.let(::add)
+                }
+            }
         }
         return haystack.any { value -> normalizeForSearch(value).contains(needle) }
     }
@@ -633,6 +665,9 @@ class ImapMailClient(
         private const val MAX_VIEW_BODY_CHARS = 100_000
         // Поиск: пачка писем за один запрос к почте и сколько ждем почту за один поиск
         private const val SEARCH_CHUNK = 100
+        private const val MAX_SEARCH_CHUNK = 800
+        private const val FAST_CHUNK_MILLIS = 2_000L
+        private val SEARCH_HEADERS = listOf("Subject", "From", "To")
         private const val SEARCH_BUDGET_NANOS = 20_000_000_000L
         // Больше отмеченных писем за раз не показываем
         private const val MAX_UID_LIST = 500

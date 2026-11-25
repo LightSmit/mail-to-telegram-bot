@@ -448,6 +448,21 @@ class MailNotificationOutboxRepository {
         }
     }
 
+    /** Сколько писем доставлено владельцу с момента since (сводка в конце пробного периода). */
+    suspend fun countSentForOwner(ownerId: Long, since: Instant): Long = withContext(DatabaseManager.dispatcher) {
+        val sql = "SELECT COUNT(*) FROM mail_notification_outbox " +
+            "WHERE operation = ? AND status = ? AND account_key LIKE ? AND updated_at >= ?"
+        DatabaseManager.dataSource.connection.use { connection ->
+            connection.prepareStatement(sql).use { statement ->
+                statement.setString(1, MailOutboxOperation.SEND_NOTIFICATION.name)
+                statement.setString(2, MailOutboxStatus.SENT.name)
+                statement.setString(3, "$ownerId:%")
+                statement.setLong(4, since.toEpochMilli())
+                statement.executeQuery().use { result -> if (result.next()) result.getLong(1) else 0 }
+            }
+        }
+    }
+
     /** Удаляет все уведомления пользователя (по просьбе удалить его данные). Ключ ящика начинается с id владельца. */
     suspend fun deleteOwner(ownerId: Long): Int = withContext(DatabaseManager.dispatcher) {
         DatabaseManager.dataSource.connection.use { connection ->

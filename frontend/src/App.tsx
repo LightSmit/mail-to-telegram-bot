@@ -59,7 +59,8 @@ function App() {
   const [notice, setNotice] = useState<{ kind: NoticeKind; text: string } | null>(
     initData ? null : { kind: 'error', text: t.openFromTelegram },
   );
-  const [tab, setTab] = useState<Tab>('home');
+  // Открыли из сводки пробного периода (?open=plan) - сразу экран тарифа
+  const [tab, setTab] = useState<Tab>(() => (launchParam() === 'plan' ? 'plan' : 'home'));
   // Открыли из кнопки «Открыть» под письмом: сразу показываем это письмо
   const [stack, setStack] = useState<Route[]>(() => {
     const match = /^m(\d+)_(\d+)_(\d+)$/.exec(launchParam() ?? '');
